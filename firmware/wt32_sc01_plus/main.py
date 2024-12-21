@@ -214,8 +214,8 @@ class Interface:
 
         tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
 
-        self.tab_probe = TabProbe(tabv)
         self.tab_jog = TabJog(tabv)
+        self.tab_probe = TabProbe(tabv)
 
         self.tab_machine = tabv.add_tab("Machine")
         self.tab_gcode = tabv.add_tab("GCode")
