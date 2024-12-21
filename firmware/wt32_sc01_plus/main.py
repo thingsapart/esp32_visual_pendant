@@ -187,6 +187,18 @@ def flex_col(obj):
     obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
 
+def style_pad(obj, v):
+    obj.set_style_pad_top(v, lv.STATE.DEFAULT)
+    obj.set_style_pad_left(v, lv.STATE.DEFAULT)
+    obj.set_style_pad_right(v, lv.STATE.DEFAULT)
+    obj.set_style_pad_bottom(v, lv.STATE.DEFAULT)
+
+def style_margin(obj, v):
+    obj.set_style_margin_top(v, lv.STATE.DEFAULT)
+    obj.set_style_margin_left(v, lv.STATE.DEFAULT)
+    obj.set_style_margin_right(v, lv.STATE.DEFAULT)
+    obj.set_style_margin_bottom(v, lv.STATE.DEFAULT)
+
 class Interface:
     def __init__(self):
         self.scr = lv.screen_active()
@@ -216,6 +228,14 @@ class TabProbe:
         '->', 'O', '<-', '\n',
         '/', '|', '\\'
     ]
+    SETTINGS = [
+        ['Width', 50.0, 1.0, 200.0],
+        ['Length', 100.0, 1.0, 200.0],
+        ['Depth', 2.0, 0.0, 10.0],
+        ['Surf Clear', 5.0, 0.0, 20.0],
+        ['Corner Clear', 5.0, 0.0, 20.0],
+        ['Overtravel', 2.0, 0.0, 10.0]
+    ]
 
     def __init__(self, tabv):
         self.tab = tabv.add_tab("Probe")
@@ -230,9 +250,12 @@ class TabProbe:
     def init_probe_tabv(self, parent):
         self.main_tabs = lv.tabview(parent)
 
+        style_pad(parent, 5)
+
         tabv = self.main_tabs
 
         self.tab_settings = tabv.add_tab("Setup")
+        self.tab_wcs = tabv.add_tab("WCS")
         self.tab_probe = tabv.add_tab("Probe")
         self.tab_surf = tabv.add_tab("Surface")
 
@@ -247,9 +270,63 @@ class TabProbe:
         self.init_sets_tab(self.tab_settings)
         self.init_probe_tab(self.tab_probe)
         self.init_surface_tab(self.tab_probe)
+        self.init_wcs_tab(self.tab_wcs)
 
     def init_sets_tab(self, tab):
-        pass
+        style_pad(tab, 2)
+        grid = lv.obj(tab)
+        grid.center()
+        grid.set_size(lv.pct(100), lv.pct(100))
+        grid.remove_flag(lv.obj.FLAG.SCROLLABLE)
+
+        cols = [lv.pct(1), lv.pct(30), lv.pct(50), lv.GRID_TEMPLATE_LAST]
+        rows = [30] * 6 + [lv.GRID_TEMPLATE_LAST]
+        # rows = [lv.GRID_CONTENT] * 6 + [lv.GRID_TEMPLATE_LAST]
+        grid.set_style_grid_column_dsc_array(cols, 0)
+        grid.set_style_grid_row_dsc_array(rows, 0)
+        grid.set_layout(lv.LAYOUT.GRID)
+
+        self.sets_grid = grid
+
+        def slider_event_cb(e):
+            slider = lv.slider.__cast__(e.get_target())
+            textbox = lv.textarea.__cast__(slider.get_user_data())
+            value = slider.get_value() / 10.0
+            textbox.set_text(f"{value:.1f}")
+
+        for row, (key, default, mini, maxi) in enumerate(TabProbe.SETTINGS):
+            label = lv.label(grid)
+            label.set_text(key)
+            label.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
+                                lv.GRID_ALIGN.CENTER, row, 1)
+
+            textbox = lv.textarea(grid)
+            textbox.set_one_line(True)
+            textbox.set_text(str(default))
+            textbox.set_grid_cell(lv.GRID_ALIGN.STRETCH, 1, 1,
+                                  lv.GRID_ALIGN.CENTER, row, 1)
+
+            slider = lv.slider(grid)
+            slider.set_range(int(mini * 10), int(maxi * 10))
+            slider.set_value(int(default * 10), lv.ANIM.OFF)
+            slider.set_user_data(textbox)
+            slider.add_event_cb(slider_event_cb, lv.EVENT.VALUE_CHANGED, None)
+            slider.set_grid_cell(lv.GRID_ALIGN.STRETCH, 2, 1,
+                                 lv.GRID_ALIGN.CENTER, row, 1)
+            style_pad(slider, 5)
+
+    def init_wcs_tab(self, tab):
+        flex_col(tab)
+
+        wcsbtns = lv.buttonmatrix(tab)
+        wcsbtns.set_height(250)
+        wcsbtns.set_map(['G54', 'G55', 'G56', '\n', 'G57', 'G58', 'G59', '\n', 'G59.1', 'G59.2', 'G59.3'])
+        wcsbtns.set_one_checked(True)
+        wcsbtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        wcsbtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+        self.inside_outside_buttons = wcsbtns
+
+        self.wcs_buttons = wcsbtns
 
     def init_surface_tab(self, tab):
         pass
@@ -351,21 +428,57 @@ class JogDial:
     def __init__(self, parent):
         self.prev = 0
         self.parent = parent
+
+        parent.center()
+        # parent.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+        # parent.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+        parent.set_flex_flow(lv.FLEX_FLOW.ROW)
+        parent.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+
+        btns = lv.buttonmatrix(parent)
+
+        btns.set_map(['X', '\n', 'Y', '\n', 'Z'])
+        btns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        btns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+        btns.set_size(80, lv.pct(100))
+        btns.set_style_pad_ver(5, lv.PART.MAIN)
+        btns.set_style_pad_hor(5, lv.PART.MAIN)
+        self.axis = 'X'
+        btns.set_one_checked(True)
+
+        btns.align(lv.ALIGN.CENTER, 0, 0)
+
+        btns.add_event_cb(self._axis_clicked,
+                            lv.EVENT.VALUE_CHANGED,
+                            None);
+
+        self.axis_buttons = btns
         self.arc = lv.arc(parent)
         arc = self.arc
-        arc.set_size(150, 150)
+        arc.set_size(270, 270)
+        arc.set_style_pad_hor(50, lv.PART.MAIN)
+        arc.set_style_pad_ver(10, lv.PART.MAIN)
         arc.set_rotation(-90)
         arc.set_bg_angles(0, 360)
         arc.set_angles(0, 360)
         arc.set_style_opa(lv.OPA._0, lv.PART.INDICATOR)
         arc.set_value(0)
         arc.center()
-        arc.add_flag(lv.obj.FLAG.FLOATING)
+        # arc.add_flag(lv.obj.FLAG.FLOATING)
         arc.add_flag(lv.obj.FLAG.ADV_HITTEST)
         arc.set_mode(lv.arc.MODE.SYMMETRICAL)
+        arc.set_flex_grow(1)
         arc.add_event_cb(self._jog_dial_value_changed_event_cb,
                          lv.EVENT.VALUE_CHANGED,
                          None);
+
+    def _axis_clicked(self, evt):
+        tgt = lv.buttonmatrix.__cast__(evt.get_target())
+        #print(tgt, tgt.__class__, tgt.get_parent())
+        id = tgt.get_selected_button()
+        txt = tgt.get_button_text(id)
+        self.axis = txt
+
     def set_value(self, v):
         self.arc.set_value(v)
         self.arc.send_event(lv.EVENT.VALUE_CHANGED, None)
