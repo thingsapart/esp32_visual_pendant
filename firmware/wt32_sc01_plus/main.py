@@ -3,6 +3,11 @@
 # LVGL MicroPython 1.23.0 on 2024-12-06
 # WT32-SC01 PLUS
 
+# Workaround for including frozen modules when running micropython with a script argument
+# https://github.com/micropython/micropython/issues/6419
+import usys as sys
+sys.path.append('')
+
 from micropython import const
 
 import lvgl as lv
@@ -47,8 +52,6 @@ class HardwareSetupMac:
         # the duration needs to be set to 5 to have a good response from the mouse.
         # There is a thread that runs that facilitates double buffering.
         th = task_handler.TaskHandler(duration=5)
-
-
 
 class HardwareSetupESP32:
     WIDTH = const(320)
@@ -179,6 +182,11 @@ class HardwareSetupESP32:
         lv.refr_now(scrn.get_display())
         task_handler.TaskHandler()
 
+def flex_col(obj):
+    obj.center()
+    obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+    obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+
 class Interface:
     def __init__(self):
         self.scr = lv.screen_active()
@@ -187,16 +195,6 @@ class Interface:
 
         lv.screen_load(self.scr)
 
-    def init_probe_tab(self):
-        PROBE_BTNS = [
-            '\\', '|', '/', '\n',
-            '->', '.', '<-', '\n',
-            '/', '|', '\\'
-        ]
-        btns = lv.buttonmatrix(self.tab_probe)
-        btns.set_map(PROBE_BTNS)
-        btns.align(lv.ALIGN.CENTER, 0, 0)
-
     def init_main_tabs(self):
         self.main_tabs = lv.tabview(self.scr)
         tabv = self.main_tabs
@@ -204,7 +202,7 @@ class Interface:
 
         tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
 
-        self.tab_probe = tabv.add_tab("Probe")
+        self.tab_probe = TabProbe(tabv)
         self.tab_jog = TabJog(tabv)
 
         self.tab_machine = tabv.add_tab("Machine")
@@ -212,13 +210,70 @@ class Interface:
         self.tab_tool = tabv.add_tab("Tool")
         self.tab_tool = tabv.add_tab("CAM")
 
-        self.init_probe_tab()
+class TabProbe:
+    PROBE_BTNS = [
+        '\\', '|', '/', '\n',
+        '->', 'O', '<-', '\n',
+        '/', '|', '\\'
+    ]
+
+    def __init__(self, tabv):
+        self.tab = tabv.add_tab("Probe")
+
+        tab = self.tab
+        # tab.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+        # tab.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+        flex_col(tab)
+
+        self.init_probe_tabv(tab)
+
+    def init_probe_tabv(self, parent):
+        self.main_tabs = lv.tabview(parent)
+
+        tabv = self.main_tabs
+
+        self.tab_settings = tabv.add_tab("Setup")
+        self.tab_probe = tabv.add_tab("Probe")
+        self.tab_surf = tabv.add_tab("Surface")
+
+        # parent.set_style_local_pad_left(lv.OBJ.PART_MAIN, lv.STATE.DEFAULT, 0)
+
+        tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
+        tabv.set_tab_bar_position(lv.DIR.LEFT)
+        tabv.set_tab_bar_size(70)
+
+        self.tab_probe.remove_flag(lv.obj.FLAG.SCROLLABLE)
+
+        self.init_sets_tab(self.tab_settings)
+        self.init_probe_tab(self.tab_probe)
+        self.init_surface_tab(self.tab_probe)
+
+    def init_sets_tab(self, tab):
+        pass
+
+    def init_surface_tab(self, tab):
+        pass
+
+    def init_probe_tab(self, tab):
+        flex_col(tab)
+
+        iobtns = lv.buttonmatrix(tab)
+        iobtns.set_height(70)
+        iobtns.set_map(['Inside', 'Outside'])
+        iobtns.set_one_checked(True)
+        iobtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        iobtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+        self.inside_outside_buttons = iobtns
+
+        btns = lv.buttonmatrix(tab)
+        btns.set_map(TabProbe.PROBE_BTNS)
+        self.probe_buttons = btns
 
 class TabJog:
     def __init__(self, tabv):
         self.tabv = tabv
         self.tab = tabv.add_tab("Jog")
-        self.jog_dial = JogSlider(self.tab)
+        self.jog_dial = JogDial(self.tab)
 
 class JogSlider:
     def __init__(self, parent):
@@ -232,7 +287,6 @@ class JogSlider:
 
         btns.set_map(['X', 'Y', 'Z'])
         btns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
-
         btns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
         self.axis = 'X'
         btns.set_one_checked(True)
@@ -264,6 +318,10 @@ class JogSlider:
 
         self.slider_label = slider_label
 
+    def set_value(self, v):
+        self.slider.set_value(v, lv.ANIM.ON)
+        self.slider.send_event(lv.EVENT.VALUE_CHANGED, None)
+
     def _slider_event_cb(self, e):
         print(e.get_code())
         c = e.get_code()
@@ -291,144 +349,77 @@ class JogSlider:
 
 class JogDial:
     def __init__(self, parent):
+        self.prev = 0
         self.parent = parent
         self.arc = lv.arc(parent)
         arc = self.arc
-        arc.set_size(150, 150);
-        arc.set_rotation(135);
-        arc.set_bg_angles(0, 360);
-        arc.set_value(0);
+        arc.set_size(150, 150)
+        arc.set_rotation(-90)
+        arc.set_bg_angles(0, 360)
+        arc.set_angles(0, 360)
+        arc.set_style_opa(lv.OPA._0, lv.PART.INDICATOR)
+        arc.set_value(0)
         arc.center()
         arc.add_flag(lv.obj.FLAG.FLOATING)
+        arc.add_flag(lv.obj.FLAG.ADV_HITTEST)
+        arc.set_mode(lv.arc.MODE.SYMMETRICAL)
         arc.add_event_cb(self._jog_dial_value_changed_event_cb,
                          lv.EVENT.VALUE_CHANGED,
                          None);
+    def set_value(self, v):
+        self.arc.set_value(v)
+        self.arc.send_event(lv.EVENT.VALUE_CHANGED, None)
+
+    def inc(self):
+        self.arc.set_value(self.arc.get_value() + 1)
+
+    def dec(self):
+        self.arc.set_value(self.arc.get_value() - 1)
 
     def _jog_dial_value_changed_event_cb(self, evt):
-        tgt = lv.arc.__cast__(evt.get_target())
-        #print(tgt)
-        #print(tgt.get_value())
+        # c = evt.get_code()
+        # print(dict((v, k) for k, v in lv.EVENT.__dict__.items())[c])
+        # if c == lv.EVENT.VALUE_CHANGED:
 
-# https://github.com/peterhinch/micropython-async/
-class Encoder:
-    def __init__(
-        self,
-        pin_x,
-        pin_y,
-        v=0,
-        div=1,
-        vmin=None,
-        vmax=None,
-        mod=None,
-        callback=lambda a, b: None,
-        args=(),
-        delay=100,
-    ):
-        self._pin_x = pin_x
-        self._pin_y = pin_y
-        self._x = pin_x()
-        self._y = pin_y()
-        self._v = v * div  # Initialise hardware value
-        self._cv = v  # Current (divided) value
-        self.delay = delay  # Pause (ms) for motion to stop/limit callback frequency
-        self._trig = asyncio.Event()
-
-        if ((vmin is not None) and v < vmin) or ((vmax is not None) and v > vmax):
-            raise ValueError("Incompatible args: must have vmin <= v <= vmax")
-        self._tsf = asyncio.ThreadSafeFlag()
-        trig = Pin.IRQ_RISING | Pin.IRQ_FALLING
-        try:
-            xirq = pin_x.irq(trigger=trig, handler=self._x_cb, hard=True)
-            yirq = pin_y.irq(trigger=trig, handler=self._y_cb, hard=True)
-        except TypeError:  # hard arg is unsupported on some hosts
-            xirq = pin_x.irq(trigger=trig, handler=self._x_cb)
-            yirq = pin_y.irq(trigger=trig, handler=self._y_cb)
-        asyncio.create_task(self._run(vmin, vmax, div, mod, callback, args))
-
-    # Hardware IRQ's. Duration 36μs on Pyboard 1 ~50μs on ESP32.
-    # IRQ latency: 2nd edge may have occured by the time ISR runs, in
-    # which case there is no movement.
-    def _x_cb(self, pin_x):
-        if (x := pin_x()) != self._x:
-            self._x = x
-            self._v += 1 if x ^ self._pin_y() else -1
-            self._tsf.set()
-
-    def _y_cb(self, pin_y):
-        if (y := pin_y()) != self._y:
-            self._y = y
-            self._v -= 1 if y ^ self._pin_x() else -1
-            self._tsf.set()
-
-    async def _run(self, vmin, vmax, div, mod, cb, args):
-        pv = self._v  # Prior hardware value
-        pcv = self._cv  # Prior divided value passed to callback
-        lcv = pcv  # Current value after limits applied
-        plcv = pcv  # Previous value after limits applied
-        delay = self.delay
-        while True:
-            self._tsf.clear()
-            await self._tsf.wait()  # Wait for an edge. A stopped encoder waits here.
-            await asyncio.sleep_ms(delay)  # Optional rate limit for callback/trig.
-            hv = self._v  # Sample hardware (atomic read).
-            if hv == pv:  # A change happened but was negated before
-                continue  # this got scheduled. Nothing to do.
-            pv = hv
-            cv = round(hv / div)  # cv is divided value.
-            if not (dv := cv - pcv):  # dv is change in divided value.
-                continue  # No change
-            lcv += dv  # lcv: divided value with limits/mod applied
-            lcv = lcv if vmax is None else min(vmax, lcv)
-            lcv = lcv if vmin is None else max(vmin, lcv)
-            lcv = lcv if mod is None else lcv % mod
-            self._cv = lcv  # update ._cv for .value() before CB.
-            if lcv != plcv:
-                cb(lcv, lcv - plcv, *args)  # Run user CB in uasyncio context
-                self._trig.set()  # Enable async iterator
-            pcv = cv
-            plcv = lcv
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        await self._trig.wait()
-        self._trig.clear()
-        return self._cv
-
-    def value(self):
-        return self._cv
-
-class EventLoop:
-    def cb(self, pos, delta):
-        import asyncio
-
-        print(pos, delta)
-
-    async def main(self):
-        while True:
-            await asyncio.sleep(1)
-
-    def run(self):
-        from machine import Pin
-        px = Pin(HardwareSetupESP32._ENC_PX, Pin.IN, Pin.PULL_UP)
-        py = Pin(HardwareSetupESP32._ENC_PY, Pin.IN, Pin.PULL_UP)
-        enc = Encoder(px, py, v=0, vmin=0, vmax=100, callback=cb)
-        try:
-            asyncio.run(self.main())
-        except KeyboardInterrupt:
-            print("Interrupted")
-        finally:
-            asyncio.new_event_loop()
+            tgt = lv.arc.__cast__(evt.get_target())
+            val = tgt.get_value()
+            prev = self.prev
+            self.prev = val
+            if val > 99 and prev < val:
+                self.arc.set_value(0)
+            if val < 1 and prev > val:
+                self.arc.set_value(99)
 
 ######################################
 ######################################
 
-hw = HardwareSetupMac()
+import sys
+
+platform = sys.platform
+hw = None
+evt = None
+
+if platform == 'esp32':
+    #from rotary_evt import EventLoop
+    from encoder import EventLoop
+
+    hw = HardwareSetupESP32()
+
+    evt = EventLoop()
+elif platform == 'darwin':
+    hw = HardwareSetupMac()
+else:
+    hw = HardwareSetupSim()
+
 interface = Interface()
-#evt = EventLoop()
 
-#evt.run()
+if evt:
+    def update_v(v):
+        print("V: ", v % 100)
+        interface.tab_jog.jog_dial.set_value(v % 100)
+
+    evt.run(HardwareSetupESP32.ENC_PX, HardwareSetupESP32.ENC_PY, update_v)
+
 i = 0
 while True:
   i += 1
