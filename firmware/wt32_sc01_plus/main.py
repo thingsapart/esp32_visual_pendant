@@ -182,22 +182,8 @@ class HardwareSetupESP32:
         lv.refr_now(scrn.get_display())
         task_handler.TaskHandler()
 
-def flex_col(obj):
-    obj.center()
-    obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
-    obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
 
-def style_pad(obj, v):
-    obj.set_style_pad_top(v, lv.STATE.DEFAULT)
-    obj.set_style_pad_left(v, lv.STATE.DEFAULT)
-    obj.set_style_pad_right(v, lv.STATE.DEFAULT)
-    obj.set_style_pad_bottom(v, lv.STATE.DEFAULT)
-
-def style_margin(obj, v):
-    obj.set_style_margin_top(v, lv.STATE.DEFAULT)
-    obj.set_style_margin_left(v, lv.STATE.DEFAULT)
-    obj.set_style_margin_right(v, lv.STATE.DEFAULT)
-    obj.set_style_margin_bottom(v, lv.STATE.DEFAULT)
+from lv_style import *
 
 class Interface:
     def __init__(self):
@@ -425,6 +411,13 @@ class JogSlider:
         self.slider.send_event(lv.EVENT.VALUE_CHANGED, None)
 
 class JogDial:
+    FEEDS = [
+                ['100%', 1.0],
+                ['25%', 0.25],
+                ['10%', 0.1],
+                ['1%', 0.01]
+            ]
+
     def __init__(self, parent):
         self.prev = 0
         self.parent = parent
@@ -433,14 +426,13 @@ class JogDial:
         # parent.set_flex_flow(lv.FLEX_FLOW.COLUMN)
         # parent.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
         parent.set_flex_flow(lv.FLEX_FLOW.ROW)
-        parent.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+        parent.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
 
         btns = lv.buttonmatrix(parent)
-
         btns.set_map(['X', '\n', 'Y', '\n', 'Z'])
         btns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
         btns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
-        btns.set_size(80, lv.pct(100))
+        btns.set_size(60, lv.pct(100))
         btns.set_style_pad_ver(5, lv.PART.MAIN)
         btns.set_style_pad_hor(5, lv.PART.MAIN)
         self.axis = 'X'
@@ -452,12 +444,27 @@ class JogDial:
                             lv.EVENT.VALUE_CHANGED,
                             None);
 
-        self.axis_buttons = btns
+        # if False:
+        #     feedbtns = lv.buttonmatrix(parent)
+        #     keys = [f[0] for f in JogDial.FEEDS]
+        #     btn_map_ver = button_matrix_ver(keys)
+        #     feedbtns.set_map(btn_map_ver)
+        #     feedbtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        #     feedbtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+        #     feedbtns.set_size(60, lv.pct(100))
+        #     feedbtns.set_style_pad_ver(5, lv.PART.MAIN)
+        #     feedbtns.set_style_pad_hor(5, lv.PART.MAIN)
+        #     self.feed = 1.0
+        #     feedbtns.set_one_checked(True)
+        #     feedbtns.align(lv.ALIGN.CENTER, 0, 0)
+        #     feedbtns.add_event_cb(self._feed_clicked,
+        #                         lv.EVENT.VALUE_CHANGED,
+        #                         None);
+        #     self.feed_buttons = feedbtns
+
         self.arc = lv.arc(parent)
         arc = self.arc
-        arc.set_size(270, 270)
-        arc.set_style_pad_hor(50, lv.PART.MAIN)
-        arc.set_style_pad_ver(10, lv.PART.MAIN)
+        arc.set_size(lv.pct(100), lv.pct(100))
         arc.set_rotation(-90)
         arc.set_bg_angles(0, 360)
         arc.set_angles(0, 360)
@@ -468,9 +475,27 @@ class JogDial:
         arc.add_flag(lv.obj.FLAG.ADV_HITTEST)
         arc.set_mode(lv.arc.MODE.SYMMETRICAL)
         arc.set_flex_grow(1)
+        style(arc, { 'padding': [10, 0, 0, 40] })
         arc.add_event_cb(self._jog_dial_value_changed_event_cb,
                          lv.EVENT.VALUE_CHANGED,
                          None);
+
+        label = lv.label(parent)
+        label.set_size(38, lv.pct(100))
+        style(label, { 'margin': 0, 'padding': 0 })
+        label.set_text('100%')
+
+        slider = lv.slider(parent)
+        slider.set_range(0, 200)
+        slider.set_value(100, lv.ANIM.OFF)
+        slider.set_size(15, lv.pct(100))
+        slider.add_event_cb(self._feed_changed, lv.EVENT.VALUE_CHANGED, None)
+
+        ignore_layout(label)
+        label.align_to(slider, lv.ALIGN.OUT_LEFT_MID, -5, 115)
+
+        self.feed_label = label
+        self.feed_slider = slider
 
     def _axis_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())
@@ -478,6 +503,18 @@ class JogDial:
         id = tgt.get_selected_button()
         txt = tgt.get_button_text(id)
         self.axis = txt
+
+    def _feed_clicked(self, evt):
+        tgt = lv.buttonmatrix.__cast__(evt.get_target())
+        #print(tgt, tgt.__class__, tgt.get_parent())
+        id = tgt.get_selected_button()
+        self.feed = JogDial.FEEDS[id][1]
+        self.feed_label.set_text(str(self.feed) + '%')
+
+    def _feed_changed(self, evt):
+        tgt = lv.slider.__cast__(evt.get_target())
+        self.feed = tgt.get_value()
+        self.feed_label.set_text(str(self.feed) + '%')
 
     def set_value(self, v):
         self.arc.set_value(v)
