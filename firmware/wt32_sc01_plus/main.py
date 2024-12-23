@@ -172,7 +172,7 @@ class HardwareSetupESP32:
         if not indev.is_calibrated:
             indev.calibrate()
 
-        display_driver.set_rotation(lv.DISPLAY_ROTATION._90)
+        display_driver.set_rotation(lv.DISPLAY_ROTATION._270)
 
         self.input_device = indev
         self.touch_device = touch_device
@@ -271,6 +271,7 @@ class TabProbe:
         grid.set_style_grid_column_dsc_array(cols, 0)
         grid.set_style_grid_row_dsc_array(rows, 0)
         grid.set_layout(lv.LAYOUT.GRID)
+        style(grid, { 'bg_opa': 0, 'border_width': 0, 'outline_width': 0 })
 
         self.sets_grid = grid
 
@@ -427,6 +428,7 @@ class JogDial:
         # parent.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
         parent.set_flex_flow(lv.FLEX_FLOW.ROW)
         parent.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+        parent.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
         btns = lv.buttonmatrix(parent)
         btns.set_map(['X', '\n', 'Y', '\n', 'Z'])
@@ -491,11 +493,22 @@ class JogDial:
         slider.set_size(15, lv.pct(100))
         slider.add_event_cb(self._feed_changed, lv.EVENT.VALUE_CHANGED, None)
 
+        parent.update_layout()
         ignore_layout(label)
         label.align_to(slider, lv.ALIGN.OUT_LEFT_MID, -5, 115)
 
         self.feed_label = label
         self.feed_slider = slider
+
+        self.pos_labels = {}
+        for i, l in enumerate(['X', 'Y', 'Z']):
+            pos_label = lv.label(parent)
+            pos_label.set_size(75, 20)
+            style(pos_label, { 'margin': 0, 'padding': 0 })
+            pos_label.set_text(l + ' ' + ('%7.2f' % (180.0 - i * 63.0)))
+            ignore_layout(pos_label)
+            parent.update_layout()
+            pos_label.align_to(arc, lv.ALIGN.CENTER, -95 + i * 70, 0)
 
     def _axis_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())
@@ -547,15 +560,19 @@ import sys
 
 platform = sys.platform
 hw = None
+mach = None
 evt = None
 
 if platform == 'esp32':
-    #from rotary_evt import EventLoop
     from encoder import EventLoop
+    from rrf_machine import MachineRRF
+
+    evt = EventLoop()
 
     hw = HardwareSetupESP32()
 
-    evt = EventLoop()
+    mach = MachineRRF()
+
 elif platform == 'darwin':
     hw = HardwareSetupMac()
 else:
@@ -564,12 +581,15 @@ else:
 interface = Interface()
 
 if evt:
+    @micropython.native
     def update_v(v):
-        print("V: ", v % 100)
-        interface.tab_jog.jog_dial.set_value(v % 100)
+        print("V: ", (v // 4) % 100)
+        interface.tab_jog.jog_dial.set_value((v // 4) % 100)
 
-    evt.run(HardwareSetupESP32.ENC_PX, HardwareSetupESP32.ENC_PY, update_v)
+    print("EVT Loop:")
+    evt.run(HardwareSetupESP32.ENC_PY, HardwareSetupESP32.ENC_PX, update_v)
 
 i = 0
+
 while True:
-  i += 1
+    i += 1

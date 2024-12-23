@@ -7,6 +7,8 @@ import json
 
 from micropython import const
 
+from machine import UART, Pin
+
 class MachineStatus:
     INITIALIZING = 0
     FLASHING_FIRMWARE = 1
@@ -21,7 +23,7 @@ class MachineStatus:
     BUSY = 10
     UNKNOWN = 100
 
-class ReprapMachineStatus:
+class MachineRRF:
     RRF_TO_STATUS = {
         'C': MachineStatus.INITIALIZING,
         'F': MachineStatus.FLASHING_FIRMWARE,
@@ -50,6 +52,8 @@ class ReprapMachineStatus:
         self.probe_secondary = 0
         self.spindles = []
 
+        self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
+
     def machine_status(self):
         return {
             key:value for key, value in self.__dict__.items()
@@ -62,17 +66,28 @@ class ReprapMachineStatus:
         pass
 
     def get_machine_status_ext(self):
-        pass
+        self.uart.write('M409 K"move.axes[]"\n')
+        res = uart.read()
+
+    def move(self, axis, feed):
+        send("M120\nG91\nG1 X50 F6000\nM121")
+        get_machine_position()
+
+    def read_status(self):
+        uart.write('M409\n')
+        res = uart.read()
+        print(res)
 
     def parse_m409(self, json_resp):
         j = json.loads(json_resp)
 
-        self.status = ReprapMachineStatus.RRF_TO_STATUS[j['status']]
-        coords = j['coords']
-        self.wcs = coords['wpl']
-        self.axes_homed = coords['axesHomed']
-        self.coords_machine = coords['machine']
-        self.coords_wcs = coords['xyz']
+        if j['status']: self.status = ReprapMachineStatus.RRF_TO_STATUS[j['status']]
+        if j['coords']:
+            coords = j['coords']
+            self.wcs = coords['wpl']
+            self.axes_homed = coords['axesHomed']
+            self.coords_machine = coords['machine']
+            self.coords_wcs = coords['xyz']
 
         self.tool = j['currentTool']
         self.output = j['output']
