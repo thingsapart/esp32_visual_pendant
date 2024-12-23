@@ -4,6 +4,13 @@ Very much a work in progress.
 
 Uses two ESP32, one with screen for UX, the other as wireless-serial-bridge. Uses ESP-NOW as the wireless comms.
 
+## In the flesh
+
+Pendant in a 3D printed case:
+
+![Pendant showing Jog Screen](/docs/images/vizi_pendant2s.jpeg)
+![Pendant showing Probe Screen](/docs/images/vizi_pendant1s.jpeg)
+
 ## Building
 
 ### LVGL+Micropython 
