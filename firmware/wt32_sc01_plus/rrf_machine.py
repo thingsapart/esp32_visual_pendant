@@ -7,13 +7,111 @@ import json
 
 from micropython import const
 
-from machine import UART, Pin
 
 from machine_interface import MachineInterface, PollState, MachineStatus
 
+import sys
 
+platform = sys.platform
+if platform == 'win32' or platform == 'darwin' or platform == 'linux':
+    class Pin:
+        def __init__(self, pin):
+            self.pin = pin
 
-    MOVE_GCODE = "M120\nG91\nG1 %s%f.3 F%d\nM121"
+    class UART:
+        def __init__(self, pos, baud, tx=None, rx=None, rxbuf=0):
+            self.last = None
+            self.last_args = None
+            self.pos = [0.0, 0.0, 0.0]
+            self.homed = [False, False, False]
+
+        def write(self, gcodes):
+            for gcode in gcodes.split('\n'):
+                if len(gcode) > 0:
+                    l = gcode.split()
+                    self.last = l[0].upper()
+                    self.last_args = l[1:]
+
+                    if self.last == 'G1' or self.last == 'G0':
+                        axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
+                        for ax in self.last_args:
+                            axis = ax[0].upper()
+                            if axis in axis_i:
+                                v = float(ax[1:])
+                                self.pos[axis_i[axis]] += v
+
+        def read(self):
+            if self.last == 'M409':
+               k = self.last_args[0][1:].replace('"', '').replace("'", '')
+               if k == 'move.axes':
+                   return '''{
+        "status": "O",
+        "coords": {
+            "axesHomed": [0, 0, 0],
+            "wpl": 1,
+            "xyz": [%.3f, %.3f, %.3f],
+            "machine": [%.3f, %.3f, %.3f],
+            "extr": []
+        },
+        "speeds": {
+            "requested": 0.0,
+            "top": 0.0
+        },
+        "currentTool": -1,
+        "output": {
+            "beepDuration": 1234,
+            "beepFrequency": 4567,
+            "message": "Test message",
+            "msgBox": {
+                "msg": "my message",
+                "title": "optional title",
+                "mode": 0,
+                "seq": 5,
+                "timeout": 10.0,
+                "controls": 0
+            }
+        },
+        "params": {
+            "atxPower": -1,
+            "fanPercent": [-100],
+            "speedFactor": 100.0,
+            "extrFactors": [],
+            "babystep": 0.000,
+            "seq": 1
+        },
+        "sensors": {
+            "probeValue": 1000,
+            "probeSecondary": 1000,
+            "fanRPM": [-1]
+        },
+        "temps": {
+            "bed": {
+                "current": -273.1,
+                "active": -273.1,
+                "standby": -273.1,
+                "state": 0,
+                "heater": 0
+            },
+            "current": [-273.1],
+            "state": [0],
+            "tools": {
+                "active": [],
+                "standby": []
+            },
+            "extra": []
+        },
+        "time": 596.0,
+        "scanner": {
+            "status": "D",
+            "progress": 0.0
+        },
+        "spindles": [],
+        "laser": 0.0
+    }'''  % (self.pos[0], self.pos[1], self.pos[2], self.pos[0], self.pos[1], self.pos[2])
+
+            raise Error('Unknown arg to M409')
+else:
+    from machine import UART, Pin
 
 class MachineRRF(MachineInterface):
     RRF_TO_STATUS = {
@@ -30,58 +128,37 @@ class MachineRRF(MachineInterface):
         'B': MachineStatus.BUSY,
     }
 
-    def __init__(self):
-        self.machine_status = MachineStatus.UNKNOWN
-        self.axes_homed = [False, False, False]
-        self.position = [None, None, None]
-        self.wcs_position = [None, None, None]
-        self.wcs = None
-        self.tool = None
-        self.feed_multiplier = 1.0
-        self.z_offs = 0.0
-        self.probes = [0, 0]
-        self.end_stops = None
-        self.spindles = []
-        self.dialogs = None
+    def __init__(self, state_update_callback, sleep_ms = MachineInterface.DEFAULT_SLEEP_MS):
+        super().__init__(state_update_callback, sleep_ms)
 
         self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
-
-    # Debug summary of all public fields.
-    def machine_status(self):
-        return {
-            key:value for key, value in self.__dict__.items()
-            if not key.startswith('__')
-            and not callable(value)
-            and not callable(getattr(value, "__get__", None)) # <- important
-        }
 
     def get_machine_status_ext(self):
         self.uart.write('M409 K"move.axes[]"\n')
         res = self.uart.read()
 
-    def send(self, gcode):
-        self.uart.write(gcode)
+    def _send_gcode(self, gcode):
+        self.uart.write(gcode + '\n')
 
-    def move(self, axis, feed):
-        send("M120\nG91\nG1 X50 F6000\nM121")
-        read_machine_position_response()
-        #get_machine_position()
+    def _proc_machine_state(self, cmd):
+        self._send_gcode(cmd)
+        res = self.uart.read()
+        self.parse_m409(res)
 
-    def read_status(self):
-        uart.write('M409\n')
-        res = uart.read()
-        print(res)
+    def _update_machine_state(self, poll_state):
+        if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
+            self._proc_machine_state('M409 K"move.axes" F"d2"')
 
     def parse_m409(self, json_resp):
         j = json.loads(json_resp)
 
-        if j['status']: self.status = ReprapMachineStatus.RRF_TO_STATUS[j['status']]
+        if j['status']: self.status = MachineRRF.RRF_TO_STATUS[j['status']]
         if j['coords']:
             coords = j['coords']
             self.wcs = coords['wpl']
             self.axes_homed = coords['axesHomed']
-            self.coords_machine = coords['machine']
-            self.coords_wcs = coords['xyz']
+            self.position = coords['machine']
+            self.wcs_position = coords['xyz']
 
         self.tool = j['currentTool']
         self.output = j['output']
@@ -96,75 +173,9 @@ class MachineRRF(MachineInterface):
 
         self.spindles = j['spindles']
 
-    def send_gcode(self, gcode):
-        pass
-
 if __name__ == '__main__':
-    TEST = '''{
-	"status": "O",
-	"coords": {
-		"axesHomed": [0, 0, 0],
-		"wpl": 1,
-		"xyz": [0.000, 0.000, 0.000],
-		"machine": [0.000, 0.000, 0.000],
-		"extr": []
-	},
-	"speeds": {
-		"requested": 0.0,
-		"top": 0.0
-	},
-	"currentTool": -1,
-	"output": {
-		"beepDuration": 1234,
-		"beepFrequency": 4567,
-		"message": "Test message",
-		"msgBox": {
-			"msg": "my message",
-			"title": "optional title",
-			"mode": 0,
-			"seq": 5,
-			"timeout": 10.0,
-			"controls": 0
-		}
-	},
-	"params": {
-		"atxPower": -1,
-		"fanPercent": [-100],
-		"speedFactor": 100.0,
-		"extrFactors": [],
-		"babystep": 0.000,
-		"seq": 1
-	},
-	"sensors": {
-		"probeValue": 1000,
-		"probeSecondary": 1000,
-		"fanRPM": [-1]
-	},
-	"temps": {
-		"bed": {
-			"current": -273.1,
-			"active": -273.1,
-			"standby": -273.1,
-			"state": 0,
-			"heater": 0
-		},
-		"current": [-273.1],
-		"state": [0],
-		"tools": {
-			"active": [],
-			"standby": []
-		},
-		"extra": []
-	},
-	"time": 596.0,
-	"scanner": {
-		"status": "D",
-		"progress": 0.0
-	},
-	"spindles": [],
-	"laser": 0.0
-}'''
-    mach_state = ReprapMachineStatus()
-    print(mach_state.machine_status())
-    mach_state.parse_m409(TEST)
-    print(mach_state.machine_status())
+    m = MachineRRF(lambda x: print(x))
+    m.move('X', 100.0, 22.0)
+    print(m.debug_print())
+    m.process_gcode_q()
+    print(m.debug_print())
