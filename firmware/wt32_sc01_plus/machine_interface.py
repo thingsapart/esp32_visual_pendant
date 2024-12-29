@@ -93,10 +93,10 @@ class MachineInterface:
         self.poll_state = self.poll_state | poll_state
 
     def _send_gcode(self, gcode):
-        raise Error('implement this method in sub-class')
+        raise Exception('implement this method in sub-class')
 
     def _update_machine_state(self, poll_state):
-        raise Error('implement this method in sub-class')
+        raise Exception('implement this method in sub-class')
 
     def process_gcode_q(self):
         if self.gcode_q_len > 0:
@@ -133,7 +133,12 @@ class MachineInterface:
                         PollState.MACHINE_POSITION)
 
     def home_all(self):
-        self.send_gcode("G28\n", PollState.MACHINE_POSITION)
+        self.send_gcode("G28", PollState.MACHINE_POSITION)
+
+    def set_wcs_zero(self, wcs, axes):
+        zer = ' '.join([ax + '0' for ax in axes])
+        self.send_gcode('G10 L20 P%d %s' % (wcs, zer),
+                        PollState.MACHINE_POSITION)
 
     def debug_print(self):
         return {

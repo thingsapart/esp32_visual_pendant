@@ -29,8 +29,16 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
             self.last_args = None
             self.pos = [0.0, 0.0, 0.0]
             self.axesHomed = [0, 0, 0]
+            self.wcs = 0
+            self.wcs_offsets = [
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    ]
 
         def write(self, gcodes):
+            axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
+
             for gcode in gcodes.split('\n'):
                 if len(gcode) > 0:
                     l = gcode.split()
@@ -40,8 +48,32 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                         self.axesHomed = [1, 1, 1]
                         self.pos = [0.0, 0.0, 0.0]
 
-                    if self.last == 'G1' or self.last == 'G0':
-                        axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
+                    if self.last == 'G53':
+                        self.wcs = 0
+                    elif self.last == 'G54':
+                        self.wcs = 1
+                    elif self.last == 'G55':
+                        self.wcs = 2
+                    elif self.last == 'G56':
+                        self.wcs = 3
+
+                    elif self.last == 'G10':
+                        wcs = None
+                        ax = 0
+                        v = 0
+                        for cc in self.last_args:
+                            cmd = cc[0].upper()
+                            if cmd == 'P':
+                                wcs = int(cc[1:])
+                            elif cmd == 'L':
+                                if cc.upper() != 'L20':
+                                    raise Exception('Only L20 supported')
+                            else:
+                                ax = axis_i[cmd]
+                                v = float(cc[1:])
+                        self.wcs_offsets[ax][wcs - 1] = v
+
+                    elif self.last == 'G1' or self.last == 'G0':
                         for ax in self.last_args:
                             axis = ax[0].upper()
                             if axis in axis_i:
@@ -50,76 +82,25 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
 
         def read(self):
             if self.last == 'M409':
-               k = self.last_args[0][1:].replace('"', '').replace("'", '')
-               if k == 'move.axes':
-                   return '''{
-        "status": "O",
-        "coords": {
-            "wpl": 1,
-            "xyz": [%.3f, %.3f, %.3f],
-            "machine": [%.3f, %.3f, %.3f],
-            "axesHomed": [%d, %d, %d],
-            "extr": []
-        },
-        "speeds": {
-            "requested": 0.0,
-            "top": 0.0
-        },
-        "currentTool": -1,
-        "output": {
-            "beepDuration": 1234,
-            "beepFrequency": 4567,
-            "message": "Test message",
-            "msgBox": {
-                "msg": "my message",
-                "title": "optional title",
-                "mode": 0,
-                "seq": 5,
-                "timeout": 10.0,
-                "controls": 0
-            }
-        },
-        "params": {
-            "atxPower": -1,
-            "fanPercent": [-100],
-            "speedFactor": 100.0,
-            "extrFactors": [],
-            "babystep": 0.000,
-            "seq": 1
-        },
-        "sensors": {
-            "probeValue": 1000,
-            "probeSecondary": 1000,
-            "fanRPM": [-1]
-        },
-        "temps": {
-            "bed": {
-                "current": -273.1,
-                "active": -273.1,
-                "standby": -273.1,
-                "state": 0,
-                "heater": 0
-            },
-            "current": [-273.1],
-            "state": [0],
-            "tools": {
-                "active": [],
-                "standby": []
-            },
-            "extra": []
-        },
-        "time": 596.0,
-        "scanner": {
-            "status": "D",
-            "progress": 0.0
-        },
-        "spindles": [],
-        "laser": 0.0
-    }'''  % (self.pos[0], self.pos[1], self.pos[2], self.pos[0], self.pos[1],
-             self.pos[2], self.axesHomed[0], self.axesHomed[1],
-             self.axesHomed[2])
-
-            raise Error('Unknown arg to M409')
+                k = self.last_args[0][1:].replace('"', '').replace("'", '')
+                if k == 'move.axes':
+                    x = self.pos[0]
+                    xwcs = self.wcs_offsets[0]
+                    xu = x + xwcs[self.wcs]
+                    y = self.pos[1]
+                    ywcs = self.wcs_offsets[1]
+                    yu = y + ywcs[self.wcs]
+                    z = self.pos[2]
+                    zwcs = self.wcs_offsets[2]
+                    zu = z + zwcs[self.wcs]
+                    #xwcs = repr(['%.3f' % v for v in xwcs])
+                    #ywcs = repr(['%.3f' % v for v in ywcs])
+                    #zwcs = repr(['%.3f' % v for v in zwcs])
+                    return '''{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":false,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":false,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":false,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'''  % (x, xu, repr(xwcs), y, yu, repr(ywcs), z, zu, repr(zwcs))
+                else:
+                    raise Exception('Unknown arg to M409')
+            else:
+                return 'ok\n'
 else:
     from machine import UART, Pin
 
@@ -160,7 +141,9 @@ class MachineRRF(MachineInterface):
             self._proc_machine_state('M409 K"move.axes" F"d2"')
 
     def parse_m409(self, json_resp):
+        print(json_resp)
         j = json.loads(json_resp)
+        raise Exception('Todo: redo')
 
         if j['status']: self.status = MachineRRF.RRF_TO_STATUS[j['status']]
         if j['coords']:
@@ -186,6 +169,7 @@ class MachineRRF(MachineInterface):
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
     m.move('X', 100.0, 22.0)
+    m.set_wcs_zero(1, ['X'])
     print(m.debug_print())
     m.process_gcode_q()
     print(m.debug_print())
