@@ -9,21 +9,13 @@ from micropython import const
 
 from machine import UART, Pin
 
-class MachineStatus:
-    INITIALIZING = 0
-    FLASHING_FIRMWARE = 1
-    EMERGENCY_HALTED = 2
-    OFF = 3
-    PAUSED_DEC = 4
-    PAUSED_RESUME = 5
-    PAUSED = 6
-    SIMULATING = 7
-    RUNNING = 8
-    TOOL_CHANGING = 9
-    BUSY = 10
-    UNKNOWN = 100
+from machine_interface import MachineInterface, PollState, MachineStatus
 
-class MachineRRF:
+
+
+    MOVE_GCODE = "M120\nG91\nG1 %s%f.3 F%d\nM121"
+
+class MachineRRF(MachineInterface):
     RRF_TO_STATUS = {
         'C': MachineStatus.INITIALIZING,
         'F': MachineStatus.FLASHING_FIRMWARE,
@@ -39,21 +31,22 @@ class MachineRRF:
     }
 
     def __init__(self):
-        self.status = MachineStatus.UNKNOWN
-        self.wcs = 0
-        self.axes_homed = [0, 0, 0]
-        self.coords_machine = [None, None, None]
-        self.coords_wcs = [None, None, None]
+        self.machine_status = MachineStatus.UNKNOWN
+        self.axes_homed = [False, False, False]
+        self.position = [None, None, None]
+        self.wcs_position = [None, None, None]
+        self.wcs = None
         self.tool = None
-        self.output = None
         self.feed_multiplier = 1.0
         self.z_offs = 0.0
-        self.probe = 0
-        self.probe_secondary = 0
+        self.probes = [0, 0]
+        self.end_stops = None
         self.spindles = []
+        self.dialogs = None
 
         self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
 
+    # Debug summary of all public fields.
     def machine_status(self):
         return {
             key:value for key, value in self.__dict__.items()
@@ -62,16 +55,17 @@ class MachineRRF:
             and not callable(getattr(value, "__get__", None)) # <- important
         }
 
-    def get_machine_status_common(self):
-        pass
-
     def get_machine_status_ext(self):
         self.uart.write('M409 K"move.axes[]"\n')
-        res = uart.read()
+        res = self.uart.read()
+
+    def send(self, gcode):
+        self.uart.write(gcode)
 
     def move(self, axis, feed):
         send("M120\nG91\nG1 X50 F6000\nM121")
-        get_machine_position()
+        read_machine_position_response()
+        #get_machine_position()
 
     def read_status(self):
         uart.write('M409\n')

@@ -587,7 +587,7 @@ if evt:
         interface.tab_jog.jog_dial.set_value((v // 4) % 100)
 
     print("EVT Loop:")
-    evt.run(HardwareSetupESP32.ENC_PY, HardwareSetupESP32.ENC_PX, update_v)
+    #evt.run(HardwareSetupESP32.ENC_PY, HardwareSetupESP32.ENC_PX, update_v)
 
 i = 0
 
