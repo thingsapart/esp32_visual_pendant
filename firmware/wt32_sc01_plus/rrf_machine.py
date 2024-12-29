@@ -18,12 +18,17 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
         def __init__(self, pin):
             self.pin = pin
 
+    # Minimum-viable UART + RRF Machine Sim:
+    # Pretends to be RRF connected via UART.
+    # Interprets some gcodes in the most basic way, closely tied to
+    # MachineInterface/MachineRRF, to allow testing MachineRRF on platforms
+    # that don't support the UART class.
     class UART:
         def __init__(self, pos, baud, tx=None, rx=None, rxbuf=0):
             self.last = None
             self.last_args = None
             self.pos = [0.0, 0.0, 0.0]
-            self.homed = [False, False, False]
+            self.axesHomed = [0, 0, 0]
 
         def write(self, gcodes):
             for gcode in gcodes.split('\n'):
@@ -31,6 +36,9 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                     l = gcode.split()
                     self.last = l[0].upper()
                     self.last_args = l[1:]
+                    if self.last == 'G28':
+                        self.axesHomed = [1, 1, 1]
+                        self.pos = [0.0, 0.0, 0.0]
 
                     if self.last == 'G1' or self.last == 'G0':
                         axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
@@ -47,10 +55,10 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                    return '''{
         "status": "O",
         "coords": {
-            "axesHomed": [0, 0, 0],
             "wpl": 1,
             "xyz": [%.3f, %.3f, %.3f],
             "machine": [%.3f, %.3f, %.3f],
+            "axesHomed": [%d, %d, %d],
             "extr": []
         },
         "speeds": {
@@ -107,7 +115,9 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
         },
         "spindles": [],
         "laser": 0.0
-    }'''  % (self.pos[0], self.pos[1], self.pos[2], self.pos[0], self.pos[1], self.pos[2])
+    }'''  % (self.pos[0], self.pos[1], self.pos[2], self.pos[0], self.pos[1],
+             self.pos[2], self.axesHomed[0], self.axesHomed[1],
+             self.axesHomed[2])
 
             raise Error('Unknown arg to M409')
 else:
@@ -176,6 +186,10 @@ class MachineRRF(MachineInterface):
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
     m.move('X', 100.0, 22.0)
+    print(m.debug_print())
+    m.process_gcode_q()
+    print(m.debug_print())
+    m.home_all()
     print(m.debug_print())
     m.process_gcode_q()
     print(m.debug_print())

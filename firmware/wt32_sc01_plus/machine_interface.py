@@ -132,6 +132,9 @@ class MachineInterface:
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
 
+    def home_all(self):
+        self.send_gcode("G28\n", PollState.MACHINE_POSITION)
+
     def debug_print(self):
         return {
             'status': self.machine_status,
