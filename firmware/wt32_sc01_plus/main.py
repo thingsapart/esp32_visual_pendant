@@ -24,7 +24,6 @@ class HardwareSetupMac:
         from micropython import const  # NOQA
         import lcd_bus  # NOQA
 
-
         _WIDTH = const(480)
         _HEIGHT = const(320)
 
@@ -34,7 +33,6 @@ class HardwareSetupMac:
 
         import lvgl as lv  # NOQA
         import sdl_display  # NOQA
-
 
         display = sdl_display.SDLDisplay(
             data_bus=bus,
@@ -557,6 +555,7 @@ class JogDial:
 ######################################
 
 import sys
+from rrf_machine import MachineRRF
 
 platform = sys.platform
 hw = None
@@ -565,14 +564,12 @@ evt = None
 
 if platform == 'esp32':
     from encoder import EventLoop
-    from rrf_machine import MachineRRF
 
     evt = EventLoop()
 
     hw = HardwareSetupESP32()
 
-    mach = MachineRRF()
-
+    mach = MachineRRF(machine_update_cb)
 elif platform == 'darwin':
     hw = HardwareSetupMac()
 else:
@@ -580,8 +577,12 @@ else:
 
 interface = Interface()
 
+def machine_update_cb(machine):
+    pass
+
+mach = MachineRRF(machine_update_cb)
+
 if evt:
-    @micropython.native
     def update_v(v):
         print("V: ", (v // 4) % 100)
         interface.tab_jog.jog_dial.set_value((v // 4) % 100)

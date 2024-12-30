@@ -40,6 +40,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
             axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
 
             for gcode in gcodes.split('\n'):
+                print(gcode)
                 if len(gcode) > 0:
                     l = gcode.split()
                     self.last = l[0].upper()
@@ -71,7 +72,9 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                             else:
                                 ax = axis_i[cmd]
                                 v = float(cc[1:])
-                        self.wcs_offsets[ax][wcs - 1] = v
+                            print('G10>', cmd)
+                        print('G10', ax, v, wcs)
+                        self.wcs_offsets[ax][wcs - 1] = v - self.pos[ax]
 
                     elif self.last == 'G1' or self.last == 'G0':
                         for ax in self.last_args:
@@ -79,6 +82,8 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                             if axis in axis_i:
                                 v = float(ax[1:])
                                 self.pos[axis_i[axis]] += v
+            print('pos:', self.pos, 'homed:', self.axesHomed, 'wcs:', self.wcs,
+                  'wcs_offs:', self.wcs_offsets)
 
         def read(self):
             if self.last == 'M409':
@@ -86,17 +91,17 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                 if k == 'move.axes':
                     x = self.pos[0]
                     xwcs = self.wcs_offsets[0]
+                    xh = 'true' if self.axesHomed[0] == 1 else 'false'
                     xu = x + xwcs[self.wcs]
                     y = self.pos[1]
+                    yh = 'true' if self.axesHomed[1] == 1 else 'false'
                     ywcs = self.wcs_offsets[1]
                     yu = y + ywcs[self.wcs]
                     z = self.pos[2]
+                    zh = 'true' if self.axesHomed[2] == 1 else 'false'
                     zwcs = self.wcs_offsets[2]
                     zu = z + zwcs[self.wcs]
-                    #xwcs = repr(['%.3f' % v for v in xwcs])
-                    #ywcs = repr(['%.3f' % v for v in ywcs])
-                    #zwcs = repr(['%.3f' % v for v in zwcs])
-                    return '''{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":false,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":false,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":false,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'''  % (x, xu, repr(xwcs), y, yu, repr(ywcs), z, zu, repr(zwcs))
+                    return '''{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":%s,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":%s,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":%s,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'''  % (xh, x, xu, repr(xwcs), yh, y, yu, repr(ywcs), zh, z, zu, repr(zwcs))
                 else:
                     raise Exception('Unknown arg to M409')
             else:
@@ -105,6 +110,7 @@ else:
     from machine import UART, Pin
 
 class MachineRRF(MachineInterface):
+    AXIS_NAMES = { 'X': 0, 'Y': 1, 'Z': 2, 'U': 3, 'V': 4, 'A': 5, 'B': 6 }
     RRF_TO_STATUS = {
         'C': MachineStatus.INITIALIZING,
         'F': MachineStatus.FLASHING_FIRMWARE,
@@ -143,7 +149,38 @@ class MachineRRF(MachineInterface):
     def parse_m409(self, json_resp):
         print(json_resp)
         j = json.loads(json_resp)
-        raise Exception('Todo: redo')
+
+        if j['key'] == 'move.axes':
+            r = j['result']
+            for axis in r:
+                # Available but unused fields:
+                # acceleration = axis['acceleration']
+                # babystep = axis['babystep']
+                # backlash = axis['backlash']
+                # current = axis['current']
+                # drivers = axis['drivers']
+                # jerk = axis['jerk']
+                # maxProbed = axis['maxProbed']
+                # minProbed = axis['minProbed']
+                # percentCurrent = axis['percentCurrent']
+                # percentStstCurrent = axis['percentStstCurrent']
+                # speed = axis['speed']
+                # stepsPerMm = axis['stepsPerMm']
+                # visible = axis['visible']
+                # reducedAcceleration = axis['reducedAcceleration']
+                name = axis['letter']
+                i = MachineRRF.AXIS_NAMES[name]
+                homed = axis['homed']
+                machine_pos = axis['machinePosition']
+                wcs_pos = axis['userPosition']
+                # wcs_offs = axis['workplaceOffsets']
+
+                self.axes_homed[i] = homed
+                self.position[i] = machine_pos
+                self.wcs_position[i] = wcs_pos
+
+    def parse_m408(self, json_resp):
+        j = json.loads(json_resp)
 
         if j['status']: self.status = MachineRRF.RRF_TO_STATUS[j['status']]
         if j['coords']:
