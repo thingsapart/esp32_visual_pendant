@@ -3,17 +3,22 @@
 import usys as sys
 sys.path.append('')
 
+
+# RUN_SIM => simulated RRF machine for testing.
+# => false: use UART to send and read gcode to/from RRF machine.
+# => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
+RUN_SIM = False
+
 import json
 
 from micropython import const
-
 
 from machine_interface import MachineInterface, PollState, MachineStatus
 
 import sys
 
 platform = sys.platform
-if platform == 'win32' or platform == 'darwin' or platform == 'linux':
+if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM:
     class Pin:
         def __init__(self, pin):
             self.pin = pin
@@ -40,7 +45,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
             axis_i = { 'X': 0, 'Y': 1, 'Z': 2 }
 
             for gcode in gcodes.split('\n'):
-                print(gcode)
+                #print(gcode)
                 if len(gcode) > 0:
                     l = gcode.split()
                     self.last = l[0].upper()
@@ -72,8 +77,8 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                             else:
                                 ax = axis_i[cmd]
                                 v = float(cc[1:])
-                            print('G10>', cmd)
-                        print('G10', ax, v, wcs)
+                            # print('G10>', cmd)
+                        #print('G10', ax, v, wcs)
                         self.wcs_offsets[ax][wcs - 1] = v - self.pos[ax]
 
                     elif self.last == 'G1' or self.last == 'G0':
@@ -82,8 +87,8 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                             if axis in axis_i:
                                 v = float(ax[1:])
                                 self.pos[axis_i[axis]] += v
-            print('pos:', self.pos, 'homed:', self.axesHomed, 'wcs:', self.wcs,
-                  'wcs_offs:', self.wcs_offsets)
+                        # print('pos:', self.pos, 'homed:', self.axesHomed, 'wcs:', self.wcs,
+                        #       'wcs_offs:', self.wcs_offsets)
 
         def read(self):
             if self.last == 'M409':
@@ -108,6 +113,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux':
                 return 'ok\n'
 else:
     from machine import UART, Pin
+    import uasyncio
 
 class MachineRRF(MachineInterface):
     AXIS_NAMES = { 'X': 0, 'Y': 1, 'Z': 2, 'U': 3, 'V': 4, 'A': 5, 'B': 6 }
@@ -125,59 +131,82 @@ class MachineRRF(MachineInterface):
         'B': MachineStatus.BUSY,
     }
 
-    def __init__(self, state_update_callback, sleep_ms = MachineInterface.DEFAULT_SLEEP_MS):
-        super().__init__(state_update_callback, sleep_ms)
+    def __init__(self, sleep_ms = MachineInterface.DEFAULT_SLEEP_MS):
+        super().__init__(sleep_ms)
 
         self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
+        self.uart_reader = uasyncio.StreamReader(self.uart)
 
     def get_machine_status_ext(self):
         self.uart.write('M409 K"move.axes[]"\n')
         res = self.uart.read()
 
     def _send_gcode(self, gcode):
-        self.uart.write(gcode + '\n')
+        gcodes = gcode.split('\n')
+        for gcode_ in gcodes:
+            # print("_send", gcode_)
+            self.uart.write(gcode_ + '\n')
 
-    def _proc_machine_state(self, cmd):
+    def _has_response(self):
+        return self.uart.any()
+
+    def _read_response(self):
+        return self.uart.read()
+
+    async def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
-        res = self.uart.read()
-        self.parse_m409(res)
+        try:
+            res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
+            # print('>proc', res)
+            self.parse_m409(res)
+        except Exception:
+            print('Timeout')
 
-    def _update_machine_state(self, poll_state):
+    async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
-            self._proc_machine_state('M409 K"move.axes" F"d2"')
+            await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
 
     def parse_m409(self, json_resp):
-        print(json_resp)
-        j = json.loads(json_resp)
+        j = None
+        try:
+             j = json.loads(json_resp.strip())
+        except ValueError as e:
+            print("Failed to parse json", e, json_resp)
+            return
 
-        if j['key'] == 'move.axes':
-            r = j['result']
-            for axis in r:
-                # Available but unused fields:
-                # acceleration = axis['acceleration']
-                # babystep = axis['babystep']
-                # backlash = axis['backlash']
-                # current = axis['current']
-                # drivers = axis['drivers']
-                # jerk = axis['jerk']
-                # maxProbed = axis['maxProbed']
-                # minProbed = axis['minProbed']
-                # percentCurrent = axis['percentCurrent']
-                # percentStstCurrent = axis['percentStstCurrent']
-                # speed = axis['speed']
-                # stepsPerMm = axis['stepsPerMm']
-                # visible = axis['visible']
-                # reducedAcceleration = axis['reducedAcceleration']
-                name = axis['letter']
-                i = MachineRRF.AXIS_NAMES[name]
-                homed = axis['homed']
-                machine_pos = axis['machinePosition']
-                wcs_pos = axis['userPosition']
-                # wcs_offs = axis['workplaceOffsets']
+        try:
+            # print('!!', j['key'])
+            if j['key'] == 'move.axes' or j['key'] == 'move.axes[]':
+                r = j['result']
+                for axis in r:
+                    # Available but unused fields:
+                    # acceleration = axis['acceleration']
+                    # babystep = axis['babystep']
+                    # backlash = axis['backlash']
+                    # current = axis['current']
+                    # drivers = axis['drivers']
+                    # jerk = axis['jerk']
+                    # maxProbed = axis['maxProbed']
+                    # minProbed = axis['minProbed']
+                    # percentCurrent = axis['percentCurrent']
+                    # percentStstCurrent = axis['percentStstCurrent']
+                    # speed = axis['speed']
+                    # stepsPerMm = axis['stepsPerMm']
+                    # visible = axis['visible']
+                    # reducedAcceleration = axis['reducedAcceleration']
+                    name = axis['letter']
+                    i = MachineRRF.AXIS_NAMES[name]
+                    homed = axis['homed']
+                    machine_pos = axis['machinePosition']
+                    wcs_pos = axis['userPosition']
+                    # wcs_offs = axis['workplaceOffsets']
+                    # print("AXIS", name, i, homed, machine_pos, wcs_pos)
 
-                self.axes_homed[i] = homed
-                self.position[i] = machine_pos
-                self.wcs_position[i] = wcs_pos
+                    self.axes_homed[i] = homed
+                    self.position[i] = machine_pos
+                    self.wcs_position[i] = wcs_pos
+        except KeyError as e:
+            print('Failed to read json: ', json_resp, e)
 
     def parse_m408(self, json_resp):
         j = json.loads(json_resp)

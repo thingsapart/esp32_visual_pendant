@@ -184,8 +184,10 @@ class HardwareSetupESP32:
 from lv_style import *
 
 class Interface:
-    def __init__(self):
+    def __init__(self, machine):
         self.scr = lv.screen_active()
+        self.machine = machine
+        self.machine_change_callbacks = []
 
         self.init_main_tabs()
 
@@ -198,13 +200,23 @@ class Interface:
 
         tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
 
-        self.tab_jog = TabJog(tabv)
-        self.tab_probe = TabProbe(tabv)
+        self.tab_jog = TabJog(tabv, self)
+        self.tab_probe = TabProbe(tabv, self)
 
         self.tab_machine = tabv.add_tab("Machine")
         self.tab_gcode = tabv.add_tab("GCode")
         self.tab_tool = tabv.add_tab("Tool")
         self.tab_tool = tabv.add_tab("CAM")
+
+    def register_state_change_cb(self, cb):
+        self.machine_change_callbacks.append(cb)
+
+    def update_machine_state(self, machine):
+        # TODO: upldate global displays.
+
+        for cb in self.machine_change_callbacks:
+            cb(machine)
+
 
 class TabProbe:
     PROBE_BTNS = [
@@ -221,8 +233,9 @@ class TabProbe:
         ['Overtravel', 2.0, 0.0, 10.0]
     ]
 
-    def __init__(self, tabv):
+    def __init__(self, tabv, interface):
         self.tab = tabv.add_tab("Probe")
+        self.interface = interface
 
         tab = self.tab
         # tab.set_flex_flow(lv.FLEX_FLOW.COLUMN)
@@ -332,14 +345,16 @@ class TabProbe:
         self.probe_buttons = btns
 
 class TabJog:
-    def __init__(self, tabv):
+    def __init__(self, tabv, interface):
         self.tabv = tabv
+        self.interface = interface
         self.tab = tabv.add_tab("Jog")
-        self.jog_dial = JogDial(self.tab)
+        self.jog_dial = JogDial(self.tab, interface)
 
 class JogSlider:
-    def __init__(self, parent):
+    def __init__(self, parent, interface):
         self.parent = parent
+        self.interface = interface
 
         parent.center()
         parent.set_flex_flow(lv.FLEX_FLOW.COLUMN)
@@ -417,9 +432,15 @@ class JogDial:
                 ['1%', 0.01]
             ]
 
-    def __init__(self, parent):
+    def __init__(self, parent, interface):
         self.prev = 0
         self.parent = parent
+        self.interface = interface
+        self.feed = 1.0
+        self.axis = 'X'
+        self.last_rotary_pos = 0
+
+        interface.register_state_change_cb(self._machine_state_updated)
 
         parent.center()
         # parent.set_flex_flow(lv.FLEX_FLOW.COLUMN)
@@ -503,10 +524,21 @@ class JogDial:
             pos_label = lv.label(parent)
             pos_label.set_size(75, 20)
             style(pos_label, { 'margin': 0, 'padding': 0 })
-            pos_label.set_text(l + ' ' + ('%7.2f' % (180.0 - i * 63.0)))
             ignore_layout(pos_label)
             parent.update_layout()
             pos_label.align_to(arc, lv.ALIGN.CENTER, -95 + i * 70, 0)
+            self.pos_labels[l] = pos_label
+        self.update_pos_labels([0, 0, 0])
+
+    def update_pos_labels(self, vals):
+        for i, l in enumerate(['X', 'Y', 'Z']):
+            try:
+                self.pos_labels[l].set_text(l + ' ' + ('%7.2f' % float(vals[i])))
+            except:
+                self.pos_labels[l].set_text(l + ' ' + ('%s' % vals[i]))
+
+    def _machine_state_updated(self, machine):
+        self.update_pos_labels(machine.wcs_position)
 
     def _axis_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())
@@ -524,7 +556,7 @@ class JogDial:
 
     def _feed_changed(self, evt):
         tgt = lv.slider.__cast__(evt.get_target())
-        self.feed = tgt.get_value()
+        self.feed = tgt.get_value() / 100.0
         self.feed_label.set_text(str(self.feed) + '%')
 
     def set_value(self, v):
@@ -541,15 +573,18 @@ class JogDial:
         # c = evt.get_code()
         # print(dict((v, k) for k, v in lv.EVENT.__dict__.items())[c])
         # if c == lv.EVENT.VALUE_CHANGED:
-
             tgt = lv.arc.__cast__(evt.get_target())
             val = tgt.get_value()
+
             prev = self.prev
             self.prev = val
             if val > 99 and prev < val:
                 self.arc.set_value(0)
             if val < 1 and prev > val:
                 self.arc.set_value(99)
+
+            # diff = val - self.prev
+            # self.interface.machine.move(self.axis, self.feed, diff)
 
 ######################################
 ######################################
@@ -564,31 +599,44 @@ evt = None
 
 if platform == 'esp32':
     from encoder import EventLoop
-
     evt = EventLoop()
-
     hw = HardwareSetupESP32()
-
-    mach = MachineRRF(machine_update_cb)
 elif platform == 'darwin':
     hw = HardwareSetupMac()
 else:
     hw = HardwareSetupSim()
 
-interface = Interface()
+mach = MachineRRF()
+interface = Interface(mach)
 
 def machine_update_cb(machine):
-    pass
+    interface.update_machine_state(mach)
 
-mach = MachineRRF(machine_update_cb)
+mach.set_state_change_callback(machine_update_cb)
 
 if evt:
-    def update_v(v):
-        print("V: ", (v // 4) % 100)
-        interface.tab_jog.jog_dial.set_value((v // 4) % 100)
+    import uasyncio
 
-    print("EVT Loop:")
-    #evt.run(HardwareSetupESP32.ENC_PY, HardwareSetupESP32.ENC_PX, update_v)
+    #@micropython.native
+    def update_v(vv):
+        v = vv // 4
+        jog = interface.tab_jog.jog_dial
+        if v != jog.last_rotary_pos:
+            # print("V: ", v, mach.position)
+            interface.tab_jog.jog_dial.set_value(v % 100)
+            mach.move(jog.axis, jog.feed * 1000, v - jog.last_rotary_pos)
+            # print(mach.debug_print())
+            jog.last_rotary_pos = v
+
+    print("EVT Loops:")
+
+    try:
+        evt.run(HardwareSetupESP32.ENC_PY, HardwareSetupESP32.ENC_PX, update_v)
+        mach.setup_loop()
+    except KeyboardInterrupt:
+        print("Interrupted")
+    finally:
+        uasyncio.Loop.run_forever()
 
 i = 0
 

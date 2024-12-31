@@ -3,7 +3,7 @@ platform = sys.platform
 
 if not (platform == 'win32' or platform == 'darwin' or platform == 'linux'):
     import uasyncio
-    from uasyncio import sleep, create_task, Loop, CancelledError
+    from uasyncio import sleep, create_task, CancelledError, Loop
 
 
 class PollState:
@@ -61,9 +61,8 @@ class MachineInterface:
     #        end_stops: tuple of (name: str, triggered: bool),
     #        dialogs: ... tbd,
     #        gcode: str => "gcode to be executed next"
-    def __init__(self, state_update_callback, sleep_ms = DEFAULT_SLEEP_MS):
+    def __init__(self, sleep_ms = DEFAULT_SLEEP_MS):
         self.sleep_ms = sleep_ms
-        self.cb = state_update_callback
 
         self.machine_status = MachineStatus.UNKNOWN
         self.axes_homed = [False, False, False]
@@ -78,57 +77,76 @@ class MachineInterface:
         self.spindles = []
         self.dialogs = None
 
-        self.gcode_queue = [None, None, None, None, None]
+        self.gcode_queue = [None] * 10
         self.gcode_q_len = 0
 
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
 
+    def set_state_change_callback(self, state_update_callback):
+        self.cb = state_update_callback
+
     def send_gcode(self, gcode, poll_state):
-        if self.gcode_q_len == len(self.gcode_queue):
-            process_gcode_q()
+        # print("!!", self.gcode_q_len, len(self.gcode_queue) - 2)
+        if self.gcode_q_len >= len(self.gcode_queue) - 2:
+            print("!!0", self.gcode_q_len, len(self.gcode_queue) - 2)
+            self.process_gcode_q()
+            print("!!1", self.gcode_q_len, len(self.gcode_queue) - 2)
 
         self.gcode_queue[self.gcode_q_len] = gcode
         self.gcode_q_len += 1
+
+        print(self.gcode_q_len, self.gcode_queue[:self.gcode_q_len])
 
         self.poll_state = self.poll_state | poll_state
 
     def _send_gcode(self, gcode):
         raise Exception('implement this method in sub-class')
 
-    def _update_machine_state(self, poll_state):
+    async def _update_machine_state(self, poll_state):
         raise Exception('implement this method in sub-class')
 
     def process_gcode_q(self):
+        print("GQ:", self.gcode_q_len)
         if self.gcode_q_len > 0:
             for i in range(self.gcode_q_len):
                 self._send_gcode(self.gcode_queue[i])
+                if self._has_response():
+                    print(self._read_response())
+
                 self.gcode_queue[i] = None
 
-        self._update_machine_state(self.poll_state)
+            self.gcode_q_len = 0
+        print("< GQ:", self.gcode_q_len)
 
-        self.gcode_q_len = 0
-        self.poll_state = MachineInterface.DEFAULT_POLL_STATES
-
-        self.cb(self)
-
-    def task_loop(self):
+    async def task_loop(self):
         while True:
-            process_gcode_q()
+            print('.')
+
+            # Send any outstanding commands.
+            self.process_gcode_q()
+
+            # Query machine state.
+            await self._update_machine_state(self.poll_state)
+            self.poll_state = MachineInterface.DEFAULT_POLL_STATES
+            self.cb(self)
 
             await uasyncio.sleep_ms(self.sleep_ms)
+            #await uasyncio.sleep_ms(5000)
 
-    def setup_loop_and_run_forever(self):
+    def setup_loop(self):
         #######################################################################
         # Start event loop
         #######################################################################
+        print('Machine evt loop...')
         try:
             create_task(self.task_loop())
         except KeyboardInterrupt:
             print("Interrupted")
-        finally:
-            Loop.run_forever()
+        # finally:
+        #     Loop.run_forever()
 
     def move(self, axis, feed, value):
+        print('!!MOVE')
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
 
