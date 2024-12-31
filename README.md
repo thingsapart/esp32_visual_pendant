@@ -55,7 +55,7 @@ Pendant in a 3D printed case:
 #### Copy files
 
 * Install `mpremote` (`uv tool install mpremote`).
-* `mpremote fs cp firmware/wt32_sc01_plus/encoder.py :encoder.py',
+* `mpremote fs cp firmware/wt32_sc01_plus/encoder.py :encoder.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/lv_style.py :lv_style.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/rrf_machine.py :rrf_machine.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/main.py :main.py`,
