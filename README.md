@@ -76,9 +76,7 @@ Example Probing Screens:
 
 * `lvgl_micropy_macOS firmware/wt32_sc01_plus/main.py`
 
-## Screenshots
+## Acknowledgements
 
-![Main Screen](/docs/images/screen_main.jpeg)
-
-![Jog Screen](/docs/images/screen_jog.jpeg)
-
+* LVGL-micropython: https://github.com/lvgl-micropython/lvgl_micropython
+* Google Fonts/Material Symbols used as images for probe buttons: https://developers.google.com/fonts/docs/material_symbols
