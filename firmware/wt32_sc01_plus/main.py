@@ -239,11 +239,13 @@ class Interface:
 
 class TabProbe:
     class ProbeBtnMatrix:
-        def __init__(self, parent, desc):
+        def __init__(self, parent, desc, quick=True):
+            style(parent, { 'width': lv.pct(100), 'height': lv.SIZE_CONTENT,
+                             'margin': 0, 'padding': [0, 0, 5, 0] })
             self.container = lv.obj(parent)
             style(self.container, { 'width': lv.pct(100), 'height':
                                    lv.SIZE_CONTENT,
-                                   'padding': 2, 'margin': 0 })
+                                   'padding': 2, 'margin': [15, 0, 0, 0] })
             flex_col(self.container)
 
             for row in desc:
@@ -263,6 +265,7 @@ class TabProbe:
                         img_dsc = load_png(imgp, 32, 32)
 
                         btn = lv.button(row_container)
+                        btn.set_height(38)
                         img = lv.image(btn)
                         img.set_src(img_dsc)
                         img.center()
@@ -272,6 +275,10 @@ class TabProbe:
                     #btn.set_size(32, 32)
                     btn.set_flex_grow(1)
                     style(btn, { 'margin': 0, 'padding': 0 })
+            if quick:
+                qcb = lv.checkbox(parent)
+                qcb.set_text('Quick Mode')
+                qcb.center()
 
     PROBE_BTNS_3D = [
         '\\', ' ', '/', '\n',
@@ -289,26 +296,83 @@ class TabProbe:
         ' ', lv.SYMBOL.UP, ' '
     ]
 
-    PROBE_MODES_3D_IN = [
+    PROBE_MODES_SURF = [
+        [
+            [],
+            # '\\' => Back
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_s.png'],
+            [],
+        ],
+        [
+            # '/' => Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_e.png'],
+            # 'O' => Z
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/center_boss.png'],
+            # '\\' => Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_nw.png'],
+        ],
+        [
+            [],
+            # '\\' => Front
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_n.png'],
+            # => Reference Surface
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/ref_sfc.png'],
+        ],
+    ]
+
+    PROBE_MODES_3D = [
         [
             # '\\' => Back-Left
             ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_se.png'],
-            [],
             # '/' => Back-Right
             ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_sw.png'],
         ],
         [
-            [],
-            # 'O' => Bore
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/center_bore.png'],
-            [],
+            # '/' => Front-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_ne.png'],
+            # '\\' => Front-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_nw.png'],
+        ],
+    ]
+
+    PROBE_MODES_2D_OUT = [
+        [
+            # '\\' => Back-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_se.png'],
+            # '/' => Back-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_sw.png'],
         ],
         [
-            # '\\' => Front-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_ne.png'],
-            [],
             # '/' => Front-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_nw.png']
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_ne.png'],
+            # '\\' => Front-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_nw.png'],
+        ],
+        [
+            # '[]' => Pocket
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/pkt_in.png'],
+            # 'O' => Boss
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/ctr1_boss.png'],
+        ]
+    ]
+    PROBE_MODES_2D_IN = [
+        [
+            # '\\' => Back-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_nw.png'],
+            # '/' => Back-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_ne.png'],
+        ],
+        [
+            # '/' => Front-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_sw.png'],
+            # '\\' => Front-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_se.png'],
+        ],
+        [
+            # '[]' => Pocket
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/pkt_out.png'],
+            # 'O' => Bore
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/ctr1_bore.png'],
         ]
     ]
 
@@ -342,8 +406,8 @@ class TabProbe:
 
         self.tab_settings = tabv.add_tab("Setup")
         self.tab_wcs = tabv.add_tab("WCS")
-        self.tab_probe = tabv.add_tab("3D")
-        self.tab_probe_2d = tabv.add_tab("2D")
+        self.tab_probe = tabv.add_tab("3-axis")
+        self.tab_probe_2d = tabv.add_tab("2-axis")
         self.tab_surf = tabv.add_tab("Surface")
 
         # parent.set_style_local_pad_left(lv.OBJ.PART_MAIN, lv.STATE.DEFAULT, 0)
@@ -355,8 +419,8 @@ class TabProbe:
         self.tab_probe.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
         self.init_sets_tab(self.tab_settings)
-        self.init_probe_tab_3d(self.tab_probe)
         self.init_probe_tab_2d(self.tab_probe_2d)
+        self.init_probe_tab_3d(self.tab_probe)
         self.init_surface_tab(self.tab_surf)
         self.init_wcs_tab(self.tab_wcs)
 
@@ -394,17 +458,23 @@ class TabProbe:
 
         def text_area_inc(diff):
             slider = self.interface.wheel_tick_target
+            print('slider', slider)
             v = slider.get_value()
+            print('v', v)
             vv = v + diff
+            print('vv', vv)
             slider.set_value(vv, lv.ANIM.OFF)
             slider.send_event(lv.EVENT.VALUE_CHANGED, None)
+
+        def focused(slider, i):
+            self.interface.wheel_tick_target = slider
+            self.interface.wheel_tick = text_area_inc
 
         def text_area_focused(e, i):
             text = lv.textarea.__cast__(e.get_target())
             # slider = TabProbe.SETTINGS[i][-1]
             slider = lv.slider.__cast__(text.get_user_data())
-            self.interface.wheel_tick_target = slider
-            self.interface.wheel_tick = text_area_inc
+            focused(slider, i)
 
         def text_area_defocused(e):
             self.interface.wheel_tick_target = None
@@ -433,7 +503,7 @@ class TabProbe:
             slider.add_event_cb(lambda e, i=row: slider_event_cb(e, i), lv.EVENT.VALUE_CHANGED, None)
             slider.set_grid_cell(lv.GRID_ALIGN.STRETCH, 2, 1,
                                  lv.GRID_ALIGN.CENTER, row, 1)
-            slider.add_event_cb(lambda e, i=row: text_area_focused(e, i),
+            slider.add_event_cb(lambda e, i=row: focused(lv.slider.__cast__(e.get_target()), i),
                                  lv.EVENT.FOCUSED, None)
             slider.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
             style_pad(slider, 5)
@@ -460,13 +530,23 @@ class TabProbe:
         self.wcs_buttons = wcsbtns
 
     def init_surface_tab(self, tab):
+        style(tab, { 'padding': 5, 'margin': 0 })
+        container = lv.obj(tab)
+        style(container, { 'padding': 5, 'margin': 0, 'border_width': 0,
+                          'bg_opa': 0, 'bg_color': color('NONE'), 'border_width': 0})
+        flex_col(container)
+        self.btns_2d = TabProbe.ProbeBtnMatrix(container,
+                                               TabProbe.PROBE_MODES_SURF,
+                                               quick=False)
+
+    def init_surface_tab_(self, tab):
         flex_col(tab)
 
         btns = lv.buttonmatrix(tab)
         btns.set_map(TabProbe.PROBE_BTNS_1D)
         self.probe_buttons_surf = btns
 
-    def init_probe_tab_2d(self, tab):
+    def init_probe_tab_2d_(self, tab):
         flex_col(tab)
 
         iobtns = lv.buttonmatrix(tab)
@@ -480,38 +560,26 @@ class TabProbe:
         btns.set_map(TabProbe.PROBE_BTNS_2D)
         self.probe_buttons_2d = btns
 
-    def init_probe_tab_3d(self, tab):
+    def init_probe_tab_2d(self, tab2d):
+        style(tab2d, { 'padding': 5, 'margin': 0 })
+        tabv = lv.tabview(tab2d)
+        tabv.set_tab_bar_size(40)
+
+        tab = tabv.add_tab('Inside -> Out')
         flex_col(tab)
+        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_2D_IN)
 
-        # img = load_png('img/arr_ne.png', 32, 32)
-        # btn = lv.image(tab)
-        # btn.set_src(img)
-        # return
-
-        iobtns = lv.buttonmatrix(tab)
-        iobtns.set_height(70)
-        iobtns.set_map(['Inside', 'Outside'])
-        iobtns.set_one_checked(True)
-        iobtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
-        iobtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
-        self.inside_outside_buttons = iobtns
-
-        btns = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_3D_IN)
-
-    def init_probe_tab_3d_(self, tab):
+        tab = tabv.add_tab('Outside -> In')
         flex_col(tab)
+        self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_2D_OUT)
 
-        iobtns = lv.buttonmatrix(tab)
-        iobtns.set_height(70)
-        iobtns.set_map(['Inside', 'Outside'])
-        iobtns.set_one_checked(True)
-        iobtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
-        iobtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
-        self.inside_outside_buttons = iobtns
-
-        btns = lv.buttonmatrix(tab)
-        btns.set_map(TabProbe.PROBE_BTNS_3D)
-        self.probe_buttons = btns
+    def init_probe_tab_3d(self, tab3d):
+        style(tab3d, { 'padding': 5, 'margin': 0 })
+        container = lv.obj(tab3d)
+        style(container, { 'padding': 5, 'margin': 0, 'border_width': 0,
+                          'bg_opa': 0, 'bg_color': color('NONE'), 'border_width': 0})
+        flex_col(container)
+        self.btns_2d = TabProbe.ProbeBtnMatrix(container, TabProbe.PROBE_MODES_3D)
 
 class TabJog:
     def __init__(self, tabv, interface):
@@ -798,7 +866,8 @@ if evt:
 
             # print("V: ", v, mach.position)
             if not interface.process_wheel_tick(diff):
-                interface.tab_jog.jog_dial.set_value(v % 100)
+                vv = interface.tab_jog.jog_dial.arc.get_value() + diff
+                interface.tab_jog.jog_dial.set_value(vv % 100)
                 mach.move(jog.axis, jog.feed * 1000, diff)
                 # print(mach.debug_print())
 

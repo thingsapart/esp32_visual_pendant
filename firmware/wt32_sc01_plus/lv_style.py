@@ -28,6 +28,7 @@ def style_margin(obj, v):
     obj.set_style_margin_right(v, lv.STATE.DEFAULT)
     obj.set_style_margin_bottom(v, lv.STATE.DEFAULT)
 
+# 'AMBER', 'BLUE', 'BLUE_GREY', 'BROWN', 'CYAN', 'DEEP_ORANGE', 'DEEP_PURPLE', 'GREEN', 'GREY', 'INDIGO', 'LAST', 'LIGHT_BLUE', 'LIGHT_GREEN', 'LIME', 'NONE', 'ORANGE', 'PINK', 'PURPLE', 'RED', 'TEAL', 'YELLOW'
 def color(name, palette = 'main'):
     c = lv.PALETTE.__dict__[name]
     if palette == 'lighten':
@@ -50,7 +51,7 @@ def _style_spread(v):
         return [v, v, v, v]
 
 def style(obj, styles, state = lv.STATE.DEFAULT):
-    print('style', styles)
+    # print('style', styles)
     for k, v in styles.items():
         if isinstance(v, dict):
             for kk, vv in v.items():
@@ -66,7 +67,6 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
             obj.set_style_margin_left(vv[3], state)
         elif k == 'padding':
             vv = _style_spread(v)
-            print( "pad: ", vv)
             obj.set_style_pad_top(vv[0], state)
             obj.set_style_pad_right(vv[1], state)
             obj.set_style_pad_bottom(vv[2], state)
