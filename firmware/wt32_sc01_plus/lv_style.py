@@ -119,6 +119,8 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
             obj.set_style_bg_img_opa(v, state)
         elif k == 'bg_img_tiled':
             obj.set_style_bg_img_tiled(v, state)
+        elif k == 'radius':
+            obj.set_style_radius(v, state)
         elif k == 'border_color':
             obj.set_style_border_color(v, state)
         elif k == 'border_width':

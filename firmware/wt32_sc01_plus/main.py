@@ -472,6 +472,20 @@ class TabProbe:
 
         self.init_probe_tabv(tab)
 
+        jog_dial = self.interface.tab_jog.jog_dial
+
+        self.float_btn = lv.button(self.tab)
+        self.float_btn.set_size(45, 45)
+        self.float_btn.add_flag(lv.obj.FLAG.FLOATING)
+        self.float_btn.align(lv.ALIGN.BOTTOM_RIGHT, 0, 0)
+        label = lv.label(self.float_btn)
+        label.set_text(jog_dial.current_axis())
+        label.center()
+        self.float_btn.add_event_cb(lambda e: label.set_text(jog_dial.next_axis()),
+                                    lv.EVENT.CLICKED, None)
+        jog_dial.add_axis_change_db(lambda t: label.set_text(t))
+        style(self.float_btn, { 'radius': lv.RADIUS_CIRCLE })
+
     def init_probe_tabv(self, parent):
         self.main_tabs = lv.tabview(parent)
 
@@ -666,6 +680,8 @@ class TabJog:
         self.jog_dial = JogDial(self.tab, interface)
 
 class JogSlider:
+    AXES = ['X', 'Y', 'Z']
+
     def __init__(self, parent, interface):
         self.parent = parent
         self.interface = interface
@@ -676,7 +692,7 @@ class JogSlider:
 
         btns = lv.buttonmatrix(parent)
 
-        btns.set_map(['X', 'Y', 'Z'])
+        btns.set_map(JogSlider.AXES)
         btns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
         btns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
         self.axis = 'X'
@@ -746,13 +762,16 @@ class JogDial:
                 ['1%', 0.01]
             ]
 
+    AXES = ['X', 'Y', 'Z']
+
     def __init__(self, parent, interface):
         self.prev = 0
         self.parent = parent
         self.interface = interface
         self.feed = 1.0
-        self.axis = 'X'
+        self.axis = self.AXES[0]
         self.last_rotary_pos = 0
+        self.axis_change_cb = []
 
         interface.register_state_change_cb(self._machine_state_updated)
 
@@ -770,7 +789,7 @@ class JogDial:
         btns.set_size(60, lv.pct(100))
         btns.set_style_pad_ver(5, lv.PART.MAIN)
         btns.set_style_pad_hor(5, lv.PART.MAIN)
-        self.axis = 'X'
+        self.axis = self.AXES[0]
         btns.set_one_checked(True)
 
         btns.align(lv.ALIGN.CENTER, 0, 0)
@@ -778,24 +797,7 @@ class JogDial:
         btns.add_event_cb(self._axis_clicked,
                             lv.EVENT.VALUE_CHANGED,
                             None);
-
-        # if False:
-        #     feedbtns = lv.buttonmatrix(parent)
-        #     keys = [f[0] for f in JogDial.FEEDS]
-        #     btn_map_ver = button_matrix_ver(keys)
-        #     feedbtns.set_map(btn_map_ver)
-        #     feedbtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
-        #     feedbtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
-        #     feedbtns.set_size(60, lv.pct(100))
-        #     feedbtns.set_style_pad_ver(5, lv.PART.MAIN)
-        #     feedbtns.set_style_pad_hor(5, lv.PART.MAIN)
-        #     self.feed = 1.0
-        #     feedbtns.set_one_checked(True)
-        #     feedbtns.align(lv.ALIGN.CENTER, 0, 0)
-        #     feedbtns.add_event_cb(self._feed_clicked,
-        #                         lv.EVENT.VALUE_CHANGED,
-        #                         None);
-        #     self.feed_buttons = feedbtns
+        self.axis_btns = btns
 
         self.arc = lv.arc(parent)
         arc = self.arc
@@ -834,7 +836,7 @@ class JogDial:
         self.feed_slider = slider
 
         self.pos_labels = {}
-        for i, l in enumerate(['X', 'Y', 'Z']):
+        for i, l in enumerate(JogDial.AXES):
             pos_label = lv.label(parent)
             pos_label.set_size(75, 20)
             style(pos_label, { 'margin': 0, 'padding': 0 })
@@ -843,6 +845,24 @@ class JogDial:
             pos_label.align_to(arc, lv.ALIGN.CENTER, -95 + i * 70, 0)
             self.pos_labels[l] = pos_label
         self.update_pos_labels([0, 0, 0])
+
+    def current_axis(self):
+        return self.axis
+
+    def set_axis(self, ax):
+        self.axis = ax
+        for cb in self.axis_change_cb:
+            cb(self.axis)
+
+    def next_axis(self):
+        i = (self.AXES.index(self.axis) + 1) % len(self.AXES)
+        self.axis_btns.set_button_ctrl(i, lv.buttonmatrix.CTRL.CHECKED)
+        self.set_axis(self.AXES[i])
+
+        return self.axis
+
+    def add_axis_change_db(self, cb):
+        self.axis_change_cb.append(cb)
 
     def update_pos_labels(self, vals):
         for i, l in enumerate(['X', 'Y', 'Z']):
@@ -859,7 +879,7 @@ class JogDial:
         #print(tgt, tgt.__class__, tgt.get_parent())
         id = tgt.get_selected_button()
         txt = tgt.get_button_text(id)
-        self.axis = txt
+        self.set_axis(txt)
 
     def _feed_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())
