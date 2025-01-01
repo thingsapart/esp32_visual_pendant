@@ -239,7 +239,7 @@ class Interface:
 
 class TabProbe:
     class ProbeBtnMatrix:
-        def __init__(self, parent, desc, quick=True):
+        def __init__(self, parent, settings, desc, quick=True):
             style(parent, { 'width': lv.pct(100), 'height': lv.SIZE_CONTENT,
                              'margin': 0, 'padding': [0, 0, 5, 0] })
             self.container = lv.obj(parent)
@@ -248,29 +248,80 @@ class TabProbe:
                                    'padding': 2, 'margin': [15, 0, 0, 0] })
             flex_col(self.container)
 
-            for row in desc:
+            self.desc = desc
+            self.parent = parent
+            self.settings = settings
+
+            def make_param(param, val):
+                if isinstance(val, str):
+                    return param + repr(settings[val])
+                elif val == None:
+                    return param + repr(settings[param])
+                else:
+                    return param + repr(val)
+
+            def make_gcode(gc, params):
+                print(gc, params, params.items())
+                print([make_param(k ,v) for k, v in params.items()])
+                r = [gc]
+                r.extend([make_param(k ,v) for k, v in params.items()])
+                return ' '.join(r)
+
+            def click_handler_cb(e, irow, icol):
+                gcode, params, _, descr = desc[irow][icol]
+
+                title = 'Probe ' + descr
+                full_gcode = make_gcode(gcode, params)
+
+                used_params = [(k if not isinstance(v, str) else v) for k, v in params.items()]
+                print(used_params)
+                print(settings)
+                parms = [k + ': ' + repr(settings[v]) for k, _, _, _, v in
+                         TabProbe.SETTINGS if v in used_params]
+                text = 'Probing ' + descr + ' with:\n\n' + '\n'.join(parms) + '\n\nGCODE: ' + full_gcode
+
+                mbox = lv.msgbox(lv.screen_active())
+
+                def mbox_event_cb(e):
+                    # TODO: send gcode.
+                    mbox.close()
+
+                mbox.add_title(title)
+                mbox.add_text(text)
+                # mbox.add_close_button()
+                btn = mbox.add_footer_button('Probe')
+                btn.add_event_cb(mbox_event_cb, lv.EVENT.CLICKED, None)
+                btn = mbox.add_footer_button('Cancel')
+                btn.add_event_cb(lambda e: mbox.close(), lv.EVENT.CLICKED, None)
+                mbox.set_size(300, lv.SIZE_CONTENT)
+                mbox.center()
+
+            for j, row in enumerate(desc):
                 row_container = lv.obj(self.container)
                 flex_row(row_container)
                 row_container.set_size(lv.pct(100), lv.SIZE_CONTENT)
                 style(row_container, { 'margin': 0, 'padding': 2,
                                       'border_width': 0 })
 
-                for vals in row:
+                for i, vals in enumerate(row):
                     btn = None
                     if len(vals) == 0:
                         btn = lv.label(row_container)
                         btn.set_text('')
                     else:
-                        gcode, params, imgp = vals
+                        _, _, imgp, _ = vals
                         img_dsc = load_png(imgp, 32, 32)
 
                         btn = lv.button(row_container)
                         btn.set_height(38)
+                        btn.add_event_cb(lambda e, erow=j, ecol=i: click_handler_cb(e, erow, ecol),
+                                         lv.EVENT.CLICKED, None)
                         img = lv.image(btn)
                         img.set_src(img_dsc)
                         img.center()
                         style(btn, {'border_width': 1, 'border_color':
                                    color('TEAL'), 'bg_opa': 0 })
+
 
                     #btn.set_size(32, 32)
                     btn.set_flex_grow(1)
@@ -300,79 +351,101 @@ class TabProbe:
         [
             [],
             # '\\' => Back
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_s.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/arr_s.png', 'back face'],
             [],
         ],
         [
             # '/' => Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_e.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None},
+             'img/arr_e.png', 'left face'],
             # 'O' => Z
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/center_boss.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None},
+             'img/center_boss.png', 'top surface'],
             # '\\' => Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_nw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None},
+             'img/arr_nw.png', 'right face'],
         ],
         [
             [],
             # '\\' => Front
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_n.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/arr_n.png', 'front face'],
             # => Reference Surface
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/ref_sfc.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/ref_sfc.png', 'reference surface'],
         ],
     ]
 
     PROBE_MODES_3D = [
         [
             # '\\' => Back-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_se.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/arr_se.png', 'back-left vise corner'],
             # '/' => Back-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_sw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/arr_sw.png', 'back-right vise corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_ne.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None},
+             'img/arr_ne.png', 'front-left vise corner'],
             # '\\' => Front-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_nw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None},
+             'img/arr_nw.png', 'front-right vise corner'],
         ],
     ]
 
     PROBE_MODES_2D_OUT = [
         [
             # '\\' => Back-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_se.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/arr_se.png', 'back-left corner'],
             # '/' => Back-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_sw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/arr_sw.png', 'back-right corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_ne.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None},
+             'img/arr_ne.png', 'front-left corner'],
             # '\\' => Front-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_nw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None},
+             'img/arr_nw.png', 'front-right corner'],
         ],
         [
             # '[]' => Pocket
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/pkt_in.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/pkt_in.png', 'outside rectangle'],
             # 'O' => Boss
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/ctr1_boss.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/ctr1_boss.png', 'outside boss'],
         ]
     ]
     PROBE_MODES_2D_IN = [
         [
             # '\\' => Back-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_nw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None},
+             'img/arr_nw.png', 'back-left inside corner'],
             # '/' => Back-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_ne.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/arr_ne.png', 'back-right inside corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_sw.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None},
+             'img/arr_sw.png', 'front-left inside corner'],
             # '\\' => Front-Right
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_se.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None},
+             'img/arr_se.png', 'front-right inside corner'],
         ],
         [
             # '[]' => Pocket
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/pkt_out.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/pkt_out.png', 'inside pocket'],
             # 'O' => Bore
-            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/ctr1_bore.png'],
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None},
+             'img/ctr1_bore.png', 'inside bore'],
         ]
     ]
 
@@ -383,6 +456,8 @@ class TabProbe:
         ['Surf Clear', 5.0, 0.0, 20.0, 'T'],
         ['Corner Clear', 5.0, 0.0, 20.0, 'C'],
         ['Overtravel', 2.0, 0.0, 10.0, 'O'],
+        ['WCS', None, None, None, 'W'],
+        ['Quick Mode', None, None, None, 'Q'],
     ]
 
     def __init__(self, tabv, interface):
@@ -393,7 +468,7 @@ class TabProbe:
         # tab.set_flex_flow(lv.FLEX_FLOW.COLUMN)
         # tab.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
         flex_col(tab)
-        self.settings = {'W': 1}
+        self.settings = {'W': 1, 'Q': 0}
 
         self.init_probe_tabv(tab)
 
@@ -481,40 +556,41 @@ class TabProbe:
             self.interface.wheel_tick = None
 
         for row, (key, default, mini, maxi, param) in enumerate(TabProbe.SETTINGS):
-            label = lv.label(grid)
-            label.set_text(key)
-            label.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
-                                lv.GRID_ALIGN.CENTER, row, 1)
-            label.add_flag(lv.obj.FLAG.CLICKABLE)
+            if default is not None:
+                label = lv.label(grid)
+                label.set_text(key)
+                label.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
+                                    lv.GRID_ALIGN.CENTER, row, 1)
+                label.add_flag(lv.obj.FLAG.CLICKABLE)
 
-            textbox = lv.textarea(grid)
-            textbox.set_one_line(True)
-            textbox.set_text(str(default))
-            textbox.set_grid_cell(lv.GRID_ALIGN.STRETCH, 1, 1,
-                                  lv.GRID_ALIGN.CENTER, row, 1)
-            textbox.add_event_cb(lambda e, i=row: text_area_focused(e, i),
-                                 lv.EVENT.FOCUSED, None)
-            textbox.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
+                textbox = lv.textarea(grid)
+                textbox.set_one_line(True)
+                textbox.set_text(str(default))
+                textbox.set_grid_cell(lv.GRID_ALIGN.STRETCH, 1, 1,
+                                      lv.GRID_ALIGN.CENTER, row, 1)
+                textbox.add_event_cb(lambda e, i=row: text_area_focused(e, i),
+                                     lv.EVENT.FOCUSED, None)
+                textbox.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
 
-            slider = lv.slider(grid)
-            slider.set_range(int(mini * 10), int(maxi * 10))
-            slider.set_value(int(default * 10), lv.ANIM.OFF)
-            slider.set_user_data(textbox)
-            slider.add_event_cb(lambda e, i=row: slider_event_cb(e, i), lv.EVENT.VALUE_CHANGED, None)
-            slider.set_grid_cell(lv.GRID_ALIGN.STRETCH, 2, 1,
-                                 lv.GRID_ALIGN.CENTER, row, 1)
-            slider.add_event_cb(lambda e, i=row: focused(lv.slider.__cast__(e.get_target()), i),
-                                 lv.EVENT.FOCUSED, None)
-            slider.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
-            style_pad(slider, 5)
+                slider = lv.slider(grid)
+                slider.set_range(int(mini * 10), int(maxi * 10))
+                slider.set_value(int(default * 10), lv.ANIM.OFF)
+                slider.set_user_data(textbox)
+                slider.add_event_cb(lambda e, i=row: slider_event_cb(e, i), lv.EVENT.VALUE_CHANGED, None)
+                slider.set_grid_cell(lv.GRID_ALIGN.STRETCH, 2, 1,
+                                     lv.GRID_ALIGN.CENTER, row, 1)
+                slider.add_event_cb(lambda e, i=row: focused(lv.slider.__cast__(e.get_target()), i),
+                                     lv.EVENT.FOCUSED, None)
+                slider.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
+                style_pad(slider, 5)
 
-            # TabProbe.SETTINGS[row].append(slider)
-            label.set_user_data(slider)
-            label.add_event_cb(label_reset_event_cb, lv.EVENT.CLICKED, None)
+                # TabProbe.SETTINGS[row].append(slider)
+                label.set_user_data(slider)
+                label.add_event_cb(label_reset_event_cb, lv.EVENT.CLICKED, None)
 
-            textbox.set_user_data(slider)
+                textbox.set_user_data(slider)
 
-            self.settings[param] = default
+                self.settings[param] = default
 
     def init_wcs_tab(self, tab):
         flex_col(tab)
@@ -536,6 +612,7 @@ class TabProbe:
                           'bg_opa': 0, 'bg_color': color('NONE'), 'border_width': 0})
         flex_col(container)
         self.btns_2d = TabProbe.ProbeBtnMatrix(container,
+                                               self.settings,
                                                TabProbe.PROBE_MODES_SURF,
                                                quick=False)
 
@@ -567,11 +644,11 @@ class TabProbe:
 
         tab = tabv.add_tab('Inside -> Out')
         flex_col(tab)
-        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_2D_IN)
+        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab, self.settings, TabProbe.PROBE_MODES_2D_IN)
 
         tab = tabv.add_tab('Outside -> In')
         flex_col(tab)
-        self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_2D_OUT)
+        self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab, self.settings, TabProbe.PROBE_MODES_2D_OUT)
 
     def init_probe_tab_3d(self, tab3d):
         style(tab3d, { 'padding': 5, 'margin': 0 })
@@ -579,7 +656,7 @@ class TabProbe:
         style(container, { 'padding': 5, 'margin': 0, 'border_width': 0,
                           'bg_opa': 0, 'bg_color': color('NONE'), 'border_width': 0})
         flex_col(container)
-        self.btns_2d = TabProbe.ProbeBtnMatrix(container, TabProbe.PROBE_MODES_3D)
+        self.btns_2d = TabProbe.ProbeBtnMatrix(container, self.settings, TabProbe.PROBE_MODES_3D)
 
 class TabJog:
     def __init__(self, tabv, interface):
