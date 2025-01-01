@@ -12,11 +12,13 @@ Pendant in a 3D printed case:
 ![Pendant showing Probe Screen](/docs/images/vizi_pendant1s.jpeg)
 
 
-Probing Screens:
+Example Probing Screens:
 
-![Pendant showing Probe Screen 2-axis inside](/docs/images/tab_probe_2ax_in.jpeg)
-![Pendant showing Probe Screen single surface](/docs/images/tab_probe_surf.jpeg)
-![Pendant showing Probe Screen single surface confirm modal + gcode (sic)](/docs/images/tab_probe_3ax_msg.jpeg)
+<p align="center">
+  <img src="https://github.com/thingsapart/esp32_visual_pendant/raw/main/docs/images/tab_probe_2ax_in.jpeg" width="33%" />
+  <img src="https://github.com/thingsapart/esp32_visual_pendant/raw/main/docs/images/tab_probe_surf.jpeg" width="33%" />
+  <img src="https://github.com/thingsapart/esp32_visual_pendant/raw/main/docs/images/tab_probe_3ax_msg.jpeg" width="33%" />
+</p>
 
 ## Building
 
