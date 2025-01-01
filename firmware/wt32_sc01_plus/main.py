@@ -267,11 +267,11 @@ class TabProbe:
                         img.set_src(img_dsc)
                         img.center()
                         style(btn, {'border_width': 1, 'border_color':
-                                    color('BLUE_GREY')  })
+                                   color('TEAL'), 'bg_opa': 0 })
 
                     #btn.set_size(32, 32)
                     btn.set_flex_grow(1)
-                    style(btn, { 'margin': 0, 'padding': 2, 'bg_opa': 0 })
+                    style(btn, { 'margin': 0, 'padding': 0 })
 
     PROBE_BTNS_3D = [
         '\\', ' ', '/', '\n',
