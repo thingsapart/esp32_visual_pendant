@@ -364,7 +364,7 @@ class TabProbe:
              'img/center_boss.png', 'top surface'],
             # '\\' => Right
             ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None},
-             'img/arr_nw.png', 'right face'],
+             'img/arr_w.png', 'right face'],
         ],
         [
             [],
