@@ -11,6 +11,13 @@ Pendant in a 3D printed case:
 ![Pendant showing Jog Screen](/docs/images/vizi_pendant2s.jpeg)
 ![Pendant showing Probe Screen](/docs/images/vizi_pendant1s.jpeg)
 
+
+Probing Screens:
+
+![Pendant showing Probe Screen 2-axis inside](/docs/images/tab_probe_2ax_in.jpeg)
+![Pendant showing Probe Screen single surface](/docs/images/tab_probe_surf.jpeg)
+![Pendant showing Probe Screen single surface confirm modal + gcode (sic)](/docs/images/tab_probe_3ax_msg.jpeg)
+
 ## Building
 
 ### LVGL+Micropython 
