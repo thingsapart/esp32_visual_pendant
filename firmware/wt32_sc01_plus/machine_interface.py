@@ -5,6 +5,7 @@ if not (platform == 'win32' or platform == 'darwin' or platform == 'linux'):
     import uasyncio
     from uasyncio import sleep, create_task, CancelledError, Loop
 
+from collections import deque
 
 class PollState:
     MACHINE_POSITION = 1
@@ -48,6 +49,9 @@ class MachineInterface:
 
     DEFAULT_SLEEP_MS = 200
 
+    # How many g-code commands to buffer before overwriting them by FIFO.
+    MAX_GCODE_Q_LEN = 10
+
     # state_update_callback(state) => self: object having attributes:
     #        machine_status: MachineStatus.constants => "status of machine",
     #        axes_homed: [Bool] => "wheter each axis is homed",
@@ -77,8 +81,7 @@ class MachineInterface:
         self.spindles = []
         self.dialogs = None
 
-        self.gcode_queue = [None] * 10
-        self.gcode_q_len = 0
+        self.gcode_queue = deque((), MachineInterface.MAX_GCODE_Q_LEN)
 
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
 
@@ -86,16 +89,12 @@ class MachineInterface:
         self.cb = state_update_callback
 
     def send_gcode(self, gcode, poll_state):
-        # print("!!", self.gcode_q_len, len(self.gcode_queue) - 2)
-        if self.gcode_q_len >= len(self.gcode_queue) - 2:
-            print("!!0", self.gcode_q_len, len(self.gcode_queue) - 2)
+        # Try to process g-code queue out of band if buffer fills up,
+        # otherwise done in the main asyncio loop periodically.
+        if len(self.gcode_queue) >= MachineInterface.MAX_GCODE_Q_LEN - 2:
             self.process_gcode_q()
-            print("!!1", self.gcode_q_len, len(self.gcode_queue) - 2)
 
-        self.gcode_queue[self.gcode_q_len] = gcode
-        self.gcode_q_len += 1
-
-        print(self.gcode_q_len, self.gcode_queue[:self.gcode_q_len])
+        self.gcode_queue.append(gcode)
 
         self.poll_state = self.poll_state | poll_state
 
@@ -106,17 +105,14 @@ class MachineInterface:
         raise Exception('implement this method in sub-class')
 
     def process_gcode_q(self):
-        print("GQ:", self.gcode_q_len)
-        if self.gcode_q_len > 0:
-            for i in range(self.gcode_q_len):
-                self._send_gcode(self.gcode_queue[i])
+        if len(self.gcode_queue) > 0:
+            for gcode in self.gcode_queue:
+                self._send_gcode(gcode)
                 if self._has_response():
+                    # TODO: act on response and possible failure.
                     print(self._read_response())
-
-                self.gcode_queue[i] = None
-
-            self.gcode_q_len = 0
-        print("< GQ:", self.gcode_q_len)
+            for i in range(len(self.gcode_queue)):
+               self.gcode_queue.pop()
 
     async def task_loop(self):
         while True:

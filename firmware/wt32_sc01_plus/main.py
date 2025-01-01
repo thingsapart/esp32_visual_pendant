@@ -176,9 +176,17 @@ class HardwareSetupESP32:
         self.touch_device = touch_device
         self.touch_bus = touch_bus
 
+        # Set frequency to 240Mhz to make the UI snappier -> higher power
+        # drain on battery. Default is 160Mhz.
+        self.turbo()
+
         scrn = lv.screen_active()
         lv.refr_now(scrn.get_display())
         task_handler.TaskHandler()
+
+    def turbo(self):
+        import machine
+        machine.freq(240000000)
 
 
 from lv_style import *
@@ -189,9 +197,20 @@ class Interface:
         self.machine = machine
         self.machine_change_callbacks = []
 
+        self.wheel_tick = None
+        self.wheel_tick_target = None
+
         self.init_main_tabs()
 
         lv.screen_load(self.scr)
+
+    def process_wheel_tick(self, diff):
+        if self.wheel_tick == None:
+            return False
+
+        self.wheel_tick(diff)
+
+        return True
 
     def init_main_tabs(self):
         self.main_tabs = lv.tabview(self.scr)
@@ -219,18 +238,87 @@ class Interface:
 
 
 class TabProbe:
-    PROBE_BTNS = [
-        '\\', '|', '/', '\n',
-        '->', 'O', '<-', '\n',
-        '/', '|', '\\'
+    class ProbeBtnMatrix:
+        def __init__(self, parent, desc):
+            self.container = lv.obj(parent)
+            style(self.container, { 'width': lv.pct(100), 'height':
+                                   lv.SIZE_CONTENT,
+                                   'padding': 2, 'margin': 0 })
+            flex_col(self.container)
+
+            for row in desc:
+                row_container = lv.obj(self.container)
+                flex_row(row_container)
+                row_container.set_size(lv.pct(100), lv.SIZE_CONTENT)
+                style(row_container, { 'margin': 0, 'padding': 2,
+                                      'border_width': 0 })
+
+                for vals in row:
+                    btn = None
+                    if len(vals) == 0:
+                        btn = lv.label(row_container)
+                        btn.set_text('')
+                    else:
+                        gcode, params, imgp = vals
+                        img_dsc = load_png(imgp, 32, 32)
+
+                        btn = lv.button(row_container)
+                        img = lv.image(btn)
+                        img.set_src(img_dsc)
+                        img.center()
+                        style(btn, {'border_width': 1, 'border_color':
+                                    color('BLUE_GREY')  })
+
+                    #btn.set_size(32, 32)
+                    btn.set_flex_grow(1)
+                    style(btn, { 'margin': 0, 'padding': 2, 'bg_opa': 0 })
+
+    PROBE_BTNS_3D = [
+        '\\', ' ', '/', '\n',
+        ' ', 'O', ' ', '\n',
+        '/', ' ', '\\'
     ]
+    PROBE_BTNS_2D = [
+        '\\', ' ', '/', '\n',
+        ' ', 'O', ' ', '\n',
+        '/', ' ', '\\'
+    ]
+    PROBE_BTNS_1D = [
+        ' ', lv.SYMBOL.DOWN, ' ', '\n',
+        lv.SYMBOL.RIGHT, 'O', lv.SYMBOL.LEFT, '\n',
+        ' ', lv.SYMBOL.UP, ' '
+    ]
+
+    PROBE_MODES_3D_IN = [
+        [
+            # '\\' => Back-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None}, 'img/arr_se.png'],
+            [],
+            # '/' => Back-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/arr_sw.png'],
+        ],
+        [
+            [],
+            # 'O' => Bore
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None}, 'img/center_bore.png'],
+            [],
+        ],
+        [
+            # '\\' => Front-Right
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None}, 'img/arr_ne.png'],
+            [],
+            # '/' => Front-Left
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None}, 'img/arr_nw.png']
+        ]
+    ]
+
     SETTINGS = [
-        ['Width', 50.0, 1.0, 200.0],
-        ['Length', 100.0, 1.0, 200.0],
-        ['Depth', 2.0, 0.0, 10.0],
-        ['Surf Clear', 5.0, 0.0, 20.0],
-        ['Corner Clear', 5.0, 0.0, 20.0],
-        ['Overtravel', 2.0, 0.0, 10.0]
+        ['Width / Dia', 50.0, 1.0, 200.0, 'H'],
+        ['Length', 100.0, 1.0, 200.0, 'I'],
+        ['Depth', 2.0, 0.0, 10.0, 'Z'],
+        ['Surf Clear', 5.0, 0.0, 20.0, 'T'],
+        ['Corner Clear', 5.0, 0.0, 20.0, 'C'],
+        ['Overtravel', 2.0, 0.0, 10.0, 'O'],
     ]
 
     def __init__(self, tabv, interface):
@@ -241,6 +329,7 @@ class TabProbe:
         # tab.set_flex_flow(lv.FLEX_FLOW.COLUMN)
         # tab.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
         flex_col(tab)
+        self.settings = {'W': 1}
 
         self.init_probe_tabv(tab)
 
@@ -253,7 +342,8 @@ class TabProbe:
 
         self.tab_settings = tabv.add_tab("Setup")
         self.tab_wcs = tabv.add_tab("WCS")
-        self.tab_probe = tabv.add_tab("Probe")
+        self.tab_probe = tabv.add_tab("3D")
+        self.tab_probe_2d = tabv.add_tab("2D")
         self.tab_surf = tabv.add_tab("Surface")
 
         # parent.set_style_local_pad_left(lv.OBJ.PART_MAIN, lv.STATE.DEFAULT, 0)
@@ -265,8 +355,9 @@ class TabProbe:
         self.tab_probe.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
         self.init_sets_tab(self.tab_settings)
-        self.init_probe_tab(self.tab_probe)
-        self.init_surface_tab(self.tab_probe)
+        self.init_probe_tab_3d(self.tab_probe)
+        self.init_probe_tab_2d(self.tab_probe_2d)
+        self.init_surface_tab(self.tab_surf)
         self.init_wcs_tab(self.tab_wcs)
 
     def init_sets_tab(self, tab):
@@ -276,8 +367,8 @@ class TabProbe:
         grid.set_size(lv.pct(100), lv.pct(100))
         grid.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
-        cols = [lv.pct(1), lv.pct(30), lv.pct(50), lv.GRID_TEMPLATE_LAST]
-        rows = [30] * 6 + [lv.GRID_TEMPLATE_LAST]
+        cols = [100, 60, lv.grid_fr(1), lv.GRID_TEMPLATE_LAST]
+        rows = [31] * 6 + [lv.GRID_TEMPLATE_LAST]
         # rows = [lv.GRID_CONTENT] * 6 + [lv.GRID_TEMPLATE_LAST]
         grid.set_style_grid_column_dsc_array(cols, 0)
         grid.set_style_grid_row_dsc_array(rows, 0)
@@ -286,32 +377,74 @@ class TabProbe:
 
         self.sets_grid = grid
 
-        def slider_event_cb(e):
+        def slider_event_cb(e, i):
             slider = lv.slider.__cast__(e.get_target())
             textbox = lv.textarea.__cast__(slider.get_user_data())
             value = slider.get_value() / 10.0
             textbox.set_text(f"{value:.1f}")
+            self.settings[TabProbe.SETTINGS[i][-1]] = value
 
-        for row, (key, default, mini, maxi) in enumerate(TabProbe.SETTINGS):
+        def label_reset_event_cb(e):
+            label = lv.label.__cast__(e.get_target())
+            txt = label.get_text()
+            setting = next(sets for sets in TabProbe.SETTINGS if sets[0] == txt)
+            slider = lv.slider.__cast__(label.get_user_data())
+            slider.set_value(int(setting[1] * 10), lv.ANIM.OFF)
+            slider.send_event(lv.EVENT.VALUE_CHANGED, None)
+
+        def text_area_inc(diff):
+            slider = self.interface.wheel_tick_target
+            v = slider.get_value()
+            vv = v + diff
+            slider.set_value(vv, lv.ANIM.OFF)
+            slider.send_event(lv.EVENT.VALUE_CHANGED, None)
+
+        def text_area_focused(e, i):
+            text = lv.textarea.__cast__(e.get_target())
+            # slider = TabProbe.SETTINGS[i][-1]
+            slider = lv.slider.__cast__(text.get_user_data())
+            self.interface.wheel_tick_target = slider
+            self.interface.wheel_tick = text_area_inc
+
+        def text_area_defocused(e):
+            self.interface.wheel_tick_target = None
+            self.interface.wheel_tick = None
+
+        for row, (key, default, mini, maxi, param) in enumerate(TabProbe.SETTINGS):
             label = lv.label(grid)
             label.set_text(key)
             label.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
                                 lv.GRID_ALIGN.CENTER, row, 1)
+            label.add_flag(lv.obj.FLAG.CLICKABLE)
 
             textbox = lv.textarea(grid)
             textbox.set_one_line(True)
             textbox.set_text(str(default))
             textbox.set_grid_cell(lv.GRID_ALIGN.STRETCH, 1, 1,
                                   lv.GRID_ALIGN.CENTER, row, 1)
+            textbox.add_event_cb(lambda e, i=row: text_area_focused(e, i),
+                                 lv.EVENT.FOCUSED, None)
+            textbox.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
 
             slider = lv.slider(grid)
             slider.set_range(int(mini * 10), int(maxi * 10))
             slider.set_value(int(default * 10), lv.ANIM.OFF)
             slider.set_user_data(textbox)
-            slider.add_event_cb(slider_event_cb, lv.EVENT.VALUE_CHANGED, None)
+            slider.add_event_cb(lambda e, i=row: slider_event_cb(e, i), lv.EVENT.VALUE_CHANGED, None)
             slider.set_grid_cell(lv.GRID_ALIGN.STRETCH, 2, 1,
                                  lv.GRID_ALIGN.CENTER, row, 1)
+            slider.add_event_cb(lambda e, i=row: text_area_focused(e, i),
+                                 lv.EVENT.FOCUSED, None)
+            slider.add_event_cb(text_area_defocused, lv.EVENT.DEFOCUSED, None)
             style_pad(slider, 5)
+
+            # TabProbe.SETTINGS[row].append(slider)
+            label.set_user_data(slider)
+            label.add_event_cb(label_reset_event_cb, lv.EVENT.CLICKED, None)
+
+            textbox.set_user_data(slider)
+
+            self.settings[param] = default
 
     def init_wcs_tab(self, tab):
         flex_col(tab)
@@ -327,9 +460,45 @@ class TabProbe:
         self.wcs_buttons = wcsbtns
 
     def init_surface_tab(self, tab):
-        pass
+        flex_col(tab)
 
-    def init_probe_tab(self, tab):
+        btns = lv.buttonmatrix(tab)
+        btns.set_map(TabProbe.PROBE_BTNS_1D)
+        self.probe_buttons_surf = btns
+
+    def init_probe_tab_2d(self, tab):
+        flex_col(tab)
+
+        iobtns = lv.buttonmatrix(tab)
+        iobtns.set_height(70)
+        iobtns.set_map(['Inside', 'Outside'])
+        iobtns.set_one_checked(True)
+        iobtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        iobtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+
+        btns = lv.buttonmatrix(tab)
+        btns.set_map(TabProbe.PROBE_BTNS_2D)
+        self.probe_buttons_2d = btns
+
+    def init_probe_tab_3d(self, tab):
+        flex_col(tab)
+
+        # img = load_png('img/arr_ne.png', 32, 32)
+        # btn = lv.image(tab)
+        # btn.set_src(img)
+        # return
+
+        iobtns = lv.buttonmatrix(tab)
+        iobtns.set_height(70)
+        iobtns.set_map(['Inside', 'Outside'])
+        iobtns.set_one_checked(True)
+        iobtns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
+        iobtns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
+        self.inside_outside_buttons = iobtns
+
+        btns = TabProbe.ProbeBtnMatrix(tab, TabProbe.PROBE_MODES_3D_IN)
+
+    def init_probe_tab_3d_(self, tab):
         flex_col(tab)
 
         iobtns = lv.buttonmatrix(tab)
@@ -341,7 +510,7 @@ class TabProbe:
         self.inside_outside_buttons = iobtns
 
         btns = lv.buttonmatrix(tab)
-        btns.set_map(TabProbe.PROBE_BTNS)
+        btns.set_map(TabProbe.PROBE_BTNS_3D)
         self.probe_buttons = btns
 
 class TabJog:
@@ -597,6 +766,8 @@ hw = None
 mach = None
 evt = None
 
+#register_png()
+
 if platform == 'esp32':
     from encoder import EventLoop
     evt = EventLoop()
@@ -622,11 +793,14 @@ if evt:
         v = vv // 4
         jog = interface.tab_jog.jog_dial
         if v != jog.last_rotary_pos:
-            # print("V: ", v, mach.position)
-            interface.tab_jog.jog_dial.set_value(v % 100)
-            mach.move(jog.axis, jog.feed * 1000, v - jog.last_rotary_pos)
-            # print(mach.debug_print())
+            diff = v - jog.last_rotary_pos
             jog.last_rotary_pos = v
+
+            # print("V: ", v, mach.position)
+            if not interface.process_wheel_tick(diff):
+                interface.tab_jog.jog_dial.set_value(v % 100)
+                mach.move(jog.axis, jog.feed * 1000, diff)
+                # print(mach.debug_print())
 
     print("EVT Loops:")
 

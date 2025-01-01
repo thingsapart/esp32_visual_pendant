@@ -11,6 +11,11 @@ def flex_col(obj):
     obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
 
+def flex_row(obj):
+    obj.center()
+    obj.set_flex_flow(lv.FLEX_FLOW.ROW)
+    obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+
 def style_pad(obj, v):
     obj.set_style_pad_top(v, lv.STATE.DEFAULT)
     obj.set_style_pad_left(v, lv.STATE.DEFAULT)
@@ -73,9 +78,9 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
         elif k == 'y':
             obj.set_y(v, state)
         elif k == 'width':
-            obj.set_width(v, state)
+            obj.set_width(v)
         elif k == 'height':
-            obj.set_height(v, state)
+            obj.set_height(v)
         elif k == 'max_width':
             obj.set_max_width(v, state)
         elif k == 'max_height':
@@ -116,6 +121,8 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
             obj.set_style_bg_img_tiled(v, state)
         elif k == 'border_color':
             obj.set_style_border_color(v, state)
+        elif k == 'border_width':
+            obj.set_style_border_width(v, state)
         elif k == 'border_opa':
             obj.set_style_border_opa(v, state)
         elif k == 'border_side':
@@ -156,3 +163,56 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
         else:
             print('Unknown style:', k, v)
 
+# Register PNG image decoder
+def register_png():
+    from imagetools import get_png_info, open_png
+
+    decoder = lv.img.decoder_create()
+    decoder.info_cb = get_png_info
+    decoder.open_cb = open_png
+
+# Create an image from the png file
+def load_png2(path):
+    try:
+        with open(path,'rb') as f:
+            png_data = f.read()
+    except:
+        print("Could not load image ", path)
+        return None
+
+    return lv.image_dsc_t({
+      'data_size': len(png_data),
+      'data': png_data
+    })
+
+def load_png(path, w, h):
+    try:
+        with open(path,'rb') as f:
+            img_data = f.read()
+    except:
+        print("Could not load image ", path)
+        return None
+
+    return lv.image_dsc_t(
+        {
+            "header": {"w": w, "h": h, "cf": lv.COLOR_FORMAT.ARGB8888},
+            "data_size": len(img_data),
+            "data": img_data,
+        }
+    )
+
+def load_bmp(path, w, h):
+    try:
+        with open(path,'rb') as f:
+            img_data = f.read()
+    except:
+        print("Could not load image ", path)
+        return None
+
+    return lv.image_dsc_t(
+        {
+            "header": {"w": w, "h": h, "cf": lv.COLOR_FORMAT.ARGB8888},
+            "data_size": len(img_data),
+            "data": img_data,
+        }
+    )

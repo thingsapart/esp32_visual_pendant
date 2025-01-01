@@ -3,6 +3,7 @@
 import usys as sys
 sys.path.append('')
 
+# TODO: fix RUN_SIM, currently rebooting ESP32.
 
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
@@ -10,15 +11,14 @@ sys.path.append('')
 RUN_SIM = False
 
 import json
-
 from micropython import const
-
 from machine_interface import MachineInterface, PollState, MachineStatus
-
-import sys
 
 platform = sys.platform
 if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM:
+    import io
+    import uasyncio_shim as uasyncio
+
     class Pin:
         def __init__(self, pin):
             self.pin = pin
@@ -90,6 +90,20 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                         # print('pos:', self.pos, 'homed:', self.axesHomed, 'wcs:', self.wcs,
                         #       'wcs_offs:', self.wcs_offsets)
 
+        def __aiter__(self):
+            print("ITER")
+            return self
+
+        async def __anext__(self):
+            print("AITER", self.last)
+            val = self.read()
+            if val == None:
+                raise StopAsyncIteration
+            return val
+
+        def readline():
+            return read()
+
         def read(self):
             if self.last == 'M409':
                 k = self.last_args[0][1:].replace('"', '').replace("'", '')
@@ -106,11 +120,17 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     zh = 'true' if self.axesHomed[2] == 1 else 'false'
                     zwcs = self.wcs_offsets[2]
                     zu = z + zwcs[self.wcs]
+
+                    self.last = None
+
                     return '''{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":%s,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":%s,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":%s,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'''  % (xh, x, xu, repr(xwcs), yh, y, yu, repr(ywcs), zh, z, zu, repr(zwcs))
                 else:
                     raise Exception('Unknown arg to M409')
-            else:
+            elif self.last:
+                self.last = None
                 return 'ok\n'
+            else:
+                return None
 else:
     from machine import UART, Pin
     import uasyncio
