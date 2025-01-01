@@ -74,7 +74,8 @@ Example Probing Screens:
 
 ### Unix/Macos
 
-* `lvgl_micropy_macOS firmware/wt32_sc01_plus/main.py`
+* `cd firmware/wt32_sc01_plus`
+* `lvgl_micropy_macOS main.py`
 
 ## Acknowledgements
 
