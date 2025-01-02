@@ -8,7 +8,7 @@ sys.path.append('')
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
-RUN_SIM = False
+RUN_SIM = True
 
 import json
 from micropython import const
@@ -18,6 +18,8 @@ platform = sys.platform
 if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM:
     import io
     import uasyncio_shim as uasyncio
+
+    print('Basic UART Simulation...')
 
     class Pin:
         def __init__(self, pin):
@@ -33,7 +35,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
             self.last = None
             self.last_args = None
             self.pos = [0.0, 0.0, 0.0]
-            self.axesHomed = [0, 0, 0]
+            self.axes_homed = [False, False, False]
             self.wcs = 0
             self.wcs_offsets = [
                         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -51,7 +53,8 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     self.last = l[0].upper()
                     self.last_args = l[1:]
                     if self.last == 'G28':
-                        self.axesHomed = [1, 1, 1]
+                        print('G28')
+                        self.axes_homed = [True, True, True]
                         self.pos = [0.0, 0.0, 0.0]
 
                     if self.last == 'G53':
@@ -91,33 +94,34 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                         #       'wcs_offs:', self.wcs_offsets)
 
         def __aiter__(self):
-            print("ITER")
             return self
 
         async def __anext__(self):
-            print("AITER", self.last)
             val = self.read()
             if val == None:
                 raise StopAsyncIteration
             return val
 
-        def readline():
-            return read()
+        def readline(self):
+            return self.read()
+
+        def any(self):
+            return self.last is not None
 
         def read(self):
             if self.last == 'M409':
                 k = self.last_args[0][1:].replace('"', '').replace("'", '')
-                if k == 'move.axes':
+                if k == 'move.axes' or k == 'move.axes[]':
                     x = self.pos[0]
                     xwcs = self.wcs_offsets[0]
-                    xh = 'true' if self.axesHomed[0] == 1 else 'false'
+                    xh = 'true' if self.axes_homed[0] == 1 else 'false'
                     xu = x + xwcs[self.wcs]
                     y = self.pos[1]
-                    yh = 'true' if self.axesHomed[1] == 1 else 'false'
+                    yh = 'true' if self.axes_homed[1] == 1 else 'false'
                     ywcs = self.wcs_offsets[1]
                     yu = y + ywcs[self.wcs]
                     z = self.pos[2]
-                    zh = 'true' if self.axesHomed[2] == 1 else 'false'
+                    zh = 'true' if self.axes_homed[2] == 1 else 'false'
                     zwcs = self.wcs_offsets[2]
                     zu = z + zwcs[self.wcs]
 
@@ -164,7 +168,6 @@ class MachineRRF(MachineInterface):
     def _send_gcode(self, gcode):
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
-            # print("_send", gcode_)
             self.uart.write(gcode_ + '\n')
 
     def _has_response(self):
@@ -177,10 +180,9 @@ class MachineRRF(MachineInterface):
         self._send_gcode(cmd)
         try:
             res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
-            # print('>proc', res)
             self.parse_m409(res)
-        except Exception:
-            print('Timeout')
+        except Exception as e:
+            print('Timeout', e)
 
     async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):

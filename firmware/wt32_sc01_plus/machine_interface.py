@@ -88,6 +88,11 @@ class MachineInterface:
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
 
+    def is_homed(self, axes=None):
+        if axes is None: axes = range(len(self.axes_homed))
+        print('HOMED', [self.axes_homed[ax] for ax in axes], self.axes_homed)
+        return not (False in [self.axes_homed[ax] for ax in axes])
+
     def send_gcode(self, gcode, poll_state):
         # Try to process g-code queue out of band if buffer fills up,
         # otherwise done in the main asyncio loop periodically.
@@ -113,6 +118,18 @@ class MachineInterface:
                     print(self._read_response())
             for i in range(len(self.gcode_queue)):
                self.gcode_queue.pop()
+
+    def task_loop_iter(self):
+        # Send any outstanding commands.
+        self.process_gcode_q()
+
+        # Query machine state.
+        try:
+            self._update_machine_state(self.poll_state).send(None)
+        except StopIteration:
+            pass
+        self.poll_state = MachineInterface.DEFAULT_POLL_STATES
+        self.cb(self)
 
     async def task_loop(self):
         while True:
@@ -142,7 +159,6 @@ class MachineInterface:
         #     Loop.run_forever()
 
     def move(self, axis, feed, value):
-        print('!!MOVE')
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
 
@@ -168,6 +184,6 @@ class MachineInterface:
             'end_stops': self.end_stops,
             'spindles': self.spindles,
             'dialogs': self.dialogs,
-            'gcode_q': self.gcode_queue[0:self.gcode_q_len],
+            'gcode_q': self.gcode_queue,
             'poll_state': self.poll_state
             }

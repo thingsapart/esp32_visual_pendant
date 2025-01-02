@@ -239,7 +239,7 @@ class Interface:
 
 class TabProbe:
     class ProbeBtnMatrix:
-        def __init__(self, parent, settings, desc, quick=True):
+        def __init__(self, parent, settings, desc, interface, quick=True):
             style(parent, { 'width': lv.pct(100), 'height': lv.SIZE_CONTENT,
                              'margin': 0, 'padding': [0, 0, 5, 0] })
             self.container = lv.obj(parent)
@@ -251,6 +251,7 @@ class TabProbe:
             self.desc = desc
             self.parent = parent
             self.settings = settings
+            self.interface = interface
 
             def make_param(param, val):
                 if isinstance(val, str):
@@ -268,14 +269,29 @@ class TabProbe:
                 return ' '.join(r)
 
             def click_handler_cb(e, irow, icol):
+                if not interface.machine.is_homed():
+                    mbox = lv.msgbox(lv.screen_active())
+
+                    def mbox_event_cb(e):
+                        interface.machine.send_gcode(full_gcode, 0)
+                        mbox.close()
+
+                    mbox.add_title('Machine not home')
+                    mbox.add_text('Home machine now?')
+                    btn = mbox.add_footer_button('Home All')
+                    btn.add_event_cb(lambda e: (interface.machine.home_all(), mbox.close()),
+                                     lv.EVENT.CLICKED, None)
+                    btn = mbox.add_footer_button('Cancel')
+                    btn.add_event_cb(lambda e: mbox.close(), lv.EVENT.CLICKED, None)
+                    mbox.center()
+
+                    return
                 gcode, params, _, descr = desc[irow][icol]
 
                 title = 'Probe ' + descr
                 full_gcode = make_gcode(gcode, params)
 
                 used_params = [(k if not isinstance(v, str) else v) for k, v in params.items()]
-                print(used_params)
-                print(settings)
                 parms = [k + ': ' + repr(settings[v]) for k, _, _, _, v in
                          TabProbe.SETTINGS if v in used_params]
                 text = 'Probing ' + descr + ' with:\n\n' + '\n'.join(parms) + '\n\nGCODE: ' + full_gcode
@@ -283,7 +299,7 @@ class TabProbe:
                 mbox = lv.msgbox(lv.screen_active())
 
                 def mbox_event_cb(e):
-                    # TODO: send gcode.
+                    interface.machine.send_gcode(full_gcode, 0)
                     mbox.close()
 
                 mbox.add_title(title)
@@ -628,6 +644,7 @@ class TabProbe:
         self.btns_2d = TabProbe.ProbeBtnMatrix(container,
                                                self.settings,
                                                TabProbe.PROBE_MODES_SURF,
+                                               self.interface,
                                                quick=False)
 
     def init_surface_tab_(self, tab):
@@ -658,11 +675,17 @@ class TabProbe:
 
         tab = tabv.add_tab('Inside -> Out')
         flex_col(tab)
-        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab, self.settings, TabProbe.PROBE_MODES_2D_IN)
+        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab,
+                                                  self.settings,
+                                                  TabProbe.PROBE_MODES_2D_IN,
+                                                  self.interface)
 
         tab = tabv.add_tab('Outside -> In')
         flex_col(tab)
-        self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab, self.settings, TabProbe.PROBE_MODES_2D_OUT)
+        self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab,
+                                                   self.settings,
+                                                   TabProbe.PROBE_MODES_2D_OUT,
+                                                   self.interface)
 
     def init_probe_tab_3d(self, tab3d):
         style(tab3d, { 'padding': 5, 'margin': 0 })
@@ -670,7 +693,10 @@ class TabProbe:
         style(container, { 'padding': 5, 'margin': 0, 'border_width': 0,
                           'bg_opa': 0, 'bg_color': color('NONE'), 'border_width': 0})
         flex_col(container)
-        self.btns_2d = TabProbe.ProbeBtnMatrix(container, self.settings, TabProbe.PROBE_MODES_3D)
+        self.btns_2d = TabProbe.ProbeBtnMatrix(container,
+                                               self.settings,
+                                               TabProbe.PROBE_MODES_3D,
+                                               self.interface)
 
 class TabJog:
     def __init__(self, tabv, interface):
@@ -977,8 +1003,9 @@ if evt:
         print("Interrupted")
     finally:
         uasyncio.Loop.run_forever()
+else:
+    i = 0
 
-i = 0
-
-while True:
-    i += 1
+    while True:
+        i += 1
+        if i % 10000000 == 0: (print('.'), interface.machine.task_loop_iter())
