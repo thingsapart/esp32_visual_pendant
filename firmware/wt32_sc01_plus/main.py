@@ -233,10 +233,16 @@ if evt:
 
             # print("V: ", v, mach.position)
             if not interface.process_wheel_tick(diff):
-                vv = interface.tab_jog.jog_dial.arc.get_value() + diff
-                interface.tab_jog.jog_dial.set_value(vv % 100)
-                mach.move(jog.axis, jog.feed * 1000, diff)
-                # print(mach.debug_print())
+                if not self.interface.machine.is_homed():
+                    # If there's a modal already, don't show.
+                    print(ui.modals.modal_active())
+                    if not ui.modals.modal_active(): ui.modals.home_modal(self.interface)
+                    return
+                else:
+                    vv = interface.tab_jog.jog_dial.arc.get_value() + diff
+                    interface.tab_jog.jog_dial.set_value(vv % 100)
+                    mach.move(jog.axis, jog.feed * 1000, diff)
+                    # print(mach.debug_print())
 
     print("EVT Loops:")
 

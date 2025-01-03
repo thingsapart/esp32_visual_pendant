@@ -3,8 +3,6 @@
 import usys as sys
 sys.path.append('')
 
-# TODO: fix RUN_SIM, currently rebooting ESP32.
-
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.

@@ -127,10 +127,11 @@ class MachineInterface:
         # Query machine state.
         try:
             self._update_machine_state(self.poll_state).send(None)
+            self.cb(self)
         except StopIteration:
             pass
+
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
-        self.cb(self)
 
     async def task_loop(self):
         while True:
@@ -160,8 +161,10 @@ class MachineInterface:
         #     Loop.run_forever()
 
     def move(self, axis, feed, value):
+        print("MOVE!!")
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
+        print(self.gcode_queue)
 
     def home_all(self):
         self.send_gcode("G28", PollState.MACHINE_POSITION)
