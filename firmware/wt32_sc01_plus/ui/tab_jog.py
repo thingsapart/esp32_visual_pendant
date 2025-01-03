@@ -1,5 +1,6 @@
 import lvgl as lv
 from lv_style import *
+import ui.modals
 
 class TabJog:
     def __init__(self, tabv, interface, tab):
@@ -159,6 +160,12 @@ class JogDial:
         self.arc.set_value(self.arc.get_value() - 1)
 
     def _jog_dial_value_changed_event_cb(self, evt):
+        if not self.interface.machine.is_homed():
+            # If there's a modal already, don't show.
+            print(ui.modals.modal_active())
+            if not ui.modals.modal_active(): ui.modals.home_modal(self.interface)
+            return
+        else:
         # c = evt.get_code()
         # print(dict((v, k) for k, v in lv.EVENT.__dict__.items())[c])
         # if c == lv.EVENT.VALUE_CHANGED:

@@ -90,7 +90,8 @@ class MachineInterface:
 
     def is_homed(self, axes=None):
         if axes is None: axes = range(len(self.axes_homed))
-        print('HOMED', [self.axes_homed[ax] for ax in axes], self.axes_homed)
+        print('HOMED', not (False in [self.axes_homed[ax] for ax in axes]),
+              'VALS', [self.axes_homed[ax] for ax in axes], self.axes_homed)
         return not (False in [self.axes_homed[ax] for ax in axes])
 
     def send_gcode(self, gcode, poll_state):

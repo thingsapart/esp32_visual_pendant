@@ -8,7 +8,7 @@ sys.path.append('')
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
-RUN_SIM = True
+RUN_SIM = False
 
 import json
 from micropython import const
@@ -168,6 +168,7 @@ class MachineRRF(MachineInterface):
     def _send_gcode(self, gcode):
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
+            print('_send:', gcode)
             self.uart.write(gcode_ + '\n')
 
     def _has_response(self):
@@ -187,8 +188,41 @@ class MachineRRF(MachineInterface):
     async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
             await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
+            print(self.is_homed())
+
+    def parse_move_axes(self, res):
+        for axis in res:
+            # Available but unused fields:
+            # acceleration = axis['acceleration']
+            # babystep = axis['babystep']
+            # backlash = axis['backlash']
+            # current = axis['current']
+            # drivers = axis['drivers']
+            # jerk = axis['jerk']
+            # maxProbed = axis['maxProbed']
+            # minProbed = axis['minProbed']
+            # percentCurrent = axis['percentCurrent']
+            # percentStstCurrent = axis['percentStstCurrent']
+            # speed = axis['speed']
+            # stepsPerMm = axis['stepsPerMm']
+            # visible = axis['visible']
+            # reducedAcceleration = axis['reducedAcceleration']
+            name = axis['letter']
+            i = MachineRRF.AXIS_NAMES[name]
+            homed = axis['homed']
+            machine_pos = axis['machinePosition']
+            wcs_pos = axis['userPosition']
+            # wcs_offs = axis['workplaceOffsets']
+            # print("AXIS", name, i, homed, machine_pos, wcs_pos)
+            # print('H:', name, homed, axis['homed'])
+            # print('A:', name, axis)
+
+            self.axes_homed[i] = homed
+            self.position[i] = machine_pos
+            self.wcs_position[i] = wcs_pos
 
     def parse_m409(self, json_resp):
+        # TODO: seq-based major updates.
         j = None
         try:
              j = json.loads(json_resp.strip())
@@ -197,36 +231,8 @@ class MachineRRF(MachineInterface):
             return
 
         try:
-            # print('!!', j['key'])
             if j['key'] == 'move.axes' or j['key'] == 'move.axes[]':
-                r = j['result']
-                for axis in r:
-                    # Available but unused fields:
-                    # acceleration = axis['acceleration']
-                    # babystep = axis['babystep']
-                    # backlash = axis['backlash']
-                    # current = axis['current']
-                    # drivers = axis['drivers']
-                    # jerk = axis['jerk']
-                    # maxProbed = axis['maxProbed']
-                    # minProbed = axis['minProbed']
-                    # percentCurrent = axis['percentCurrent']
-                    # percentStstCurrent = axis['percentStstCurrent']
-                    # speed = axis['speed']
-                    # stepsPerMm = axis['stepsPerMm']
-                    # visible = axis['visible']
-                    # reducedAcceleration = axis['reducedAcceleration']
-                    name = axis['letter']
-                    i = MachineRRF.AXIS_NAMES[name]
-                    homed = axis['homed']
-                    machine_pos = axis['machinePosition']
-                    wcs_pos = axis['userPosition']
-                    # wcs_offs = axis['workplaceOffsets']
-                    # print("AXIS", name, i, homed, machine_pos, wcs_pos)
-
-                    self.axes_homed[i] = homed
-                    self.position[i] = machine_pos
-                    self.wcs_position[i] = wcs_pos
+                self.parse_move_axes(j['result'])
         except KeyError as e:
             print('Failed to read json: ', json_resp, e)
 

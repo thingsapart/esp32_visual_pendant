@@ -1,5 +1,6 @@
 import lvgl as lv
 from lv_style import *
+import ui.modals
 
 class TabProbe:
     class ProbeBtnMatrix:
@@ -34,22 +35,9 @@ class TabProbe:
 
             def click_handler_cb(e, irow, icol):
                 if not interface.machine.is_homed():
-                    mbox = lv.msgbox(lv.screen_active())
-
-                    def mbox_event_cb(e):
-                        interface.machine.send_gcode(full_gcode, 0)
-                        mbox.close()
-
-                    mbox.add_title('Machine not home')
-                    mbox.add_text('Home machine now?')
-                    btn = mbox.add_footer_button('Home All')
-                    btn.add_event_cb(lambda e: (interface.machine.home_all(), mbox.close()),
-                                     lv.EVENT.CLICKED, None)
-                    btn = mbox.add_footer_button('Cancel')
-                    btn.add_event_cb(lambda e: mbox.close(), lv.EVENT.CLICKED, None)
-                    mbox.center()
-
+                    ui.modals.home_modal(self.interface)
                     return
+
                 gcode, params, _, descr = desc[irow][icol]
 
                 title = 'Probe ' + descr
