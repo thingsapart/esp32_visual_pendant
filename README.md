@@ -64,10 +64,15 @@ Example Probing Screens:
 #### Copy files
 
 * Install `mpremote` (`uv tool install mpremote`).
+* `mpremote connect /dev/<ttyid> fs cp -r * :`
+* `mpremote connect /dev/<ttyid> reset`
+
+(Or copy files one-by-one)
 * `mpremote fs cp firmware/wt32_sc01_plus/encoder.py :encoder.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/lv_style.py :lv_style.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/rrf_machine.py :rrf_machine.py`,
 * `mpremote fs cp firmware/wt32_sc01_plus/main.py :main.py`,
+* ...
 * `mpremote reset`.
   
 ## Running, Testing and Development
