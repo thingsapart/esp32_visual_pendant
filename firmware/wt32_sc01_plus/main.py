@@ -195,6 +195,7 @@ class HardwareSetupESP32:
 import sys
 from rrf_machine import MachineRRF
 from ui.interface import Interface
+import ui.modals
 
 platform = sys.platform
 hw = None
@@ -226,17 +227,18 @@ if evt:
     #@micropython.native
     def update_v(vv):
         v = vv // 4
+        print("V1: ", v, mach.position)
         jog = interface.tab_jog.jog_dial
         if v != jog.last_rotary_pos:
             diff = v - jog.last_rotary_pos
             jog.last_rotary_pos = v
 
-            # print("V: ", v, mach.position)
+            print("V: ", v, mach.position)
             if not interface.process_wheel_tick(diff):
-                if not self.interface.machine.is_homed():
+                if not interface.machine.is_homed():
                     # If there's a modal already, don't show.
-                    print(ui.modals.modal_active())
-                    if not ui.modals.modal_active(): ui.modals.home_modal(self.interface)
+                    print('ACTOVE', ui.modals.modal_active())
+                    if not ui.modals.modal_active(): ui.modals.home_modal(interface)
                     return
                 else:
                     vv = interface.tab_jog.jog_dial.arc.get_value() + diff

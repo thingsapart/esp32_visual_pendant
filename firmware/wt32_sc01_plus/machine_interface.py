@@ -105,10 +105,10 @@ class MachineInterface:
         self.poll_state = self.poll_state | poll_state
 
     def _send_gcode(self, gcode):
-        raise Exception('implement this method in sub-class')
+        _childclass_override()
 
     async def _update_machine_state(self, poll_state):
-        raise Exception('implement this method in sub-class')
+        _childclass_override()
 
     def process_gcode_q(self):
         if len(self.gcode_queue) > 0:
@@ -173,6 +173,18 @@ class MachineInterface:
         zer = ' '.join([ax + '0' for ax in axes])
         self.send_gcode('G10 L20 P%d %s' % (wcs, zer),
                         PollState.MACHINE_POSITION)
+
+    def list_gcode_files(self):
+        _childclass_override()
+
+    def list_macros(self):
+        _childclass_override()
+
+    def run_macro(self, macro_name):
+        _childclass_override()
+
+    def _childclass_override(self):
+        raise Exception('implement this method in sub-class')
 
     def debug_print(self):
         return {

@@ -16,7 +16,7 @@ def home_modal(interface):
     active_modal = mbox
 
     mbox.add_title('Machine not home')
-    mbox.add_text('Home machine now?')
+    mbox.add_text('\nHome machine now?\n')
     btn = mbox.add_footer_button('Home All')
     btn.add_event_cb(lambda e: (interface.machine.home_all(), close_modal(mbox)),
                      lv.EVENT.CLICKED, None)

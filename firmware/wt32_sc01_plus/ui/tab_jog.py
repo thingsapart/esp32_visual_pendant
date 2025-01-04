@@ -1,6 +1,7 @@
 import lvgl as lv
 from lv_style import *
 import ui.modals
+from ui.machine_position import MachinePosition
 
 class TabJog:
     def __init__(self, tabv, interface, tab):
@@ -91,6 +92,12 @@ class JogDial:
         self.feed_label = label
         self.feed_slider = slider
 
+        self.position = MachinePosition(parent, self.AXES, self.interface, digits=6)
+        self.position.container.set_width(220)
+        ignore_layout(self.position.container)
+        self.position.container.align_to(arc, lv.ALIGN.CENTER, -70 // 2, 0)
+
+    def init_pos_labels_(self):
         self.pos_labels = {}
         for i, l in enumerate(JogDial.AXES):
             pos_label = lv.label(parent)
@@ -121,6 +128,10 @@ class JogDial:
         self.axis_change_cb.append(cb)
 
     def update_pos_labels(self, vals):
+        for i in range(len(self.AXES)):
+            self.position.set_coord(i, vals[i])
+
+    def update_pos_labels_(self, vals):
         for i, l in enumerate(['X', 'Y', 'Z']):
             try:
                 self.pos_labels[l].set_text(l + ' ' + ('%7.2f' % float(vals[i])))

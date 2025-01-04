@@ -1,5 +1,6 @@
 import lvgl as lv
 from lv_style import *
+import fs_driver
 
 from ui.tab_jog import TabJog
 from ui.tab_probe import TabProbe
@@ -10,12 +11,34 @@ class Interface:
         self.machine = machine
         self.machine_change_callbacks = []
 
+        self.fs_init()
+        self.init_fonts()
+
         self.wheel_tick = None
         self.wheel_tick_target = None
 
         self.init_main_tabs()
 
         lv.screen_load(self.scr)
+
+    def init_fonts(self):
+        try:
+            import usys as sys
+            sys.path.append('') # See: https://github.com/micropython/micropython/issues/6419
+
+            try:
+                script_path = __file__[:__file__.rfind('/')] if __file__.find('/') >= 0 else '.'
+            except NameError:
+                script_path = ''
+            self.font_lcd = lv.binfont_create('S:%s/../font/lcd_7_segment.bin' %
+                                              script_path)
+        except Exception as e:
+            print('Failed to load font:', e)
+            self.font_lcd = None
+
+    def fs_init(self):
+        self.fs_drv = lv.fs_drv_t()
+        fs_driver.fs_register(self.fs_drv, 'S')
 
     def process_wheel_tick(self, diff):
         if self.wheel_tick == None:

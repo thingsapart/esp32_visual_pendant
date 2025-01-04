@@ -241,6 +241,9 @@ class TabProbe:
 
         self.init_probe_tabv(tab)
 
+        self.init_axis_float_btn()
+
+    def init_axis_float_btn(self):
         jog_dial = self.interface.tab_jog.jog_dial
 
         self.float_btn = lv.button(self.tab)
@@ -252,6 +255,7 @@ class TabProbe:
         label.center()
         self.float_btn.add_event_cb(lambda e: label.set_text(jog_dial.next_axis()),
                                     lv.EVENT.CLICKED, None)
+
         jog_dial.add_axis_change_db(lambda t: label.set_text(t))
         style(self.float_btn, { 'radius': lv.RADIUS_CIRCLE })
 

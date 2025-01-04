@@ -1,5 +1,12 @@
 import lvgl as lv
 
+def create_container(parent):
+    obj = lv.obj(parent)
+    obj.set_style_bg_opa(0, lv.STATE.DEFAULT)
+    obj.set_style_border_opa(0, lv.STATE.DEFAULT)
+
+    return obj
+
 def ignore_layout(obj):
     obj.add_flag(lv.obj.FLAG.IGNORE_LAYOUT)
 
@@ -27,6 +34,9 @@ def style_margin(obj, v):
     obj.set_style_margin_left(v, lv.STATE.DEFAULT)
     obj.set_style_margin_right(v, lv.STATE.DEFAULT)
     obj.set_style_margin_bottom(v, lv.STATE.DEFAULT)
+
+def non_scrollable(obj):
+    obj.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
 # 'AMBER', 'BLUE', 'BLUE_GREY', 'BROWN', 'CYAN', 'DEEP_ORANGE', 'DEEP_PURPLE', 'GREEN', 'GREY', 'INDIGO', 'LAST', 'LIGHT_BLUE', 'LIGHT_GREEN', 'LIME', 'NONE', 'ORANGE', 'PINK', 'PURPLE', 'RED', 'TEAL', 'YELLOW'
 def color(name, palette = 'main'):

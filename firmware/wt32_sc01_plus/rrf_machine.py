@@ -258,6 +258,27 @@ class MachineRRF(MachineInterface):
 
         self.spindles = j['spindles']
 
+    def _parse_filelist(self, res):
+        try:
+             j = json.loads(res.strip())
+             dirname = j['dir']
+             filenames = j['files']
+             return [dirname, filenames]
+        except ValueError as e:
+            print("Failed to parse json", e, res)
+
+            return [None, None]
+
+    def list_gcode_files(self):
+        self._send_gcode('M20 S2 P"/gcodes"')
+        res = uasyncio.wait_for(self.uart_reader.readline(), 0.5).send(None)
+        return _parse_filelist(res)
+
+    def list_macros(self):
+        self._send_gcode('M20 S2 P"/macros"')
+        res = uasyncio.wait_for(self.uart_reader.readline(), 0.5).send(None)
+        return _parse_filelist(res)
+
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
     m.move('X', 100.0, 22.0)
