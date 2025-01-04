@@ -93,7 +93,7 @@ class JogDial:
         self.feed_slider = slider
 
         self.position = MachinePosition(parent, self.AXES, self.interface, digits=6)
-        self.position.container.set_width(220)
+        self.position.container.set_width(235)
         ignore_layout(self.position.container)
         self.position.container.align_to(arc, lv.ALIGN.CENTER, -70 // 2, 0)
 
@@ -127,6 +127,9 @@ class JogDial:
     def add_axis_change_db(self, cb):
         self.axis_change_cb.append(cb)
 
+    def connection_list(self):
+        pass
+
     def update_pos_labels(self, vals):
         for i in range(len(self.AXES)):
             self.position.set_coord(i, vals[i])
@@ -139,7 +142,10 @@ class JogDial:
                 self.pos_labels[l].set_text(l + ' ' + ('%s' % vals[i]))
 
     def _machine_state_updated(self, machine):
-        self.update_pos_labels(machine.wcs_position)
+        if machine.is_connected():
+            self.update_pos_labels(machine.wcs_position)
+        else:
+            self.position.coords_undefined()
 
     def _axis_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())
@@ -157,8 +163,9 @@ class JogDial:
 
     def _feed_changed(self, evt):
         tgt = lv.slider.__cast__(evt.get_target())
-        self.feed = tgt.get_value() / 100.0
-        self.feed_label.set_text(str(self.feed) + '%')
+        v = tgt.get_value()
+        self.feed = v / 100.0
+        self.feed_label.set_text(repr(v) + '%')
 
     def set_value(self, v):
         self.arc.set_value(v)

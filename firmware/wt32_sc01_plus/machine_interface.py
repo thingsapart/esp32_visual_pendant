@@ -183,6 +183,9 @@ class MachineInterface:
     def run_macro(self, macro_name):
         _childclass_override()
 
+    def is_connected(self):
+        _childclass_override()
+
     def _childclass_override(self):
         raise Exception('implement this method in sub-class')
 

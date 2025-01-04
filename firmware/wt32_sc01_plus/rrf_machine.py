@@ -158,6 +158,7 @@ class MachineRRF(MachineInterface):
 
         self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
         self.uart_reader = uasyncio.StreamReader(self.uart)
+        self.connected = False
 
     def get_machine_status_ext(self):
         self.uart.write('M409 K"move.axes[]"\n')
@@ -180,13 +181,14 @@ class MachineRRF(MachineInterface):
         try:
             res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
             self.parse_m409(res)
+            self.connected = True
         except Exception as e:
             print('Timeout', e)
+            self.connected = False
 
     async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
             await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
-            print(self.is_homed())
 
     def parse_move_axes(self, res):
         for axis in res:
@@ -278,6 +280,9 @@ class MachineRRF(MachineInterface):
         self._send_gcode('M20 S2 P"/macros"')
         res = uasyncio.wait_for(self.uart_reader.readline(), 0.5).send(None)
         return _parse_filelist(res)
+
+    def is_connected(self):
+        return self.connected
 
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
