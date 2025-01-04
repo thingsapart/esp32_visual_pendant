@@ -6,7 +6,7 @@ sys.path.append('')
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
-RUN_SIM = False
+RUN_SIM = True
 
 import json
 from micropython import const

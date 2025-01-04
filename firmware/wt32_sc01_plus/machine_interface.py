@@ -126,10 +126,12 @@ class MachineInterface:
 
         # Query machine state.
         try:
-            self._update_machine_state(self.poll_state).send(None)
-            self.cb(self)
+            t = self._update_machine_state(self.poll_state)
+            while True: t.send(None)
         except StopIteration:
             pass
+        print(self.debug_print())
+        self.cb(self)
 
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
 
