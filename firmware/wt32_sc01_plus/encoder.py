@@ -37,8 +37,6 @@ class EventLoop:
             create_task(self.main())
         except KeyboardInterrupt:
             print("Interrupted")
-        # finally:
-        #    Loop.run_forever()
 
 if __name__ == '__main__':
     def update_v(v):
