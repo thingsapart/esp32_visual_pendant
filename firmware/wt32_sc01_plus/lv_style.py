@@ -13,10 +13,11 @@ def ignore_layout(obj):
 def button_matrix_ver(labels):
     return list([j for i in labels for j in [i, '\n']])[:-1]
 
-def flex_col(obj):
+def flex_col(obj, pad_col=0):
     obj.center()
     obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+    obj.set_style_pad_column(pad_col, lv.STATE.DEFAULT)
 
 def flex_row(obj):
     obj.center()

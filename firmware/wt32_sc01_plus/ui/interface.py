@@ -4,6 +4,7 @@ import fs_driver
 
 from ui.tab_jog import TabJog
 from ui.tab_probe import TabProbe
+from ui.tab_machine import TabMachine
 
 class Interface:
     def __init__(self, machine):
@@ -57,13 +58,14 @@ class Interface:
 
         tab_jog = tabv.add_tab("Jog")
         tab_probe = tabv.add_tab("Probe")
-        self.tab_machine = tabv.add_tab("Machine")
+        tab_machine = tabv.add_tab("Machine")
         self.tab_job_gcode = tabv.add_tab("Status")
         self.tab_tool = tabv.add_tab("Tools")
         self.tab_tool = tabv.add_tab("CAM")
 
         self.tab_jog = TabJog(tabv, self, tab_jog)
         self.tab_probe = TabProbe(tabv, self, tab_probe)
+        self.tab_machine = TabMachine(tabv, self, tab_machine)
 
     def register_state_change_cb(self, cb):
         self.machine_change_callbacks.append(cb)
