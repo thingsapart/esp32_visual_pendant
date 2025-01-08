@@ -276,7 +276,7 @@ class TabProbe:
 
         tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
         tabv.set_tab_bar_position(lv.DIR.LEFT)
-        tabv.set_tab_bar_size(70)
+        tabv.set_tab_bar_size(self.interface.TAB_WIDTH)
 
         self.tab_probe.remove_flag(lv.obj.FLAG.SCROLLABLE)
 

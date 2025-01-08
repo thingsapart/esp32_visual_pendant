@@ -137,7 +137,7 @@ class MachineInterface:
 
     async def task_loop(self):
         while True:
-            print('.')
+            # print('.')
 
             # Send any outstanding commands.
             self.process_gcode_q()
@@ -163,7 +163,6 @@ class MachineInterface:
         #     Loop.run_forever()
 
     def move(self, axis, feed, value):
-        print("MOVE!!")
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
         print(self.gcode_queue)

@@ -19,14 +19,22 @@ class JogDial:
                 ['1%', 0.01]
             ]
 
+    AXES_OPTIONS = ['X', 'Y', 'Z', 'Off']
     AXES = ['X', 'Y', 'Z']
+    AXIS_IDS = {
+            'X': 0,
+            'Y': 1,
+            'Z': 2,
+            'Off': None
+           }
 
     def __init__(self, parent, interface):
         self.prev = 0
         self.parent = parent
         self.interface = interface
         self.feed = 1.0
-        self.axis = self.AXES[0]
+        self.axis = self.AXES_OPTIONS[-1]
+        self.axis_id = self.AXIS_IDS[self.axis]
         self.last_rotary_pos = 0
         self.axis_change_cb = []
 
@@ -40,13 +48,17 @@ class JogDial:
         parent.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
         btns = lv.buttonmatrix(parent)
-        btns.set_map(['X', '\n', 'Y', '\n', 'Z'])
+        axs_delim = (list(zip(self.AXES_OPTIONS, ['\n'] *
+                              (len(self.AXES_OPTIONS) - 1))) +
+                     [[self.AXES_OPTIONS[-1]]])
+
+        btns.set_map([btn for sublist in axs_delim for btn in sublist])
         btns.set_button_ctrl_all(lv.buttonmatrix.CTRL.CHECKABLE)
         btns.set_button_ctrl(0, lv.buttonmatrix.CTRL.CHECKED)
         btns.set_size(60, lv.pct(100))
         btns.set_style_pad_ver(5, lv.PART.MAIN)
         btns.set_style_pad_hor(5, lv.PART.MAIN)
-        self.axis = self.AXES[0]
+        self.axis = self.AXES_OPTIONS[-1]
         btns.set_one_checked(True)
 
         btns.align(lv.ALIGN.CENTER, 0, 0)
@@ -97,16 +109,19 @@ class JogDial:
         ignore_layout(self.position.container)
         self.position.container.align_to(arc, lv.ALIGN.CENTER, -70 // 2, 0)
 
+        self.set_axis_vis(self.AXES_OPTIONS[-1])
+
     def init_pos_labels_(self):
         self.pos_labels = {}
         for i, l in enumerate(JogDial.AXES):
-            pos_label = lv.label(parent)
-            pos_label.set_size(75, 20)
-            style(pos_label, { 'margin': 0, 'padding': 0 })
-            ignore_layout(pos_label)
-            parent.update_layout()
-            pos_label.align_to(arc, lv.ALIGN.CENTER, -95 + i * 70, 0)
-            self.pos_labels[l] = pos_label
+            if self.AXIS_IDS[l] is not None:
+                pos_label = lv.label(parent)
+                pos_label.set_size(75, 20)
+                style(pos_label, { 'margin': 0, 'padding': 0 })
+                ignore_layout(pos_label)
+                parent.update_layout()
+                pos_label.align_to(arc, lv.ALIGN.CENTER, -95 + i * 70, 0)
+                self.pos_labels[l] = pos_label
         self.update_pos_labels([0, 0, 0])
 
     def current_axis(self):
@@ -114,13 +129,19 @@ class JogDial:
 
     def set_axis(self, ax):
         self.axis = ax
+        self.axis_id = self.AXIS_IDS[ax]
         for cb in self.axis_change_cb:
             cb(self.axis)
 
-    def next_axis(self):
-        i = (self.AXES.index(self.axis) + 1) % len(self.AXES)
+    def set_axis_vis(self, ax):
+        self.set_axis(ax)
+        i = self.AXES_OPTIONS.index(self.axis)
         self.axis_btns.set_button_ctrl(i, lv.buttonmatrix.CTRL.CHECKED)
-        self.set_axis(self.AXES[i])
+
+    def next_axis(self):
+        i = (self.AXES_OPTIONS.index(self.axis) + 1) % len(self.AXES_OPTIONS)
+        self.axis_btns.set_button_ctrl(i, lv.buttonmatrix.CTRL.CHECKED)
+        self.set_axis(self.AXES_OPTIONS[i])
 
         return self.axis
 
@@ -131,13 +152,13 @@ class JogDial:
         pass
 
     def update_pos_labels(self, vals):
-        for i in range(len(self.AXES)):
+        for i in range(len(vals)):
             self.position.set_coord(i, vals[i])
 
     def update_pos_labels_(self, vals):
         for i, l in enumerate(['X', 'Y', 'Z']):
             try:
-                self.pos_labels[l].set_text(l + ' ' + ('%7.2f' % float(vals[i])))
+                self.pos_labels[l].set_text(l + ' ' + ('%05.2f' % float(vals[i])))
             except:
                 self.pos_labels[l].set_text(l + ' ' + ('%s' % vals[i]))
 
@@ -171,6 +192,9 @@ class JogDial:
         self.arc.set_value(v)
         self.arc.send_event(lv.EVENT.VALUE_CHANGED, None)
 
+    def axis_selected(self):
+        return self.axis_id is not None
+
     def inc(self):
         self.arc.set_value(self.arc.get_value() + 1)
 
@@ -195,7 +219,12 @@ class JogDial:
             # self.interface.machine.move(self.axis, self.feed, diff)
 
 class JogSlider:
-    AXES = ['X', 'Y', 'Z']
+    AXES = {
+            'X': 0,
+            'Y': 1,
+            'Z': 2,
+            'Off': None
+           }
 
     def __init__(self, parent, interface):
         self.parent = parent

@@ -167,7 +167,7 @@ class MachineRRF(MachineInterface):
     def _send_gcode(self, gcode):
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
-            print('_send:', gcode)
+            # print('_send:', gcode)
             self.uart.write(gcode_ + '\n')
 
     def _has_response(self):

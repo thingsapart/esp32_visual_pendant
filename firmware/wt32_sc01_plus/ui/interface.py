@@ -7,6 +7,8 @@ from ui.tab_probe import TabProbe
 from ui.tab_machine import TabMachine
 
 class Interface:
+    TAB_HEIGHT = 30
+    TAB_WIDTH = 70
     def __init__(self, machine):
         self.scr = lv.screen_active()
         self.machine = machine
@@ -52,7 +54,7 @@ class Interface:
     def init_main_tabs(self):
         self.main_tabs = lv.tabview(self.scr)
         tabv = self.main_tabs
-        tabv.set_tab_bar_size(40)
+        tabv.set_tab_bar_size(self.TAB_HEIGHT)
 
         tabv.get_content().remove_flag(lv.obj.FLAG.SCROLLABLE)
 

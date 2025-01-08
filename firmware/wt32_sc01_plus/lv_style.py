@@ -7,22 +7,54 @@ def create_container(parent):
 
     return obj
 
+def style_container(container):
+    style(container, {
+        'size': [lv.pct(100), lv.SIZE_CONTENT],
+        'padding': 0,
+        'margin': 0,
+        'border_width': 0
+        })
+    return container
+
+def no_margin_pad_border(obj):
+    style(obj, {
+        'padding': 0,
+        'margin': 0,
+        'border_width': 0
+        })
+    return obj
+
+def container_col(parent, pad_col=0, pad_row=0):
+    container = lv.obj(parent)
+    flex_col(container, pad_row=pad_row, pad_col=pad_col)
+    style_container(container)
+    return container
+
+def container_row(parent, pad_col=0, pad_row=0):
+    container = lv.obj(parent)
+    flex_row(container, pad_row=pad_row, pad_col=pad_col)
+    style_container(container)
+    return container
+
 def ignore_layout(obj):
     obj.add_flag(lv.obj.FLAG.IGNORE_LAYOUT)
 
 def button_matrix_ver(labels):
     return list([j for i in labels for j in [i, '\n']])[:-1]
 
-def flex_col(obj, pad_col=0):
+def flex_col(obj, pad_col=0, pad_row=None):
     obj.center()
     obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+    if pad_row is not None: obj.set_style_pad_row(pad_row, lv.STATE.DEFAULT)
     obj.set_style_pad_column(pad_col, lv.STATE.DEFAULT)
 
-def flex_row(obj):
+def flex_row(obj, pad_row=None, pad_col=None):
     obj.center()
     obj.set_flex_flow(lv.FLEX_FLOW.ROW)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
+    if pad_row is not None: obj.set_style_pad_row(pad_row, lv.STATE.DEFAULT)
+    if pad_col is not None: obj.set_style_pad_column(pad_col, lv.STATE.DEFAULT)
 
 def style_pad(obj, v):
     obj.set_style_pad_top(v, lv.STATE.DEFAULT)
@@ -105,7 +137,7 @@ def style(obj, styles, state = lv.STATE.DEFAULT):
         elif k == 'content_height':
             obj.set_content_height(v, state)
         elif k == 'size':
-            obj.set_size(v[0], v[1], state)
+            obj.set_size(v[0], v[1])
         elif k == 'pos':
             obj.set_pos(v[0], v[1], state)
         elif k == 'align':

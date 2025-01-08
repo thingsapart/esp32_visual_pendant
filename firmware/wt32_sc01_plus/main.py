@@ -227,22 +227,22 @@ if evt:
     #@micropython.native
     def update_v(vv):
         v = vv // 4
-        print("V1: ", v, mach.position)
         jog = interface.tab_jog.jog_dial
         if v != jog.last_rotary_pos:
             diff = v - jog.last_rotary_pos
             jog.last_rotary_pos = v
 
-            print("V: ", v, mach.position)
-            if not interface.process_wheel_tick(diff):
+            # print("V: ", v, mach.position)
+            if not interface.process_wheel_tick(diff) and jog.axis_selected():
+                print('AX SEL', jog.axis, jog.axis_selected())
                 if not interface.machine.is_homed():
                     # If there's a modal already, don't show.
-                    print('ACTOVE', ui.modals.modal_active())
                     if not ui.modals.modal_active(): ui.modals.home_modal(interface)
                     return
                 else:
-                    vv = interface.tab_jog.jog_dial.arc.get_value() + diff
-                    interface.tab_jog.jog_dial.set_value(vv % 100)
+                    job = interface.tab_jog.jog_dial
+                    vv = jog.arc.get_value() + diff
+                    jog.set_value(vv % 100)
                     mach.move(jog.axis, jog.feed * 1000, diff)
                     # print(mach.debug_print())
 

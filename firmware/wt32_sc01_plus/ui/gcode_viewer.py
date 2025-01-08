@@ -759,17 +759,17 @@ class GCodeMotionVisualizer:
         # Create styles for different motion types
         self.style_g0 = lv.style_t()
         self.style_g0.init()
-        self.style_g0.set_line_color(lv.color_hex(0xFF808080))  # Gray
+        #self.style_g0.set_line_color(lv.color_hex(0xFF808080))  # Gray
         self.style_g0.set_line_dash_gap(8)
         self.style_g0.set_line_dash_width(4)
 
         self.style_g1 = lv.style_t()
         self.style_g1.init()
-        self.style_g1.set_line_color(lv.color_hex(0xFF0000FF))  # Blue
+        #self.style_g1.set_line_color(lv.color_hex(0xFF0000FF))  # Blue
 
         self.style_g2g3 = lv.style_t()
         self.style_g2g3.init()
-        self.style_g2g3.set_line_color(lv.color_hex(0xFF00FF00))  # Green
+        #self.style_g2g3.set_line_color(lv.color_hex(0xFF00FF00))  # Green
 
         # Create zoom buttons
         self.zoom_in_btn = lv.button(parent)
@@ -889,7 +889,7 @@ class GCodeMotionVisualizer:
 
     def redraw(self):
         # Clear canvas
-        self.canvas.fill_bg(lv.color_hex(0xFFFFFFFF), lv.OPA.COVER)
+        #self.canvas.fill_bg(lv.color_hex(0xFFFFFFFF), lv.OPA.COVER)
 
         self.layer = lv.layer_t()
         self.canvas.init_layer(self.layer)
@@ -904,7 +904,7 @@ class GCodeMotionVisualizer:
         # Draw WCS origin if in view
         ox, oy = self.world_to_screen(0, 0)
         if 0 <= ox < self.canvas.get_width() and 0 <= oy < self.canvas.get_height():
-            self.draw_line(ox-10, oy, ox+10, oy, lv.color_hex(0xFF0000FF))
+            self.draw_line(ox-10, oy, ox+10, oy, lv.color32_make(255, 255, 0, 0))
             self.draw_line(ox, oy-10, ox, oy+10, lv.color_hex(0xFF0000FF))
 
         # Draw motion segments

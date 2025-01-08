@@ -4,7 +4,7 @@ if [ $# -lt 1 ]; then
   exit 2
 fi
 
-for FILE in `find . -type f -not -path '*/.*'`; do
+for FILE in `find . -type f -not -path '*/.*' -not -path '*/SDLPointer_2' -not -path '*/*.md'`; do
   mpremote connect $1 fs cp $FILE ":${FILE}"
 done
 mpremote connect $1 reset
