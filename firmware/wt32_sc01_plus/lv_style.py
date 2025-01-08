@@ -7,6 +7,12 @@ def create_container(parent):
 
     return obj
 
+def style_container_blank(obj):
+    obj.set_style_bg_opa(0, lv.STATE.DEFAULT)
+    obj.set_style_border_opa(0, lv.STATE.DEFAULT)
+    obj.set_style_pad_all(0, lv.STATE.DEFAULT)
+    obj.set_style_margin_all(0, lv.STATE.DEFAULT)
+
 def style_container(container):
     style(container, {
         'size': [lv.pct(100), lv.SIZE_CONTENT],
@@ -261,3 +267,6 @@ def load_bmp(path, w, h):
             "data": img_data,
         }
     )
+
+def dbg_layout(obj):
+    style(obj, { 'bg_color': lv.color_make(222, 0, 0), 'bg_opa':255 })

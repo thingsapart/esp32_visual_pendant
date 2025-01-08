@@ -2,6 +2,8 @@ import lvgl as lv
 from lv_style import *
 from ucollections import OrderedDict
 from ui.handwheel_slider import HandwheelSlider
+from ui.tab_jog import JogDial
+from ui.machine_position import MachinePositionWCS
 
 class TabMachine:
     def __init__(self, tabv, interface, tab):
@@ -110,14 +112,17 @@ class MachineStatusMeter(lv.obj):
         self.right_side = lv.obj(self)
         self.right_side.set_flex_grow(3)
         self.right_side.set_height(lv.pct(100))
-        flex_col(self.right_side)
+        flex_row(self.right_side)
+        self.right_side.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY,
+                                       lv.FLEX_ALIGN.CENTER,
+                                       lv.FLEX_ALIGN.START)
         style(self.right_side, { 'bg_opa': 0, 'border_width': 0, 'margin': 0,
                                  'padding': 0 })
         self.right_side.set_style_text_font(lv.font_montserrat_12,
                                                lv.STATE.DEFAULT)
 
         label_feed = lv.label(self.left_side)
-        label_feed.set_text('Feed:')
+        label_feed.set_text('Feed (mm/min):')
         bar_feed = lv.bar(self.left_side)
         bar_feed.set_range(0, self.max_feed)
         no_margin_pad_border(bar_feed)
@@ -153,7 +158,7 @@ class MachineStatusMeter(lv.obj):
         scale_feed.set_width(lv.pct(100))
 
         label_spindle_rpm = lv.label(self.left_side)
-        label_spindle_rpm.set_text('Spindle RPM:')
+        label_spindle_rpm.set_text('Spindle (RPM):')
         label_spindle_rpm.set_style_text_font(lv.font_montserrat_12, lv.STATE.DEFAULT)
         slider_spindle_rpm = HandwheelSlider(self.left_side, self.interface)
         slider_spindle_rpm.set_range(0, self.spindle_max_rpm)
@@ -199,17 +204,21 @@ class MachineStatusMeter(lv.obj):
         flute_dd.set_options_static('\n'.join(['1F', '2F', '3F', '4F']))
 
         # Chip Load.
-        chip_ld_container = container_row(self.left_side)
+        chip_ld_container = container_col(self.left_side)
+        chip_ld_container.set_height(60)
+        non_scrollable(chip_ld_container)
 
         # Label.
         label_spindle_chip = lv.label(chip_ld_container)
-        label_spindle_chip.set_text('Chip Load:')
-        label_spindle_chip.set_width(lv.pct(20))
+        label_spindle_chip.set_text('Chip Load (x0.1mm)')
+        label_spindle_chip.set_width(lv.SIZE_CONTENT)
 
         # Chip Load Meter Container.
         chip_ldmc = container_col(chip_ld_container)
-        chip_ldmc.set_width(lv.pct(80))
-        style(chip_ldmc, { 'padding': [0, 10] })
+        # chip_ldmc.set_width(lv.pct(70))
+        chip_ldmc.set_flex_grow(1)
+        non_scrollable(chip_ldmc)
+        style(chip_ldmc, { 'padding': [0, 18] })
 
         # Chip Load Bar.
         cl_min = 0.3
@@ -218,6 +227,7 @@ class MachineStatusMeter(lv.obj):
         bar_cl = lv.bar(chip_ldmc)
         bar_cl.set_range(0, 50)
         no_margin_pad_border(bar_cl)
+        style(bar_cl, { 'padding': [5, 0], 'bg_opa': 0 })
         bar_cl.set_height(18)
         bar_cl.set_width(lv.pct(100))
         bar_cl.set_style_margin_bottom(0, lv.STATE.DEFAULT)
@@ -282,14 +292,10 @@ class MachineStatusMeter(lv.obj):
         self.update_layout()
         self.left_side.update_layout()
 
-        if False:
-            self.update_layout()
-            self.left_side.update_layout()
-
-            w = self.left_side.get_width()
-            scale_spindle_chipload.set_width(int(0.9 * w))
-            scale_spindle_rpm.set_width(int(0.9 * w))
-            scale_feed.set_width(int(0.9 * w))
+        # Machine Coordinates.
+        self.position = MachinePositionWCS(self.right_side, JogDial.AXES, self.interface, digits=6)
+        self.position.align_to(self.right_side, lv.ALIGN.TOP_MID, 0, 0)
+        self.position.set_style_margin_top(20, lv.STATE.DEFAULT)
 
         # Flutes
         # Diameter

@@ -1,7 +1,7 @@
 import lvgl as lv
 from lv_style import *
 import ui.modals
-from ui.machine_position import MachinePosition
+from ui.machine_position import MachinePositionWCS, MachinePosition
 
 class TabJog:
     def __init__(self, tabv, interface, tab):
@@ -104,10 +104,14 @@ class JogDial:
         self.feed_label = label
         self.feed_slider = slider
 
-        self.position = MachinePosition(parent, self.AXES, self.interface, digits=6)
-        self.position.container.set_width(235)
-        ignore_layout(self.position.container)
-        self.position.container.align_to(arc, lv.ALIGN.CENTER, -70 // 2, 0)
+
+        self.position = MachinePositionWCS(arc, self.AXES, self.interface, digits=6)
+        self.position.align_to(arc, lv.ALIGN.CENTER, -25, 0)
+
+        # self.position = MachinePosition(parent, self.AXES, self.interface, digits=6)
+        # self.position.container.set_width(235)
+        # ignore_layout(self.position.container)
+        # self.position.container.align_to(arc, lv.ALIGN.CENTER, 0 // 2, 0)
 
         self.set_axis_vis(self.AXES_OPTIONS[-1])
 
