@@ -24,3 +24,7 @@
 
 * E32S3RGB43 (ESP32-S3) - 4.3" 800x480 (C)
 * ESP32S3SPI35 (ESP32-S3) - 3.5" SPI 800x480 (C)
+
+#### Lanbon
+
+* L8-H*
