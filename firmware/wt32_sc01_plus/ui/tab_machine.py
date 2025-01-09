@@ -93,7 +93,7 @@ class MachineStatusMeter(lv.obj):
     def __init__(self, parent, interface, spindle_max_rpm, max_feed):
         super().__init__(parent)
 
-        style(self, { 'border_width': 1, 'padding': 0, 'margin': 0 })
+        style(self, { 'border_width': 0, 'padding': 0, 'margin': 0 })
         style(parent, { 'border_width': 0, 'padding': 0, 'margin': 0 })
 
         self.spindle_max_rpm = spindle_max_rpm // 100 * 100
@@ -101,25 +101,28 @@ class MachineStatusMeter(lv.obj):
         self.interface = interface
 
         flex_row(self)
+        self.set_style_pad_row(0, lv.STATE.DEFAULT)
+        self.set_style_pad_column(0, lv.STATE.DEFAULT)
 
         self.left_side = container_col(self)
-        self.left_side.set_flex_grow(4)
+        self.left_side.set_flex_grow(5)
         self.left_side.set_height(lv.SIZE_CONTENT)
         style(self.left_side, { 'bg_opa': 0, 'border_width': 0, 'padding': [5, 0] })
         self.left_side.set_style_text_font(lv.font_montserrat_12,
                                                lv.STATE.DEFAULT)
-
         self.right_side = lv.obj(self)
-        self.right_side.set_flex_grow(3)
         self.right_side.set_height(lv.pct(100))
+        self.right_side.set_width(lv.SIZE_CONTENT)
+
         flex_row(self.right_side)
         self.right_side.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY,
                                        lv.FLEX_ALIGN.CENTER,
                                        lv.FLEX_ALIGN.START)
-        style(self.right_side, { 'bg_opa': 0, 'border_width': 0, 'margin': 0,
-                                 'padding': 0 })
+        style(self.right_side, { 'bg_opa': 0, 'border_width': 0,
+								 'padding': [0, 10, 0, 0], 'margin': 0 })
         self.right_side.set_style_text_font(lv.font_montserrat_12,
                                                lv.STATE.DEFAULT)
+        non_scrollable(self.right_side)
 
         label_feed = lv.label(self.left_side)
         label_feed.set_text('Feed (mm/min):')
@@ -293,7 +296,10 @@ class MachineStatusMeter(lv.obj):
         self.left_side.update_layout()
 
         # Machine Coordinates.
-        self.position = MachinePositionWCS(self.right_side, JogDial.AXES, self.interface, digits=6)
+        coords = MachinePositionWCS.DEFAULT_COORD_SYSTEMS[:-1]
+        self.position = MachinePositionWCS(self.right_side, JogDial.AXES,
+                                           self.interface, digits=6,
+                                           coord_systems=coords)
         self.position.align_to(self.right_side, lv.ALIGN.TOP_MID, 0, 0)
         self.position.set_style_margin_top(20, lv.STATE.DEFAULT)
 

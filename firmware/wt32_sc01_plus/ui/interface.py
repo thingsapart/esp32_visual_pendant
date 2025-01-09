@@ -35,6 +35,10 @@ class Interface:
                 script_path = ''
             self.font_lcd = lv.binfont_create('S:%s/../font/lcd_7_segment.bin' %
                                               script_path)
+            self.font_lcd_18 = lv.binfont_create('S:%s/../font/lcd_7_segment_18.bin' %
+                                              script_path)
+            self.font_lcd_24 = lv.binfont_create('S:%s/../font/lcd_7_segment_24.bin' %
+                                              script_path)
         except Exception as e:
             print('Failed to load font:', e)
             self.font_lcd = None

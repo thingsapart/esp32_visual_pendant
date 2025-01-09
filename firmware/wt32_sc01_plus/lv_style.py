@@ -270,3 +270,12 @@ def load_bmp(path, w, h):
 
 def dbg_layout(obj):
     style(obj, { 'bg_color': lv.color_make(222, 0, 0), 'bg_opa':255 })
+
+# No longer seems to work.
+def wrap_data(cls):
+    class MyCls(cls):
+        def __init__(self, parent, data):
+            super().__init__(parent)
+            self.data = data
+            self.set_user_data(self)
+    return MyCls

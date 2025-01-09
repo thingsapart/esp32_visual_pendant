@@ -3,11 +3,12 @@ from lv_style import *
 import gc
 
 class MachinePositionWCS(lv.obj):
-    FONT_WIDTH = 8
-    FONT_HEIGHT = 16
+    FONT_WIDTH = 11
+    FONT_HEIGHT = 22
+    DEFAULT_COORD_SYSTEMS = ['Mach', 'WCS', 'Move']
 
     def __init__(self, parent, coords, interface, digits = 5,
-                 coord_systems = ['Mach', 'WCS', 'Move'], coord_sys_width = 20):
+                 coord_systems=DEFAULT_COORD_SYSTEMS, coord_sys_width = 40):
         super().__init__(parent)
 
         self.interface = interface
@@ -25,6 +26,8 @@ class MachinePositionWCS(lv.obj):
         non_scrollable(container)
         no_margin_pad_border(container)
 
+        font = self.interface.font_lcd_24
+
         gc.collect()
 
         lblc_width = (digits + 1) * self.FONT_WIDTH
@@ -35,20 +38,25 @@ class MachinePositionWCS(lv.obj):
 
         container.set_style_grid_column_dsc_array(col_dsc, 0)
         container.set_style_grid_row_dsc_array(row_dsc, 0)
-        container.set_size(coord_sys_width + lencs * 0 + lblc_width * lencs + 0,
+        container.set_size(coord_sys_width + lencs * 2 + lblc_width * lencs + 2,
                            lv.SIZE_CONTENT)
 
+        self.axis_label_ids = {}
         # Create Axis labels.
         for i, coord in enumerate(coords):
             lbl = lv.label(container)
-            lbl.set_text(coord)
+            lbl.set_text(lv.SYMBOL.HOME + ' ' + coord)
             style(lbl, { 'bg_color': color('BLUE') , 'bg_opa': 100,
                          'margin': 1, 'padding': 0 })
             lbl.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
                               lv.GRID_ALIGN.STRETCH, i + 1, 1)
+            lbl.set_style_text_align(lv.TEXT_ALIGN.CENTER, lv.STATE.DEFAULT)
             lbl.center()
-            lbl.set_width(lv.SIZE_CONTENT)
+            lbl.add_event_cb(self._label_home_clicked, lv.EVENT.CLICKED, None)
+            lbl.add_flag(lv.obj.FLAG.CLICKABLE)
+            self.axis_label_ids[lbl.get_text()] = coord
 
+        # Coordinate systems.
         for i, cs in enumerate(coord_systems):
             print(i, cs)
             lbl = lv.label(container)
@@ -57,6 +65,7 @@ class MachinePositionWCS(lv.obj):
                          'margin': 1, 'padding': 0 })
             lbl.set_grid_cell(lv.GRID_ALIGN.STRETCH, i + 1, 1,
                               lv.GRID_ALIGN.STRETCH, 0, 1)
+            lbl.set_style_text_align(lv.TEXT_ALIGN.CENTER, lv.STATE.DEFAULT)
             lbl.center()
 
         self.coord_vals = {}
@@ -73,15 +82,16 @@ class MachinePositionWCS(lv.obj):
                 lblc = lv.label(container)
                 lblc.set_text('?' * (digits - 2) + '.??')
                 style(lblc, { 'bg_color': color('LIME') , 'bg_opa': 60,
-                             'margin': 0, 'padding': [2, 0] })
+                             'margin': 0, 'padding': [2, 2] })
 
-                if self.interface.font_lcd is not None:
-                    lblc.set_style_text_font(self.interface.font_lcd, lv.STATE.DEFAULT)
+                if font is not None:
+                    lblc.set_style_text_font(font, lv.STATE.DEFAULT)
 
                 lblc.set_width(lblc_width)
                 lblc.set_grid_cell(lv.GRID_ALIGN.STRETCH, i + 1, 1,
                                   lv.GRID_ALIGN.STRETCH, j + 1, 1)
                 lblc.center()
+                lblc.set_style_text_align(lv.TEXT_ALIGN.RIGHT, lv.STATE.DEFAULT)
                 c_labels.append(lblc)
 
     def coords_undefined(self):
@@ -99,6 +109,11 @@ class MachinePositionWCS(lv.obj):
         if v != self.coord_vals[coord_system][c]:
             self.coord_val_labels[coord_system][c].set_text(self.fmt_str % v)
             self.coord_vals[coord_system][c] = v
+
+    def _label_home_clicked(self, e):
+        label = lv.label.__cast__(e.get_target())
+        ax = self.axis_label_ids[label.get_text()]
+        self.interface.machine.home(ax)
 
 class MachinePosition:
     FONT_WIDTH = 7
@@ -119,6 +134,7 @@ class MachinePosition:
         self.coord_vals = [None, None, None]
 
         self.coord_labels = []
+        font = self.interface.font_lcd_18 or self.interface.font_lcd
         for coord in coords:
             lbl = lv.label(container)
             lbl.set_text(coord + ' ')
@@ -130,8 +146,9 @@ class MachinePosition:
             style(lblc, { 'bg_color': color('LIME') , 'bg_opa': 100,
                          'margin': 0, 'padding': [2, 0] })
 
-            if self.interface.font_lcd is not None:
-                lblc.set_style_text_font(self.interface.font_lcd, lv.STATE.DEFAULT)
+
+            if font is not None:
+                lblc.set_style_text_font(font, lv.STATE.DEFAULT)
             lblc.set_width((digits + 1) * self.FONT_WIDTH)
 
             self.coord_labels.append(lblc)

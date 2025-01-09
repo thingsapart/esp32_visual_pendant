@@ -170,6 +170,12 @@ class MachineInterface:
     def home_all(self):
         self.send_gcode("G28", PollState.MACHINE_POSITION)
 
+    def home(self, axes):
+        if not isinstance(axes, str):
+            axes = ''.join(axes)
+        print('G28 ' + axes)
+        self.send_gcode('G28 ' + axes, PollState.MACHINE_POSITION)
+
     def set_wcs_zero(self, wcs, axes):
         zer = ' '.join([ax + '0' for ax in axes])
         self.send_gcode('G10 L20 P%d %s' % (wcs, zer),
