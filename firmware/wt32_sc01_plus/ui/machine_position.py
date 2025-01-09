@@ -42,12 +42,12 @@ class MachinePositionWCS(lv.obj):
                            lv.SIZE_CONTENT)
 
         self.axis_label_ids = {}
+        self.axis_labels = []
         # Create Axis labels.
         for i, coord in enumerate(coords):
             lbl = lv.label(container)
             lbl.set_text(lv.SYMBOL.HOME + ' ' + coord)
-            style(lbl, { 'bg_color': color('BLUE') , 'bg_opa': 100,
-                         'margin': 1, 'padding': 0 })
+            style(lbl, { 'bg_opa': 100, 'margin': 1, 'padding': 0 })
             lbl.set_grid_cell(lv.GRID_ALIGN.STRETCH, 0, 1,
                               lv.GRID_ALIGN.STRETCH, i + 1, 1)
             lbl.set_style_text_align(lv.TEXT_ALIGN.CENTER, lv.STATE.DEFAULT)
@@ -55,8 +55,12 @@ class MachinePositionWCS(lv.obj):
             lbl.add_event_cb(self._label_home_clicked, lv.EVENT.CLICKED, None)
             lbl.add_flag(lv.obj.FLAG.CLICKABLE)
             self.axis_label_ids[lbl.get_text()] = coord
+            self.axis_labels.append(lbl)
+            colr = color('BLUE') if interface.machine.axes_homed[i] else color('RED')
+            lbl.set_style_bg_color(colr, lv.STATE.DEFAULT)
 
         # Coordinate systems.
+        self.coord_sys_labels = []
         for i, cs in enumerate(coord_systems):
             print(i, cs)
             lbl = lv.label(container)
@@ -67,6 +71,7 @@ class MachinePositionWCS(lv.obj):
                               lv.GRID_ALIGN.STRETCH, 0, 1)
             lbl.set_style_text_align(lv.TEXT_ALIGN.CENTER, lv.STATE.DEFAULT)
             lbl.center()
+            self.coord_sys_labels.append(lbl)
 
         self.coord_vals = {}
         self.coord_val_labels = {}
@@ -94,6 +99,12 @@ class MachinePositionWCS(lv.obj):
                 lblc.set_style_text_align(lv.TEXT_ALIGN.RIGHT, lv.STATE.DEFAULT)
                 c_labels.append(lblc)
 
+        interface.machine.add_pos_changed_cb(self._pos_updated)
+        interface.machine.add_home_changed_cb(self._home_updated)
+        interface.machine.add_wcs_changed_cb(self._wcs_updated)
+
+        self._wcs_updated(interface.machine)
+
     def coords_undefined(self):
         for cs in self.coord_systems:
             self.coord_vals[cs] = [None] * len(self.coords)
@@ -106,14 +117,37 @@ class MachinePositionWCS(lv.obj):
 
         if isinstance(c, str):
             c = self.coords.index(c)
+
+        if not self.interface.machine.axes_homed[c]:
+            v = None
+
         if v != self.coord_vals[coord_system][c]:
-            self.coord_val_labels[coord_system][c].set_text(self.fmt_str % v)
             self.coord_vals[coord_system][c] = v
+            if v is not None:
+                self.coord_val_labels[coord_system][c].set_text(self.fmt_str % v)
+            else:
+                self.coord_val_labels[coord_system][c].set_text('?' * (self.digits - 2) + '.??')
 
     def _label_home_clicked(self, e):
         label = lv.label.__cast__(e.get_target())
         ax = self.axis_label_ids[label.get_text()]
         self.interface.machine.home(ax)
+
+    def _pos_updated(self, mach):
+        for i, coord in enumerate(mach.position):
+            self.set_coord(i, coord, self.coord_systems[0])
+        for i, coord in enumerate(mach.wcs_position):
+            self.set_coord(i, coord, self.coord_systems[1])
+
+    def _home_updated(self, mach):
+        for i, homed in enumerate(mach.axes_homed):
+            colr = color('BLUE') if homed else color('RED')
+            self.axis_labels[i].set_style_bg_color(colr, lv.STATE.DEFAULT)
+        self._pos_updated(mach)
+
+    def _wcs_updated(self, mach):
+        t = 'G%d' % (mach.wcs + 53)
+        self.coord_sys_labels[1].set_text(t)
 
 class MachinePosition:
     FONT_WIDTH = 7
@@ -164,4 +198,3 @@ class MachinePosition:
         if v != self.coord_vals[c]:
             self.coord_labels[c].set_text(self.fmt_str % v)
             self.coord_vals[c] = v
-

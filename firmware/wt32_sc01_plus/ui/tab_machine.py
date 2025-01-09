@@ -114,7 +114,7 @@ class MachineStatusMeter(lv.obj):
         self.right_side.set_height(lv.pct(100))
         self.right_side.set_width(lv.SIZE_CONTENT)
 
-        flex_row(self.right_side)
+        flex_row(self.right_side, wrap=True)
         self.right_side.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY,
                                        lv.FLEX_ALIGN.CENTER,
                                        lv.FLEX_ALIGN.START)
@@ -297,11 +297,26 @@ class MachineStatusMeter(lv.obj):
 
         # Machine Coordinates.
         coords = MachinePositionWCS.DEFAULT_COORD_SYSTEMS[:-1]
-        self.position = MachinePositionWCS(self.right_side, JogDial.AXES,
+        self.axes = JogDial.AXES
+        self.position = MachinePositionWCS(self.right_side, self.axes,
                                            self.interface, digits=6,
                                            coord_systems=coords)
         self.position.align_to(self.right_side, lv.ALIGN.TOP_MID, 0, 0)
         self.position.set_style_margin_top(20, lv.STATE.DEFAULT)
+
+        self.set_wcs_btns = []
+        for i in range(len(self.axes)):
+            btn = lv.button(self.right_side)
+            lbl = lv.label(btn)
+            lbl.set_text('%s Zero WCS %s' %(lv.SYMBOL.REFRESH, self.axes[i]))
+            btn.set_size(150, 25)
+            lbl.center()
+            machine = self.interface.machine
+            btn.add_event_cb(
+                    lambda e, ax=self.axes[i], i=i: machine.set_wcs_zero(machine.wcs, ax),
+                    lv.EVENT.CLICKED, None)
+            btn.add_flag(lv.obj.FLAG.FLEX_IN_NEW_TRACK)
+            self.set_wcs_btns.append(btn)
 
         # Flutes
         # Diameter

@@ -159,18 +159,11 @@ class JogDial:
         for i in range(len(vals)):
             self.position.set_coord(i, vals[i])
 
-    def update_pos_labels_(self, vals):
-        for i, l in enumerate(['X', 'Y', 'Z']):
-            try:
-                self.pos_labels[l].set_text(l + ' ' + ('%05.2f' % float(vals[i])))
-            except:
-                self.pos_labels[l].set_text(l + ' ' + ('%s' % vals[i]))
-
     def _machine_state_updated(self, machine):
-        if machine.is_connected():
-            self.update_pos_labels(machine.wcs_position)
-        else:
+        if not machine.is_connected():
             self.position.coords_undefined()
+        # else:
+        #    self.update_pos_labels(machine.wcs_position)
 
     def _axis_clicked(self, evt):
         tgt = lv.buttonmatrix.__cast__(evt.get_target())

@@ -48,6 +48,7 @@ class MachineInterface:
         PollState.MESSAGES_AND_DIALOGS | PollState.END_STOPS
 
     DEFAULT_SLEEP_MS = 200
+    AXES = ['X', 'Y', 'Z']
 
     # How many g-code commands to buffer before overwriting them by FIFO.
     MAX_GCODE_Q_LEN = 10
@@ -72,7 +73,8 @@ class MachineInterface:
         self.axes_homed = [False, False, False]
         self.position = [None, None, None]
         self.wcs_position = [None, None, None]
-        self.wcs = None
+        self.target_position = [None, None, None]
+        self.wcs = 1
         self.tool = None
         self.feed_multiplier = 1.0
         self.z_offs = 0.0
@@ -85,8 +87,22 @@ class MachineInterface:
 
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
 
+        self.cb = None
+        self.pos_changed_cbs = []
+        self.home_changed_cbs = []
+        self.wcs_changed_cbs = []
+
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
+
+    def add_pos_changed_cb(self, pos_change_cb):
+        self.pos_changed_cbs.append(pos_change_cb)
+
+    def add_home_changed_cb(self, home_change_cb):
+        self.home_changed_cbs.append(home_change_cb)
+
+    def add_wcs_changed_cb(self, wcs_change_cb):
+        self.wcs_changed_cbs.append(wcs_change_cb)
 
     def is_homed(self, axes=None):
         if axes is None: axes = range(len(self.axes_homed))
@@ -162,17 +178,36 @@ class MachineInterface:
         # finally:
         #     Loop.run_forever()
 
+    def position_updated(self):
+        for cb in self.pos_changed_cbs: cb(self)
+
+    def home_updated(self):
+        for cb in self.home_changed_cbs: cb(self)
+
+    def wcs_updated(self):
+        for cb in self.wcs_changed_cbs: cb(self)
+
+    def update_position(self, values, values_wcs):
+        self.position = values
+        self.wcs_position = values_wcs
+
+        self.position_updated()
+
     def move(self, axis, feed, value):
         self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
                         PollState.MACHINE_POSITION)
-        print(self.gcode_queue)
+        self.target_position[self._axis_idx(axis)] = value
 
     def home_all(self):
         self.send_gcode("G28", PollState.MACHINE_POSITION)
+        self.target_position[i] = [None] * len(self.AXES)
 
     def home(self, axes):
         if not isinstance(axes, str):
+            for ax in axes: self.target_position[self._axis_idx(ax)] = None
             axes = ''.join(axes)
+        else:
+            self.target_position[self._axis_idx(axes)] = None
         print('G28 ' + axes)
         self.send_gcode('G28 ' + axes, PollState.MACHINE_POSITION)
 
@@ -180,6 +215,9 @@ class MachineInterface:
         zer = ' '.join([ax + '0' for ax in axes])
         self.send_gcode('G10 L20 P%d %s' % (wcs, zer),
                         PollState.MACHINE_POSITION)
+
+    def set_wcs(self, wcs):
+        self.send_gcode('G' + str(53 + wcs), PollState.MACHINE_POSITION)
 
     def list_gcode_files(self):
         _childclass_override()
@@ -195,6 +233,9 @@ class MachineInterface:
 
     def _childclass_override(self):
         raise Exception('implement this method in sub-class')
+
+    def _axis_idx(self, ax):
+        return self.AXES.index(ax)
 
     def debug_print(self):
         return {

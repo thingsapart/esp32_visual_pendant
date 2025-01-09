@@ -191,6 +191,8 @@ class MachineRRF(MachineInterface):
             await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
 
     def parse_move_axes(self, res):
+        updated = False
+        home_updated = False
         for axis in res:
             # Available but unused fields:
             # acceleration = axis['acceleration']
@@ -217,9 +219,13 @@ class MachineRRF(MachineInterface):
             # print('H:', name, homed, axis['homed'])
             # print('A:', name, axis)
 
+            if self.axes_homed[i] != homed: home_updated = True
             self.axes_homed[i] = homed
+            if self.position[i] != machine_pos or self.wcs_position[i] != wcs_pos: updated = True
             self.position[i] = machine_pos
             self.wcs_position[i] = wcs_pos
+        if updated: self.position_updated()
+        if home_updated: self.home_updated()
 
     def parse_m409(self, json_resp):
         # TODO: seq-based major updates.

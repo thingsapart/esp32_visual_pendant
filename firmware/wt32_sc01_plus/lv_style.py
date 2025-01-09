@@ -48,16 +48,22 @@ def ignore_layout(obj):
 def button_matrix_ver(labels):
     return list([j for i in labels for j in [i, '\n']])[:-1]
 
-def flex_col(obj, pad_col=0, pad_row=None):
+def flex_col(obj, pad_col=0, pad_row=None, wrap=False):
     obj.center()
-    obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+    if not wrap:
+        obj.set_flex_flow(lv.FLEX_FLOW.COLUMN)
+    else:
+        obj.set_flex_flow(lv.FLEX_FLOW.COLUMN_WRAP)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
     if pad_row is not None: obj.set_style_pad_row(pad_row, lv.STATE.DEFAULT)
     obj.set_style_pad_column(pad_col, lv.STATE.DEFAULT)
 
-def flex_row(obj, pad_row=None, pad_col=None):
+def flex_row(obj, pad_row=None, pad_col=None, wrap=False):
     obj.center()
-    obj.set_flex_flow(lv.FLEX_FLOW.ROW)
+    if not wrap:
+        obj.set_flex_flow(lv.FLEX_FLOW.ROW)
+    else:
+        obj.set_flex_flow(lv.FLEX_FLOW.ROW_WRAP)
     obj.set_flex_align(lv.FLEX_ALIGN.SPACE_EVENLY, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER)
     if pad_row is not None: obj.set_style_pad_row(pad_row, lv.STATE.DEFAULT)
     if pad_col is not None: obj.set_style_pad_column(pad_col, lv.STATE.DEFAULT)
