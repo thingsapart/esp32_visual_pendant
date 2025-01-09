@@ -73,6 +73,13 @@ class MachinePositionWCS(lv.obj):
             lbl.center()
             self.coord_sys_labels.append(lbl)
 
+            # Eep, hard-coded. But second entry is used to switch advance WCSs.
+            if i == 1:
+                lbl.add_event_cb(lambda e: (print("NEXT"), interface.machine.next_wcs()), lv.EVENT.CLICKED, None)
+                lbl.add_flag(lv.obj.FLAG.CLICKABLE)
+
+
+
         self.coord_vals = {}
         self.coord_val_labels = {}
         self.coord_val_labels_by_id = []
@@ -146,7 +153,8 @@ class MachinePositionWCS(lv.obj):
         self._pos_updated(mach)
 
     def _wcs_updated(self, mach):
-        t = 'G%d' % (mach.wcs + 53)
+        t = mach.get_wcs_str()
+        print("WCS UPD",  t)
         self.coord_sys_labels[1].set_text(t)
 
 class MachinePosition:

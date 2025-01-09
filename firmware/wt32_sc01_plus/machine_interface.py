@@ -9,11 +9,14 @@ from collections import deque
 
 class PollState:
     MACHINE_POSITION = 1
-    SPINDLE = 2
-    PROBES = 4
-    TOOLS = 8
-    MESSAGES_AND_DIALOGS = 16
-    END_STOPS = 32
+    MACHINE_POSITION_EXT = 2
+    SPINDLE = 4
+    PROBES = 8
+    TOOLS = 16
+    MESSAGES_AND_DIALOGS = 32
+    END_STOPS = 64
+    NETWORK = 128
+    JOB_STATUS = 256
 
     @classmethod
     def has_state(cls, poll_state, val):
@@ -83,6 +86,19 @@ class MachineInterface:
         self.spindles = []
         self.dialogs = None
 
+        self.feed = 0
+        self.feed_req = 0
+
+        self.feed_scaler = 1.0
+
+        self.network = []
+
+        self.job = {}
+
+        self.message_box = None
+
+        self.probes = []
+
         self.gcode_queue = deque((), MachineInterface.MAX_GCODE_Q_LEN)
 
         self.poll_state = MachineInterface.DEFAULT_POLL_STATES
@@ -91,6 +107,8 @@ class MachineInterface:
         self.pos_changed_cbs = []
         self.home_changed_cbs = []
         self.wcs_changed_cbs = []
+
+        self.polli = 0
 
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
@@ -136,6 +154,18 @@ class MachineInterface:
             for i in range(len(self.gcode_queue)):
                self.gcode_queue.pop()
 
+    def next_poll_state(self):
+        poll_state = PollState.MACHINE_POSITION_EXT if self.polli % 20 == 0 else PollState.MACHINE_POSITION
+        if self.polli % 5 == 0:
+            poll_state = (poll_state or PollState.JOB_STATUS or
+                          PollState.MESSAGES_AND_DIALOGS or PollState.END_STOPS
+                          or PollState.PROBES or PollState.SPINDLE)
+        if self.polli % 20 == 0:
+            poll_state = poll_state or PollState.TOOLS
+
+        print("POLLI", self.polli, poll_state)
+        return poll_state
+
     def task_loop_iter(self):
         # Send any outstanding commands.
         self.process_gcode_q()
@@ -149,7 +179,8 @@ class MachineInterface:
         print(self.debug_print())
         self.cb(self)
 
-        self.poll_state = MachineInterface.DEFAULT_POLL_STATES
+        self.polli += 1
+        self.poll_state = self.next_poll_state()
 
     async def task_loop(self):
         while True:
@@ -160,7 +191,10 @@ class MachineInterface:
 
             # Query machine state.
             await self._update_machine_state(self.poll_state)
-            self.poll_state = MachineInterface.DEFAULT_POLL_STATES
+
+            self.polli += 1
+            self.poll_state = self.next_poll_state()
+
             self.cb(self)
 
             await uasyncio.sleep_ms(self.sleep_ms)
@@ -211,13 +245,26 @@ class MachineInterface:
         print('G28 ' + axes)
         self.send_gcode('G28 ' + axes, PollState.MACHINE_POSITION)
 
+    def get_wcs_str(self, wcs_offs=None):
+        wcs = ''
+        wcsi = self.wcs if wcs_offs is None else wcs_offs
+        if wcsi <= 6:
+            wcs = str(53 + wcsi)
+        elif wcsi <= 9:
+            wcs = '59.' + str(wcsi - 6)
+        return 'G' + wcs
+
+    def set_wcs(self, wcs):
+        wcs = self.get_wcs_str(wcs_offs=wcs%9)
+        self.send_gcode(wcs, PollState.MACHINE_POSITION)
+
     def set_wcs_zero(self, wcs, axes):
         zer = ' '.join([ax + '0' for ax in axes])
         self.send_gcode('G10 L20 P%d %s' % (wcs, zer),
                         PollState.MACHINE_POSITION)
 
-    def set_wcs(self, wcs):
-        self.send_gcode('G' + str(53 + wcs), PollState.MACHINE_POSITION)
+    def next_wcs(self):
+        self.set_wcs(self.wcs + 1)
 
     def list_gcode_files(self):
         _childclass_override()

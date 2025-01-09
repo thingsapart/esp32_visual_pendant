@@ -35,6 +35,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
             self.pos = [0.0, 0.0, 0.0]
             self.axes_homed = [False, False, False]
             self.wcs = 0
+            self.feed_scaler = 1.0
             self.wcs_offsets = [
                         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -50,6 +51,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     l = gcode.split()
                     self.last = l[0].upper()
                     self.last_args = l[1:]
+                    print('>>>>>', l, self.last, self.last_args)
                     if self.last == 'G28':
                         print('G28')
                         self.axes_homed = [True, True, True]
@@ -63,7 +65,18 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                         self.wcs = 2
                     elif self.last == 'G56':
                         self.wcs = 3
-
+                    elif self.last == 'G57':
+                        self.wcs = 4
+                    elif self.last == 'G58':
+                        self.wcs = 5
+                    elif self.last == 'G59':
+                        self.wcs = 6
+                    elif self.last == 'G59.1':
+                        self.wcs = 7
+                    elif self.last == 'G59.2':
+                        self.wcs = 8
+                    elif self.last == 'G59.3':
+                        self.wcs = 9
                     elif self.last == 'G10':
                         wcs = None
                         ax = 0
@@ -95,7 +108,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
             return self
 
         async def __anext__(self):
-            val = self.read()
+            val = self.readline()
             if val == None:
                 raise StopAsyncIteration
             return val
@@ -107,8 +120,13 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
             return self.last is not None
 
         def read(self):
-            if self.last == 'M409':
-                k = self.last_args[0][1:].replace('"', '').replace("'", '')
+            last = self.last
+            last_args = self.last_args
+            self.last = None
+            self.last_args = None
+
+            if last == 'M409':
+                k = last_args[0][1:].replace('"', '').replace("'", '')
                 if k == 'move.axes' or k == 'move.axes[]':
                     x = self.pos[0]
                     xwcs = self.wcs_offsets[0]
@@ -123,9 +141,29 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     zwcs = self.wcs_offsets[2]
                     zu = z + zwcs[self.wcs]
 
-                    self.last = None
-
-                    return '''{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":%s,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":%s,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":%s,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'''  % (xh, x, xu, repr(xwcs), yh, y, yu, repr(ywcs), zh, z, zu, repr(zwcs))
+                    return '{"key":"move.axes","flags":"","result":[{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.2"],"homed":%s,"jerk":300.0,"letter":"X","machinePosition":%.3f,"max":200.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":900.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.1"],"homed":%s,"jerk":300.0,"letter":"Y","machinePosition":%.3f,"max":160.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":0,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":900.0,"speed":5000.0,"stepsPerMm":800.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s},{"acceleration":100.0,"babystep":0,"backlash":0,"current":1450,"drivers":["0.3"],"homed":%s,"jerk":30.0,"letter":"Z","machinePosition":%.3f,"max":70.00,"maxProbed":false,"microstepping":{"interpolated":true,"value":16},"min":-1.00,"minProbed":false,"percentCurrent":100,"percentStstCurrent":100,"reducedAcceleration":100.0,"speed":1000.0,"stepsPerMm":400.00,"userPosition":%.3f,"visible":true,"workplaceOffsets":%s}],"next":0}\n'  % (xh, x, xu, repr(xwcs), yh, y, yu, repr(ywcs), zh, z, zu, repr(zwcs))
+                elif k == 'network':
+                    return
+                    '{"key":"network","flags":"","result":{"corsSite":"","hostname":"mininc","interfaces":[{"actualIP":"0.0.0.0","firmwareVersion":"(unknown)","gateway":"0.0.0.0","state":"disabled","subnet":"255.255.255.0","type":"wifi"}],"name":"MiniNC"}}\n'
+                elif k == 'move.currentMove':
+                    import random
+                    speed = random.randint(0, 5000)
+                    return
+                    '{"key":"move.currentMove","flags":"","result":{"acceleration":0,"deceleration":0,"extrusionRate":0,"requestedSpeed":%d,"topSpeed":%d}}\n' % (speed, math.randint(speed - 1000, speed))
+                elif k == 'move.speedFactor':
+                    return '{"key":"move.speedFactor","flags":"","result":%f}\n' % self.feed_scaler
+                elif k == 'job':
+                    return
+                    '{"key":"job","flags":"d3","result":{"file":{"filament":[],"height":0,"layerHeight":0,"numLayers":0,"size":0,"thumbnails":[]},"filePosition":0,"lastDuration":0,"lastWarmUpDuration":0,"timesLeft":{}}}\n'
+                elif k == 'global':
+                    return '{"key":"global","flags":"","result":{"varsLoaded":true,"parkZ":2}}\n'
+                elif k == 'state.messageBox':
+                    return '{"key":"state.messageBox","flags":"","result":null}\n'
+                elif k == 'sensors.endstops[]':
+                    return '{"key":"sensors.endstops[]","flags":"","result":[null,null,null],"next":0}\n'
+                elif k == 'move.workplaceNumber':
+                    print("WCS", self.wcs)
+                    return '{"key":"move.workplaceNumber","flags":"","result":%d}\n' % self.wcs
                 else:
                     raise Exception('Unknown arg to M409')
             elif self.last:
@@ -160,10 +198,6 @@ class MachineRRF(MachineInterface):
         self.uart_reader = uasyncio.StreamReader(self.uart)
         self.connected = False
 
-    def get_machine_status_ext(self):
-        self.uart.write('M409 K"move.axes[]"\n')
-        res = self.uart.read()
-
     def _send_gcode(self, gcode):
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
@@ -174,7 +208,7 @@ class MachineRRF(MachineInterface):
         return self.uart.any()
 
     def _read_response(self):
-        return self.uart.read()
+        return self.uart.readline()
 
     async def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
@@ -188,12 +222,75 @@ class MachineRRF(MachineInterface):
 
     async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
+            await self._update_feed_scaler_async()
+            await self._update_wcs_async()
+            await self._proc_machine_state('M409 K"move.axes[]" F"d5,f"')
+        if PollState.has_state(poll_state, PollState.MACHINE_POSITION_EXT):
             await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
+        if PollState.has_state(poll_state, PollState.NETWORK):
+            await self._update_network_info_async()
+        if PollState.has_state(poll_state, PollState.JOB_STATUS):
+            await self._update_current_job_async()
+        if PollState.has_state(poll_state, PollState.MESSAGES_AND_DIALOGS):
+            await self._update_message_box_async()
+        if PollState.has_state(poll_state, PollState.END_STOPS):
+            await self._update_endstops_async()
+        if PollState.has_state(poll_state, PollState.PROBES):
+            await self._update_probe_vals_async()
+        if PollState.has_state(poll_state, PollState.SPINDLE):
+            await self._update_spindles_async()
+        if PollState.has_state(poll_state, PollState.TOOLS):
+            await self._update_tools_async()
+
+    async def _update_network_info_async(self):
+        return self._proc_machine_state('M409 K"network"')
+
+    async def _update_feed_scaler_async(self):
+        return await self._proc_machine_state('M409 K"move.speedFactor"')
+
+    async def _update_current_move_async(self):
+        return await self._proc_machine_state('M409 K"move.currentMove"')
+
+    async def _update_globals_async(self):
+        return await self._proc_machine_state('M409 K"global"')
+
+    async def _update_current_job_async(self):
+        return await self._proc_machine_state('M409 K"job" F"d3"')
+
+    async def _update_message_box_async(self):
+        return await self._proc_machine_state('M409 K"state.messageBox"')
+
+    async def _update_endstops_async(self):
+        return await self._proc_machine_state('M409 K"sensors.endstops[]"')
+
+    async def _update_probe_vals_async(self):
+        return await self._proc_machine_state('M409 K"sensors.probes[].value[]"')
+
+    async def _update_wcs_async(self):
+        return await self._proc_machine_state('M409 K"move.workplaceNumber"')
+
+    async def _update_spindles_async(self):
+        return 'TODO'
+
+    async def _update_tools_async(self):
+        return 'TODO'
+
+    def parse_move_axes_brief(self, res):
+        updated = False
+        for i, axis in enumerate(res):
+            machine_pos = axis['machinePosition']
+            wcs_pos = axis['userPosition']
+
+            if self.position[i] != machine_pos or self.wcs_position[i] != wcs_pos: updated = True
+            self.position[i] = machine_pos
+            self.wcs_position[i] = wcs_pos
+        if updated: self.position_updated()
+        if home_updated: self.home_updated()
 
     def parse_move_axes(self, res):
         updated = False
         home_updated = False
-        for axis in res:
+        for i, axis in enumerate(res):
             # Available but unused fields:
             # acceleration = axis['acceleration']
             # babystep = axis['babystep']
@@ -227,6 +324,9 @@ class MachineRRF(MachineInterface):
         if updated: self.position_updated()
         if home_updated: self.home_updated()
 
+    def parse_globals(self, res):
+        pass
+
     def parse_m409(self, json_resp):
         # TODO: seq-based major updates.
         j = None
@@ -236,9 +336,48 @@ class MachineRRF(MachineInterface):
             print("Failed to parse json", e, json_resp)
             return
 
+        key = j['key']
+        res = j['result']
         try:
-            if j['key'] == 'move.axes' or j['key'] == 'move.axes[]':
-                self.parse_move_axes(j['result'])
+            if key == 'move.axes' or key == 'move.axes[]':
+                if 'homed' in res[0]:
+                    self.parse_move_axes(res)
+            elif key == 'global':
+                self.parse_globals(res)
+            elif key == 'job':
+                self.job = {
+                    'duration': res['duration'],
+                    'file': res['file']['fileName'],
+                    'time_total': res['file']['printTime'],
+                    'time_sim': res['file']['simulatedTime'],
+                    'time_remain': res['timesLeft']['file'],
+                }
+            elif key == 'move.workplaceNumber':
+                if res != self.wcs:
+                    self.wcs = res
+                    self.wcs_updated()
+            elif key == 'move.current_move':
+               self.feed = res['topSpeed']
+               self.feed_req = res['requestedSpeed']
+            elif key == 'move.speedFactor':
+                self.feed_scaler = res # ?res['speedFactor']
+            elif key == 'network':
+                self.network = []
+                host = res['hostname']
+                for iif in res['interfaces']:
+                    self.network.append({
+                        'hostname': host,
+                        'ip': iif['actualIP'],
+                        'dns': iif['dnsServer'],
+                        'router': iif['gateway'],
+                        'signal': iif['signal'],
+                        'speed': iif['speed'],
+                    })
+            elif key == 'state.messageBox':
+                self.message_box = res
+            elif key == 'sensors.probes[].value[]':
+                self.probes = res
+
         except KeyError as e:
             print('Failed to read json: ', json_resp, e)
 
