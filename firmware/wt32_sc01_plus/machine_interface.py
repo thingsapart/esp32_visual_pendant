@@ -1,4 +1,7 @@
 import sys
+import math
+from micropython import const
+
 platform = sys.platform
 
 if not (platform == 'win32' or platform == 'darwin' or platform == 'linux'):
@@ -8,15 +11,17 @@ if not (platform == 'win32' or platform == 'darwin' or platform == 'linux'):
 from collections import deque
 
 class PollState:
-    MACHINE_POSITION = 1
-    MACHINE_POSITION_EXT = 2
-    SPINDLE = 4
-    PROBES = 8
-    TOOLS = 16
-    MESSAGES_AND_DIALOGS = 32
-    END_STOPS = 64
-    NETWORK = 128
-    JOB_STATUS = 256
+    MACHINE_POSITION =     const(1)
+    MACHINE_POSITION_EXT = const(2)
+    SPINDLE =              const(4)
+    PROBES =               const(8)
+    TOOLS =                const(16)
+    MESSAGES_AND_DIALOGS = const(32)
+    END_STOPS =            const(64)
+    NETWORK =              const(128)
+    JOB_STATUS =           const(256)
+    LIST_FILES =           const(512)
+    LIST_MACROS =          const(1024)
 
     @classmethod
     def has_state(cls, poll_state, val):
@@ -51,7 +56,9 @@ class MachineInterface:
         PollState.MESSAGES_AND_DIALOGS | PollState.END_STOPS
 
     DEFAULT_SLEEP_MS = 200
+
     AXES = ['X', 'Y', 'Z']
+    DEFAULT_FEED = 3000
 
     # How many g-code commands to buffer before overwriting them by FIFO.
     MAX_GCODE_Q_LEN = 10
@@ -77,9 +84,9 @@ class MachineInterface:
         self.position = [None, None, None]
         self.wcs_position = [None, None, None]
         self.target_position = [None, None, None]
+        self.moving_target_position = [None, None, None]
         self.wcs = 1
         self.tool = None
-        self.feed_multiplier = 1.0
         self.z_offs = 0.0
         self.probes = [0, 0]
         self.end_stops = None
@@ -89,9 +96,13 @@ class MachineInterface:
         self.feed = 0
         self.feed_req = 0
 
-        self.feed_scaler = 1.0
+        self.feed_multiplier = 1.0
+
+        self.move_relative = None
+        self.move_step = None # None => Continuous
 
         self.network = []
+        self.files = {}
 
         self.job = {}
 
@@ -107,11 +118,22 @@ class MachineInterface:
         self.pos_changed_cbs = []
         self.home_changed_cbs = []
         self.wcs_changed_cbs = []
+        self.feed_changes_cbs = []
+        self.sensors_changed_cbs = []
+        self.dialogs_changed_cbs = []
+        self.spindles_tools_changed_cbs = []
+        self.connected_cbs = []
+        self.files_changed_cbs = {}
 
         self.polli = -1
 
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
+
+    def add_files_changed_cb(self, files_change_cb, path):
+        if not path in self.files_changed_cbs:
+            self.files_changed_cbs[path] = []
+        self.files_changed_cbs[path].append(files_change_cb)
 
     def add_pos_changed_cb(self, pos_change_cb):
         self.pos_changed_cbs.append(pos_change_cb)
@@ -121,6 +143,21 @@ class MachineInterface:
 
     def add_wcs_changed_cb(self, wcs_change_cb):
         self.wcs_changed_cbs.append(wcs_change_cb)
+
+    def add_feed_changed_cb(self, feed_change_cb):
+        self.feed_changed_cbs.append(feed_change_cb)
+
+    def add_sensors_changed_cb(self, sensors_change_cb):
+        self.sensors_changed_cbs.append(sensors_change_cb)
+
+    def add_dialogs_changed_cb(self, dialogs_change_cb):
+        self.dialogs_changed_cbs.append(dialogs_change_cb)
+
+    def add_spindles_tools_changed_cb(self, spindles_tools_change_cb):
+        self.spindles_tools_changed_cbs.append(spindles_tools_change_cb)
+
+    def add_connected_cb(self, conn_cb):
+        self.connected_cbs.append(conn_cb)
 
     def is_homed(self, axes=None):
         if axes is None: axes = range(len(self.axes_homed))
@@ -153,19 +190,22 @@ class MachineInterface:
                self.gcode_queue.pop()
 
     def next_poll_state(self):
-        poll_state = PollState.MACHINE_POSITION_EXT if self.polli % 20 == 0 else PollState.MACHINE_POSITION
+        poll_state = PollState.MACHINE_POSITION_EXT if self.polli % 19 == 0 else PollState.MACHINE_POSITION
         if self.polli % 3 == 0:
             poll_state = poll_state or PollState.JOB_STATUS
-        if self.polli % 6 == 0:
+        if self.polli % 5 == 0:
             poll_state = poll_state or PollState.MESSAGES_AND_DIALOGS
-        if self.polli % 9 == 0:
-            poll_state = poll_state or PollState.END_STOPS
-        if self.polli % 12 == 0:
+        if self.polli % 7 == 0:
             poll_state = poll_state or PollState.PROBES
-        if self.polli % 15 == 0:
+        if self.polli % 11 == 0:
+            poll_state = poll_state or  PollState.END_STOPS
+        if self.polli % 13 == 0:
             poll_state = poll_state or PollState.SPINDLE
-        if self.polli % 18 == 0:
+        if self.polli % 17 == 0:
             poll_state = poll_state or PollState.TOOLS
+        # Refresh files and macros very infrequently.
+        if self.polli % 9973 == 0:
+            poll_state = poll_state or PollState.LIST_MACROS or PollState.LIST_FILES
 
         return poll_state
 
@@ -215,14 +255,60 @@ class MachineInterface:
         # finally:
         #     Loop.run_forever()
 
+    def maybe_execute_continuous_move(self):
+        # Check if there are any continous moves to execute.
+        for i in range(len(self.position)):
+            wcs = self.wcs_position[i]
+            mps = self.moving_target_position[i]
+            ps = self.position[i]
+            tps = self.target_position[i]
+            print(mps, wcs,  mps is not None and wcs is not None and
+                  math.isclose(wcs, mps))
+            if mps is None or (wcs is not None and math.isclose(ps, mps)):
+                print("REACHED", i, ps, wcs, mps)
+                self.moving_target_position[i] = None
+
+                has_new_target = tps is not None and ps is not None and not math.isclose(tps, ps)
+                if has_new_target and self.is_continuous_move():
+                    # Execute any "summed up" continuous moves while other move
+                    # was executing.
+                    self._move_to(self.AXES[i], self.DEFAULT_FEED, tps-wcs, relative=True)
+            else:
+                print("NOT REACHED", i, self.position[i], self.wcs_position[i],
+                      self.moving_target_position[i])
+
     def position_updated(self):
+        self.maybe_execute_continuous_move()
+
         for cb in self.pos_changed_cbs: cb(self)
 
     def home_updated(self):
         for cb in self.home_changed_cbs: cb(self)
 
     def wcs_updated(self):
+        self.moving_target_position = [None] * len(self.AXES)
+        self.target_position = [None] * len(self.AXES)
+
         for cb in self.wcs_changed_cbs: cb(self)
+
+    def feed_updated(self):
+        for cb in self.feed_changed_cbs: cb(self)
+
+    def sensors_updated(self):
+        for cb in self.sensors_changed_cbs: cb(self)
+
+    def dialogs_updated(self):
+        for cb in self.dialogs_changed_cbs: cb(self)
+
+    def spindles_tools_updated(self):
+        for cb in self.spindles_tools_changed_cbs: cb(self)
+
+    def files_updated(self, fdir):
+        if fdir in self.files_changed_cbs:
+            for cb in self.files_changed_cbs[fdir].items(): cb(self, fdir)
+
+    def connected_updated(self):
+        for cb in self.connected_cbs: cb(self)
 
     def update_position(self, values, values_wcs):
         self.position = values
@@ -230,10 +316,51 @@ class MachineInterface:
 
         self.position_updated()
 
-    def move(self, axis, feed, value):
-        self.send_gcode("M120\nG91\nG1 %s%.3f F%.3f\nM121" % (axis, value, feed),
+    def is_continuous_move(self):
+        return self.move_step is None
+
+    def _move_to(self, axis, feed, value, relative=True):
+        if isinstance(axis, str):
+            axi = self._axis_idx(axis)
+        else:
+            axi = axis
+
+        mode = 'G91' if relative else 'G90'
+        pos = value
+        if relative:
+            self.moving_target_position[axi] = self.wcs_position[axi] + value
+        else:
+            self.moving_target_position[axi] = value
+            pos = self.moving_target_position[axi]
+        print("SEND: M120\n%s\nG1 %s%.3f F%.3f\nM121" % (mode, axis, pos, feed))
+        self.send_gcode("M120\n%s\nG1 %s%.3f F%.3f\nM121" % (mode, axis, pos, feed),
                         PollState.MACHINE_POSITION)
-        self.target_position[self._axis_idx(axis)] = value
+
+    # Always a differential move, value is an offset from current position.
+    def move(self, axis, feed, value):
+        axi = self._axis_idx(axis)
+        print('move0', self.target_position[axi], value)
+        has_target = self.target_position[axi] is not None
+        has_pos = self.position[axi] is not None
+        continuous = self.is_continuous_move()
+
+        print("move", continuous, has_target,
+                  self.target_position[axi], value)
+        if not has_target: self.target_position[axi] = self.wcs_position[axi]
+        self.target_position[axi] = self.target_position[axi] + value
+        print("move2", continuous, has_target,
+                  self.target_position[axi], value)
+
+        if not continuous or not has_pos:
+            self._move_to(axis, feed, value, relative=True)
+        else:
+            print("cont move", continuous, has_target,
+                  self.target_position[axi], value)
+            self.maybe_execute_continuous_move()
+        # else:
+        #     # Update target position only in continuous mode.
+        #     # We send the next machine position when the currentPos ==
+        #     targetPos.
 
     def home_all(self):
         self.send_gcode("G28", PollState.MACHINE_POSITION)
@@ -270,13 +397,13 @@ class MachineInterface:
     def next_wcs(self):
         self.set_wcs(self.wcs + 1)
 
-    def list_gcode_files(self):
-        _childclass_override()
-
-    def list_macros(self):
+    def list_files(self, path):
         _childclass_override()
 
     def run_macro(self, macro_name):
+        _childclass_override()
+
+    def start_job(self, job_name):
         _childclass_override()
 
     def is_connected(self):

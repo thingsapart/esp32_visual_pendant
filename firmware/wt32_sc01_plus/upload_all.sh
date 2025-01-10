@@ -8,7 +8,7 @@ for FILE in `find . -type d -not -path '.' -not -path '*/.*' -not -path '*/SDLPo
   mpremote connect $1 fs mkdir ":${FILE}"
 done
 
-for FILE in `find . -type f -not -path '*/.*' -not -path '*/SDLPointer_2' -not -path '*/*.md'` -not -path '*/*.sh'; do
+for FILE in `find . -type f -not -path '*/.*' -not -path '*/SDLPointer_2' -not -path '*/*.md' -not -path '*/*.sh'`; do
   mpremote connect $1 fs cp $FILE ":${FILE}"
 done
 mpremote connect $1 reset

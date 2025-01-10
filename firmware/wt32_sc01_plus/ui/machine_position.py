@@ -147,8 +147,9 @@ class MachinePositionWCS(lv.obj):
         if len(self.coord_systems) > 1:
             for i, coord in enumerate(mach.wcs_position):
                 self.set_coord(i, coord, self.coord_systems[1])
-                if len(self.coord_systems) > 2:
-                    diff = coord - mach.position[i]
+                pos = mach.position[i]
+                if len(self.coord_systems) > 2 and pos is not None and coord is not None:
+                    diff = coord - pos
                     self.set_coord(i, diff, self.coord_systems[2])
         # self.update_layout()
 

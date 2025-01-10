@@ -35,7 +35,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
             self.pos = [0.0, 0.0, 0.0]
             self.axes_homed = [False, False, False]
             self.wcs = 0
-            self.feed_scaler = 1.0
+            self.feed_multiplier = 1.0
             self.wcs_offsets = [
                         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                         [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -147,10 +147,9 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     return
                     '{"key":"move.currentMove","flags":"","result":{"acceleration":0,"deceleration":0,"extrusionRate":0,"requestedSpeed":%d,"topSpeed":%d}}\n' % (speed, math.randint(speed - 1000, speed))
                 elif k == 'move.speedFactor':
-                    return '{"key":"move.speedFactor","flags":"","result":%f}\n' % self.feed_scaler
+                    return '{"key":"move.speedFactor","flags":"","result":%f}\n' % self.feed_multiplier
                 elif k == 'job':
-                    return
-                    '{"key":"job","flags":"d3","result":{"file":{"filament":[],"height":0,"layerHeight":0,"numLayers":0,"size":0,"thumbnails":[]},"filePosition":0,"lastDuration":0,"lastWarmUpDuration":0,"timesLeft":{}}}\n'
+                    return '{"key":"job","flags":"d3","result":{"file":{"filament":[],"height":0,"layerHeight":0,"numLayers":0,"size":0,"thumbnails":[]},"filePosition":0,"lastDuration":0,"lastWarmUpDuration":0,"timesLeft":{}}}\n'
                 elif k == 'global':
                     return '{"key":"global","flags":"","result":{"varsLoaded":true,"parkZ":2}}\n'
                 elif k == 'state.messageBox':
@@ -159,9 +158,24 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     return '{"key":"sensors.endstops[]","flags":"","result":[null,null,null],"next":0}\n'
                 elif k == 'move.workplaceNumber':
                     return '{"key":"move.workplaceNumber","flags":"","result":%d}\n' % self.wcs
+                elif k == 'sensors.probes[].value[]':
+                    return '{"key":"sensors.probes[].values[]","flags":"","result":[0, 10],"next":0}\n'
+                elif k == '':
+                    return '{"key":"","result":null}\n'
                 else:
-                    raise Exception('Unknown arg to M409')
+                    raise Exception('Unknown arg to M409: ' + k)
+            elif last == 'M20':
+                for cc in last_args:
+                    cmd = cc[0].upper()
+                    if cmd == 'P':
+                        s = cc[1:].replace('"', '')
+                        if s.startswith('/macro'):
+                            return '{"dir":"/macros/","first":0,"files":["probe_work.g","free_z.g","all_zero.g","z_zero.g","zero_workspace.g","work_align_xy10mm.gcode","move_free.g","touch_probe_work.g"],"next":0,"err":0}\n'
+                        if s.startswith('/gcode'):
+                            return '{"dir":"/gcodes/","first":0,"files":["Updown.gcode","Updown1.gcode","updown 6.1.gcode","MiniNC Z Plate.gcode","updown 6.1 5mm-adaptive.gcode","updown 6.1 - adaptive 5mm, pocket 0.5mm-0.75mm, slot 0.5mm.gcode","MiniNC Z Plate Contout Only.gcode"],"next":0,"err":0}\n'
+                        return '{"dir":"%s","err":2}' % cc[1:]
             elif self.last:
+                print('UARTSim READ: UNKNOWN LAST GCODE', last, last_args)
                 self.last = None
                 return 'ok\n'
             else:
@@ -192,8 +206,11 @@ class MachineRRF(MachineInterface):
         self.uart = UART(2, 115200, tx=Pin(43), rx=Pin(44), rxbuf=1024*16)
         self.uart_reader = uasyncio.StreamReader(self.uart)
         self.connected = False
+        self.connected_updated()
+        self.input_sel = ''
 
     def _send_gcode(self, gcode):
+        print("SEND", gcode)
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
             self.uart.write(gcode_ + '\n')
@@ -206,30 +223,35 @@ class MachineRRF(MachineInterface):
 
     async def _find_input(self):
         # M409 K"inputs" and find name == 'Aux'
-        return None
+        res = await _proc_machine_state('M409 K"state.thisInput"')
 
     async def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
         try:
             res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
-            self.parse_m409(res)
+            self.parse_json_response(res)
             if not self.connected:
                 self.position_updated()
                 self.wcs_updated()
                 self.home_updated()
                 # await self._find_input()
-            self.connected = True
+            if self.connected == False:
+                self.connected = True
+                self.connected_updated()
         except Exception as e:
-            print('Timeout', e)
+            print('Timeout or Error:', e)
             import sys
             sys.print_exception(e)
-            self.connected = False
+            if self.connected == True:
+                self.connected = False
+                self.connected_updated()
 
     async def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
-            await self._update_feed_scaler_async()
+            await self._update_feed_multiplier_async()
             await self._update_wcs_async()
             await self._proc_machine_state('M409 K"move.axes[]" F"d5,f"')
+            await self._proc_machine_state('M409 K"%s"' % self.input_sel)
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION_EXT):
             await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
         if PollState.has_state(poll_state, PollState.NETWORK):
@@ -253,7 +275,7 @@ class MachineRRF(MachineInterface):
     async def _update_network_info_async(self):
         return self._proc_machine_state('M409 K"network"')
 
-    async def _update_feed_scaler_async(self):
+    async def _update_feed_multiplier_async(self):
         return await self._proc_machine_state('M409 K"move.speedFactor"')
 
     async def _update_current_move_async(self):
@@ -278,9 +300,11 @@ class MachineRRF(MachineInterface):
         return await self._proc_machine_state('M409 K"move.workplaceNumber"')
 
     async def _update_spindles_async(self):
+        self.spindles_tools_updated()
         return 'TODO'
 
     async def _update_tools_async(self):
+        self.spindles_tools_updated()
         return 'TODO'
 
     def parse_move_axes_brief(self, res):
@@ -294,7 +318,7 @@ class MachineRRF(MachineInterface):
                 updated = True
             self.position[i] = machine_pos
             self.wcs_position[i] = wcs_pos
-            self.target_position[i] = wcs_pos
+            # self.target_position[i] = wcs_pos
         if updated: self.position_updated()
 
     def parse_move_axes(self, res):
@@ -340,15 +364,15 @@ class MachineRRF(MachineInterface):
     def parse_globals(self, res):
         pass
 
-    def parse_m409(self, json_resp):
-        # TODO: seq-based major updates.
-        j = None
-        try:
-             j = json.loads(json_resp.strip())
-        except ValueError as e:
-            print("Failed to parse json", e, json_resp)
-            return
+    def parse_m20_response(self, json_resp):
+        print(json_resp)
+        jdir = json_resp['dir']
+        jdir = jdir.replace('/', '')
+        files = json_resp['files']
+        self.files_updated(jdir)
+        return files
 
+    def parse_m409_response(self, j):
         key = j['key']
         res = j['result']
         try:
@@ -372,7 +396,9 @@ class MachineRRF(MachineInterface):
                self.feed = res['topSpeed']
                self.feed_req = res['requestedSpeed']
             elif key == 'move.speedFactor':
-                self.feed_scaler = res # ?res['speedFactor']
+                if self.feed_multiplier != res:
+                    self.feed_multiplier = res # ?res['speedFactor']
+                    if chg: self.feed_updated()
             elif key == 'network':
                 self.network = []
                 host = res['hostname']
@@ -386,11 +412,44 @@ class MachineRRF(MachineInterface):
                         'speed': iif['speed'],
                     })
             elif key == 'state.messageBox':
-                self.message_box = res
+                if self.message_box != res:
+                    self.message_box = res
+                    self.dialogs_updated()
             elif key == 'sensors.probes[].value[]':
-                self.probes = res
+                if self.probes != res:
+                    self.probes = res
+                    self.sensors_updated()
+            elif key == 'state.thisInput':
+                self.input_idx = res
+                self.input_sel = 'inputs[%d].axesRelative' % res
+            elif key == self.input_sel:
+                if self.move_relative != res:
+                    self.move_relative = res
+                    self.position_updated()
         except KeyError as e:
-            print('Failed to read json: ', json_resp, e)
+            # Report error.
+            print('Failed to read json, unknown key: ', json_resp, e)
+            # Reraise for parent.
+            raise e
+
+    def parse_json_response(self, json_resp):
+        # TODO: seq-based major updates.
+        j = None
+        try:
+            j = json.loads(json_resp.strip())
+
+            if 'dir' in j:
+                return self.parse_m20_response(j)
+
+            if 'key' in j or not 'result' in j:
+                return self.parse_m409_response(j)
+
+            raise Exception('Unrecognized response, valid json. %s' % json_resp)
+        except ValueError as e:
+            import sys
+            sys.print_exception(e)
+            print("Failed to parse json", e, json_resp)
+            return
 
     def parse_m408(self, json_resp):
         j = json.loads(json_resp)
@@ -427,15 +486,21 @@ class MachineRRF(MachineInterface):
 
             return [None, None]
 
-    def list_gcode_files(self):
-        self._send_gcode('M20 S2 P"/gcodes"')
-        res = uasyncio.wait_for(self.uart_reader.readline(), 0.5).send(None)
-        return _parse_filelist(res)
+    def list_files(self, path):
+        self._send_gcode('M20 S2 P"/%s/"' % path)
+        res = self.uart.readline()
+        print('RES' ,res)
+        try:
+            return self.parse_m20_response(json.loads(res))
+        except Exception:
+            return ['Failed']
 
-    def list_macros(self):
-        self._send_gcode('M20 S2 P"/macros"')
-        res = uasyncio.wait_for(self.uart_reader.readline(), 0.5).send(None)
-        return _parse_filelist(res)
+    def run_macro(self, macro_name):
+        self._send_gcode('M98 P"%s"' % macro_name)
+
+    def start_job(self, job_name):
+        self._send_gcode('M23 %s' % job_name)
+        self._send_gcode('M24')
 
     def is_connected(self):
         return self.connected

@@ -3,7 +3,9 @@ from lv_style import *
 from ucollections import OrderedDict
 from ui.handwheel_slider import HandwheelSlider
 from ui.tab_jog import JogDial
+from ui.file_list import file_list
 from ui.machine_position import MachinePositionWCS
+import ui.dialogs
 
 class TabMachine:
     def __init__(self, tabv, interface, tab):
@@ -58,11 +60,37 @@ class TabMachine:
         self.mach_meter = MachineStatusMeter(tab, self.interface, 16000, 6000)
         self.mach_meter.set_size(lv.pct(100), lv.pct(100))
 
+    def _gcode_clicked(self, file):
+        ui.dialogs.button_dialog(
+                'Run Job?',
+                'Start job "%s" now?' % file,
+                True,
+                ['Yes', 'No'],
+                [(lambda: self.interface.machine.start_job(file)), None])
+
+    def _macro_clicked(self, file):
+        ui.dialogs.button_dialog(
+                'Run Macro?',
+                'Start macro "%s" now?' % file,
+                True,
+                ['Yes', 'No'],
+                [(lambda: self.interface.machine.run_macro(file)), None])
+
     def init_tab_jobs(self, tab):
-        pass
+        self.jobs_list = file_list(tab, 'gcodes', self.interface,
+                                   self._gcode_clicked)
+        jl = self.jobs_list
+        jl.set_size(lv.pct(100), lv.pct(100))
+        no_margin_pad_border(tab)
+        no_margin_pad_border(jl)
 
     def init_tab_macros(self, tab):
-        pass
+        self.macro_list = file_list(tab, 'macros', self.interface,
+                                   self._macro_clicked)
+        jl = self.macro_list
+        jl.set_size(lv.pct(100), lv.pct(100))
+        no_margin_pad_border(tab)
+        no_margin_pad_border(jl)
 
 class MachineStatusMeter(lv.obj):
     CHIP_LOAD_RANGES = OrderedDict([
