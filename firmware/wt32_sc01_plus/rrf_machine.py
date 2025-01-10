@@ -204,6 +204,10 @@ class MachineRRF(MachineInterface):
     def _read_response(self):
         return self.uart.readline()
 
+    async def _find_input(self):
+        # M409 K"inputs" and find name == 'Aux'
+        return None
+
     async def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
         try:
@@ -213,6 +217,7 @@ class MachineRRF(MachineInterface):
                 self.position_updated()
                 self.wcs_updated()
                 self.home_updated()
+                # await self._find_input()
             self.connected = True
         except Exception as e:
             print('Timeout', e)
@@ -281,6 +286,7 @@ class MachineRRF(MachineInterface):
     def parse_move_axes_brief(self, res):
         updated = False
         for i, axis in enumerate(res):
+            # WCS / user pos == target pos in M409. machine pos = actual pos
             machine_pos = axis['machinePosition']
             wcs_pos = axis['userPosition']
 
@@ -288,6 +294,7 @@ class MachineRRF(MachineInterface):
                 updated = True
             self.position[i] = machine_pos
             self.wcs_position[i] = wcs_pos
+            self.target_position[i] = wcs_pos
         if updated: self.position_updated()
 
     def parse_move_axes(self, res):

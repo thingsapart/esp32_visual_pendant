@@ -117,12 +117,13 @@ class MachinePositionWCS(lv.obj):
             for lblc in self.coord_val_labels[cs]:
                 lblc.set_text('?' * (self.digits - 2) + '.??')
 
-    def set_coord(self, c, v, coord_system=None):
+    def set_coord(self, ax, v, coord_system=None):
         if coord_system is None:
             coord_system = self.coord_systems[0]
 
-        if isinstance(c, str):
-            c = self.coords.index(c)
+        c = ax
+        if isinstance(ax, str):
+            c = self.coords.index(ax)
 
         if not self.interface.machine.axes_homed[c]:
             v = None
@@ -140,11 +141,16 @@ class MachinePositionWCS(lv.obj):
         self.interface.machine.home(ax)
 
     def _pos_updated(self, mach):
+        # TODO: Machine, WCS and remaining coord systems currently hard-coded.
         for i, coord in enumerate(mach.position):
             self.set_coord(i, coord, self.coord_systems[0])
-        for i, coord in enumerate(mach.wcs_position):
-            self.set_coord(i, coord, self.coord_systems[1])
-        self.update_layout()
+        if len(self.coord_systems) > 1:
+            for i, coord in enumerate(mach.wcs_position):
+                self.set_coord(i, coord, self.coord_systems[1])
+                if len(self.coord_systems) > 2:
+                    diff = coord - mach.position[i]
+                    self.set_coord(i, diff, self.coord_systems[2])
+        # self.update_layout()
 
     def _home_updated(self, mach):
         for i, homed in enumerate(mach.axes_homed):

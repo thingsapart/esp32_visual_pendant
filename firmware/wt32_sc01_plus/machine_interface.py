@@ -238,6 +238,8 @@ class MachineInterface:
     def home_all(self):
         self.send_gcode("G28", PollState.MACHINE_POSITION)
         self.target_position[i] = [None] * len(self.AXES)
+        self.position[i] = [None] * len(self.AXES)
+        self.wcs_position[i] = [None] * len(self.AXES)
 
     def home(self, axes):
         if not isinstance(axes, str):
