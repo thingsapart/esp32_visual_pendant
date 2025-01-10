@@ -62,7 +62,6 @@ class MachinePositionWCS(lv.obj):
         # Coordinate systems.
         self.coord_sys_labels = []
         for i, cs in enumerate(coord_systems):
-            print(i, cs)
             lbl = lv.label(container)
             lbl.set_text(cs)
             style(lbl, { 'bg_color': color('BLUE') , 'bg_opa': 100,
@@ -145,6 +144,7 @@ class MachinePositionWCS(lv.obj):
             self.set_coord(i, coord, self.coord_systems[0])
         for i, coord in enumerate(mach.wcs_position):
             self.set_coord(i, coord, self.coord_systems[1])
+        self.update_layout()
 
     def _home_updated(self, mach):
         for i, homed in enumerate(mach.axes_homed):
@@ -154,7 +154,6 @@ class MachinePositionWCS(lv.obj):
 
     def _wcs_updated(self, mach):
         t = mach.get_wcs_str()
-        print("WCS UPD",  t)
         self.coord_sys_labels[1].set_text(t)
 
 class MachinePosition:
@@ -200,9 +199,11 @@ class MachinePosition:
         for lblc in self.coord_labels:
             lblc.set_text('?' * (self.digits - 2) + '.??')
 
-    def set_coord(self, c, v):
+    def set_coord_(self, c, v):
         if isinstance(c, str):
             c = self.coords.index(c)
         if v != self.coord_vals[c]:
             self.coord_labels[c].set_text(self.fmt_str % v)
             self.coord_vals[c] = v
+        else:
+            print('skip', c, v, self.coord_vals[c])

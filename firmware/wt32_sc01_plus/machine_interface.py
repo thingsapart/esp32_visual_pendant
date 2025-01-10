@@ -108,7 +108,7 @@ class MachineInterface:
         self.home_changed_cbs = []
         self.wcs_changed_cbs = []
 
-        self.polli = 0
+        self.polli = -1
 
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
@@ -124,8 +124,6 @@ class MachineInterface:
 
     def is_homed(self, axes=None):
         if axes is None: axes = range(len(self.axes_homed))
-        print('HOMED', not (False in [self.axes_homed[ax] for ax in axes]),
-              'VALS', [self.axes_homed[ax] for ax in axes], self.axes_homed)
         return not (False in [self.axes_homed[ax] for ax in axes])
 
     def send_gcode(self, gcode, poll_state):
@@ -144,7 +142,7 @@ class MachineInterface:
     async def _update_machine_state(self, poll_state):
         _childclass_override()
 
-    def process_gcode_q(self):
+    def process_gcode_q(self, max=1):
         if len(self.gcode_queue) > 0:
             for gcode in self.gcode_queue:
                 self._send_gcode(gcode)
@@ -156,14 +154,19 @@ class MachineInterface:
 
     def next_poll_state(self):
         poll_state = PollState.MACHINE_POSITION_EXT if self.polli % 20 == 0 else PollState.MACHINE_POSITION
-        if self.polli % 5 == 0:
-            poll_state = (poll_state or PollState.JOB_STATUS or
-                          PollState.MESSAGES_AND_DIALOGS or PollState.END_STOPS
-                          or PollState.PROBES or PollState.SPINDLE)
-        if self.polli % 20 == 0:
+        if self.polli % 3 == 0:
+            poll_state = poll_state or PollState.JOB_STATUS
+        if self.polli % 6 == 0:
+            poll_state = poll_state or PollState.MESSAGES_AND_DIALOGS
+        if self.polli % 9 == 0:
+            poll_state = poll_state or PollState.END_STOPS
+        if self.polli % 12 == 0:
+            poll_state = poll_state or PollState.PROBES
+        if self.polli % 15 == 0:
+            poll_state = poll_state or PollState.SPINDLE
+        if self.polli % 18 == 0:
             poll_state = poll_state or PollState.TOOLS
 
-        print("POLLI", self.polli, poll_state)
         return poll_state
 
     def task_loop_iter(self):
@@ -242,16 +245,15 @@ class MachineInterface:
             axes = ''.join(axes)
         else:
             self.target_position[self._axis_idx(axes)] = None
-        print('G28 ' + axes)
         self.send_gcode('G28 ' + axes, PollState.MACHINE_POSITION)
 
     def get_wcs_str(self, wcs_offs=None):
         wcs = ''
         wcsi = self.wcs if wcs_offs is None else wcs_offs
-        if wcsi <= 6:
-            wcs = str(53 + wcsi)
-        elif wcsi <= 9:
-            wcs = '59.' + str(wcsi - 6)
+        if wcsi <= 5:
+            wcs = str(54 + wcsi)
+        elif wcsi <= 8:
+            wcs = '59.' + str(wcsi - 5)
         return 'G' + wcs
 
     def set_wcs(self, wcs):

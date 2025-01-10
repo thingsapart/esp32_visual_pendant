@@ -6,7 +6,7 @@ sys.path.append('')
 # RUN_SIM => simulated RRF machine for testing.
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
-RUN_SIM = True
+RUN_SIM = False
 
 import json
 from micropython import const
@@ -51,9 +51,7 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     l = gcode.split()
                     self.last = l[0].upper()
                     self.last_args = l[1:]
-                    print('>>>>>', l, self.last, self.last_args)
                     if self.last == 'G28':
-                        print('G28')
                         self.axes_homed = [True, True, True]
                         self.pos = [0.0, 0.0, 0.0]
 
@@ -91,8 +89,6 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                             else:
                                 ax = axis_i[cmd]
                                 v = float(cc[1:])
-                            # print('G10>', cmd)
-                        #print('G10', ax, v, wcs)
                         self.wcs_offsets[ax][wcs - 1] = v - self.pos[ax]
 
                     elif self.last == 'G1' or self.last == 'G0':
@@ -162,7 +158,6 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                 elif k == 'sensors.endstops[]':
                     return '{"key":"sensors.endstops[]","flags":"","result":[null,null,null],"next":0}\n'
                 elif k == 'move.workplaceNumber':
-                    print("WCS", self.wcs)
                     return '{"key":"move.workplaceNumber","flags":"","result":%d}\n' % self.wcs
                 else:
                     raise Exception('Unknown arg to M409')
@@ -201,7 +196,6 @@ class MachineRRF(MachineInterface):
     def _send_gcode(self, gcode):
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
-            # print('_send:', gcode)
             self.uart.write(gcode_ + '\n')
 
     def _has_response(self):
@@ -215,9 +209,15 @@ class MachineRRF(MachineInterface):
         try:
             res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
             self.parse_m409(res)
+            if not self.connected:
+                self.position_updated()
+                self.wcs_updated()
+                self.home_updated()
             self.connected = True
         except Exception as e:
             print('Timeout', e)
+            import sys
+            sys.print_exception(e)
             self.connected = False
 
     async def _update_machine_state(self, poll_state):
@@ -241,6 +241,9 @@ class MachineRRF(MachineInterface):
             await self._update_spindles_async()
         if PollState.has_state(poll_state, PollState.TOOLS):
             await self._update_tools_async()
+
+    async def _update_wcs_pos_min(self):
+        await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
 
     async def _update_network_info_async(self):
         return self._proc_machine_state('M409 K"network"')
@@ -281,13 +284,19 @@ class MachineRRF(MachineInterface):
             machine_pos = axis['machinePosition']
             wcs_pos = axis['userPosition']
 
-            if self.position[i] != machine_pos or self.wcs_position[i] != wcs_pos: updated = True
+            if self.position[i] != machine_pos or self.wcs_position[i] != wcs_pos:
+                updated = True
             self.position[i] = machine_pos
             self.wcs_position[i] = wcs_pos
         if updated: self.position_updated()
-        if home_updated: self.home_updated()
 
     def parse_move_axes(self, res):
+        if 'letter' in res[0]:
+            self.parse_move_axes_ext(res)
+        else:
+            self.parse_move_axes_brief(res)
+
+    def parse_move_axes_ext(self, res):
         updated = False
         home_updated = False
         for i, axis in enumerate(res):
@@ -312,9 +321,6 @@ class MachineRRF(MachineInterface):
             machine_pos = axis['machinePosition']
             wcs_pos = axis['userPosition']
             # wcs_offs = axis['workplaceOffsets']
-            # print("AXIS", name, i, homed, machine_pos, wcs_pos)
-            # print('H:', name, homed, axis['homed'])
-            # print('A:', name, axis)
 
             if self.axes_homed[i] != homed: home_updated = True
             self.axes_homed[i] = homed
@@ -340,8 +346,7 @@ class MachineRRF(MachineInterface):
         res = j['result']
         try:
             if key == 'move.axes' or key == 'move.axes[]':
-                if 'homed' in res[0]:
-                    self.parse_move_axes(res)
+                self.parse_move_axes(res)
             elif key == 'global':
                 self.parse_globals(res)
             elif key == 'job':
@@ -377,7 +382,6 @@ class MachineRRF(MachineInterface):
                 self.message_box = res
             elif key == 'sensors.probes[].value[]':
                 self.probes = res
-
         except KeyError as e:
             print('Failed to read json: ', json_resp, e)
 

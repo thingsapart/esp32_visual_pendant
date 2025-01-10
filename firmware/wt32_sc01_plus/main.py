@@ -234,7 +234,6 @@ if evt:
 
             # print("V: ", v, mach.position)
             if not interface.process_wheel_tick(diff) and jog.axis_selected():
-                print('AX SEL', jog.axis, jog.axis_selected())
                 if not interface.machine.is_homed():
                     # If there's a modal already, don't show.
                     if not ui.modals.modal_active(): ui.modals.home_modal(interface)
