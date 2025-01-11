@@ -305,7 +305,7 @@ class MachineInterface:
 
     def files_updated(self, fdir):
         if fdir in self.files_changed_cbs:
-            for cb in self.files_changed_cbs[fdir].items(): cb(self, fdir)
+            for cb in self.files_changed_cbs[fdir]: cb(self, fdir, self.files[fdir])
 
     def connected_updated(self):
         for cb in self.connected_cbs: cb(self)
