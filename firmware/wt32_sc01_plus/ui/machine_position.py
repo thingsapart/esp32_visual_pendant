@@ -126,7 +126,10 @@ class MachinePositionWCS(lv.obj):
             c = self.coords.index(ax)
 
         if not self.interface.machine.axes_homed[c]:
-            v = None
+            # v = None
+            self.coord_vals[coord_system][c] = None
+            self.coord_val_labels[coord_system][c].set_text('-HOME-')
+            return
 
         if v != self.coord_vals[coord_system][c]:
             self.coord_vals[coord_system][c] = v

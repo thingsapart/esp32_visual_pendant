@@ -214,11 +214,14 @@ class MachineInterface:
         self.process_gcode_q()
 
         # Query machine state.
-        try:
-            t = self._update_machine_state(self.poll_state)
-            while True: t.send(None)
-        except StopIteration:
-            pass
+        if False:
+            try:
+                t = self._update_machine_state(self.poll_state)
+                while True: t.send(None)
+            except StopIteration:
+                pass
+        else:
+            self._update_machine_state(self.poll_state)
         print(self.debug_print())
         self.cb(self)
 
@@ -233,7 +236,8 @@ class MachineInterface:
             self.process_gcode_q()
 
             # Query machine state.
-            await self._update_machine_state(self.poll_state)
+            #await self._update_machine_state(self.poll_state)
+            self._update_machine_state(self.poll_state)
 
             self.polli += 1
             self.poll_state = self.next_poll_state()
@@ -303,9 +307,9 @@ class MachineInterface:
     def spindles_tools_updated(self):
         for cb in self.spindles_tools_changed_cbs: cb(self)
 
-    def files_updated(self, fdir):
-        if fdir in self.files_changed_cbs:
-            for cb in self.files_changed_cbs[fdir].items(): cb(self, fdir)
+    def files_updated(self, fdir, files):
+        # for cb in self.files_changed_cbs[fdir]: cb(self, fdir, files)
+        pass
 
     def connected_updated(self):
         for cb in self.connected_cbs: cb(self)
@@ -332,7 +336,6 @@ class MachineInterface:
         else:
             self.moving_target_position[axi] = value
             pos = self.moving_target_position[axi]
-        print("SEND: M120\n%s\nG1 %s%.3f F%.3f\nM121" % (mode, axis, pos, feed))
         self.send_gcode("M120\n%s\nG1 %s%.3f F%.3f\nM121" % (mode, axis, pos, feed),
                         PollState.MACHINE_POSITION)
 

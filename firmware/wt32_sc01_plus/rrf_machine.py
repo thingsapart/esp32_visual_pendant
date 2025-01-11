@@ -4,6 +4,7 @@ import usys as sys
 sys.path.append('')
 
 # RUN_SIM => simulated RRF machine for testing.
+# Always turned on when runnig off-device (Linux, Win, Mac).
 # => false: use UART to send and read gcode to/from RRF machine.
 # => true: use basic GCODE simulator to simulate an RRF machine on fake serial.
 RUN_SIM = False
@@ -15,7 +16,10 @@ from machine_interface import MachineInterface, PollState, MachineStatus
 platform = sys.platform
 if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM:
     import io
-    import uasyncio_shim as uasyncio
+    try:
+        import uasyncio
+    except Exception:
+        import uasyncio_shim as uasyncio
 
     print('Basic UART Simulation...')
 
@@ -58,23 +62,23 @@ if platform == 'win32' or platform == 'darwin' or platform == 'linux' or RUN_SIM
                     if self.last == 'G53':
                         self.wcs = 0
                     elif self.last == 'G54':
-                        self.wcs = 1
+                        self.wcs = 0
                     elif self.last == 'G55':
-                        self.wcs = 2
+                        self.wcs = 1
                     elif self.last == 'G56':
-                        self.wcs = 3
+                        self.wcs = 2
                     elif self.last == 'G57':
-                        self.wcs = 4
+                        self.wcs = 3
                     elif self.last == 'G58':
-                        self.wcs = 5
+                        self.wcs = 4
                     elif self.last == 'G59':
-                        self.wcs = 6
+                        self.wcs = 5
                     elif self.last == 'G59.1':
-                        self.wcs = 7
+                        self.wcs = 6
                     elif self.last == 'G59.2':
-                        self.wcs = 8
+                        self.wcs = 7
                     elif self.last == 'G59.3':
-                        self.wcs = 9
+                        self.wcs = 8
                     elif self.last == 'G10':
                         wcs = None
                         ax = 0
@@ -210,7 +214,6 @@ class MachineRRF(MachineInterface):
         self.input_sel = ''
 
     def _send_gcode(self, gcode):
-        print("SEND", gcode)
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
             self.uart.write(gcode_ + '\n')
@@ -221,21 +224,23 @@ class MachineRRF(MachineInterface):
     def _read_response(self):
         return self.uart.readline()
 
-    async def _find_input(self):
+    def _find_input(self):
         # M409 K"inputs" and find name == 'Aux'
-        res = await _proc_machine_state('M409 K"state.thisInput"')
+        res = _proc_machine_state('M409 K"state.thisInput"')
 
-    async def _proc_machine_state(self, cmd):
+    def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
         try:
-            res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
+            #res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
+            #res = await self.uart_reader.read()
+            res = self.uart.readline()
             self.parse_json_response(res)
             if not self.connected:
                 self.position_updated()
                 self.wcs_updated()
                 self.home_updated()
                 # await self._find_input()
-            if self.connected == False:
+
                 self.connected = True
                 self.connected_updated()
         except Exception as e:
@@ -246,64 +251,64 @@ class MachineRRF(MachineInterface):
                 self.connected = False
                 self.connected_updated()
 
-    async def _update_machine_state(self, poll_state):
+    def _update_machine_state(self, poll_state):
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION):
-            await self._update_feed_multiplier_async()
-            await self._update_wcs_async()
-            await self._proc_machine_state('M409 K"move.axes[]" F"d5,f"')
-            await self._proc_machine_state('M409 K"%s"' % self.input_sel)
+            self._update_feed_multiplier_async()
+            self._update_wcs_async()
+            self._proc_machine_state('M409 K"move.axes[]" F"d5,f"')
+            self._proc_machine_state('M409 K"%s"' % self.input_sel)
         if PollState.has_state(poll_state, PollState.MACHINE_POSITION_EXT):
-            await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
+            self._proc_machine_state('M409 K"move.axes[]" F"d5"')
         if PollState.has_state(poll_state, PollState.NETWORK):
-            await self._update_network_info_async()
+            self._update_network_info_async()
         if PollState.has_state(poll_state, PollState.JOB_STATUS):
-            await self._update_current_job_async()
+            self._update_current_job_async()
         if PollState.has_state(poll_state, PollState.MESSAGES_AND_DIALOGS):
-            await self._update_message_box_async()
+            self._update_message_box_async()
         if PollState.has_state(poll_state, PollState.END_STOPS):
-            await self._update_endstops_async()
+            self._update_endstops_async()
         if PollState.has_state(poll_state, PollState.PROBES):
-            await self._update_probe_vals_async()
+            self._update_probe_vals_async()
         if PollState.has_state(poll_state, PollState.SPINDLE):
-            await self._update_spindles_async()
+            self._update_spindles_async()
         if PollState.has_state(poll_state, PollState.TOOLS):
-            await self._update_tools_async()
+            self._update_tools_async()
 
-    async def _update_wcs_pos_min(self):
-        await self._proc_machine_state('M409 K"move.axes[]" F"d5"')
+    def _update_wcs_pos_min(self):
+        self._proc_machine_state('M409 K"move.axes[]" F"d5"')
 
-    async def _update_network_info_async(self):
+    def _update_network_info_async(self):
         return self._proc_machine_state('M409 K"network"')
 
-    async def _update_feed_multiplier_async(self):
-        return await self._proc_machine_state('M409 K"move.speedFactor"')
+    def _update_feed_multiplier_async(self):
+        return self._proc_machine_state('M409 K"move.speedFactor"')
 
-    async def _update_current_move_async(self):
-        return await self._proc_machine_state('M409 K"move.currentMove"')
+    def _update_current_move_async(self):
+        return self._proc_machine_state('M409 K"move.currentMove"')
 
-    async def _update_globals_async(self):
-        return await self._proc_machine_state('M409 K"global"')
+    def _update_globals_async(self):
+        return self._proc_machine_state('M409 K"global"')
 
-    async def _update_current_job_async(self):
-        return await self._proc_machine_state('M409 K"job" F"d3"')
+    def _update_current_job_async(self):
+        return self._proc_machine_state('M409 K"job" F"d3"')
 
-    async def _update_message_box_async(self):
-        return await self._proc_machine_state('M409 K"state.messageBox"')
+    def _update_message_box_async(self):
+        return self._proc_machine_state('M409 K"state.messageBox"')
 
-    async def _update_endstops_async(self):
-        return await self._proc_machine_state('M409 K"sensors.endstops[]"')
+    def _update_endstops_async(self):
+        return self._proc_machine_state('M409 K"sensors.endstops[]"')
 
-    async def _update_probe_vals_async(self):
-        return await self._proc_machine_state('M409 K"sensors.probes[].value[]"')
+    def _update_probe_vals_async(self):
+        return self._proc_machine_state('M409 K"sensors.probes[].value[]"')
 
-    async def _update_wcs_async(self):
-        return await self._proc_machine_state('M409 K"move.workplaceNumber"')
+    def _update_wcs_async(self):
+        return self._proc_machine_state('M409 K"move.workplaceNumber"')
 
-    async def _update_spindles_async(self):
+    def _update_spindles_async(self):
         self.spindles_tools_updated()
         return 'TODO'
 
-    async def _update_tools_async(self):
+    def _update_tools_async(self):
         self.spindles_tools_updated()
         return 'TODO'
 
@@ -365,11 +370,11 @@ class MachineRRF(MachineInterface):
         pass
 
     def parse_m20_response(self, json_resp):
-        print(json_resp)
         jdir = json_resp['dir']
         jdir = jdir.replace('/', '')
         files = json_resp['files']
-        self.files_updated(jdir)
+        self.files[jdir] = files
+        self.files_updated(jdir, files)
         return files
 
     def parse_m409_response(self, j):
@@ -398,7 +403,7 @@ class MachineRRF(MachineInterface):
             elif key == 'move.speedFactor':
                 if self.feed_multiplier != res:
                     self.feed_multiplier = res # ?res['speedFactor']
-                    if chg: self.feed_updated()
+                    self.feed_updated()
             elif key == 'network':
                 self.network = []
                 host = res['hostname']
@@ -487,9 +492,11 @@ class MachineRRF(MachineInterface):
             return [None, None]
 
     def list_files(self, path):
-        self._send_gcode('M20 S2 P"/%s/"' % path)
-        res = self.uart.readline()
-        print('RES' ,res)
+        # self._send_gcode('M20 S2 P"/%s/"' % path)
+        self._proc_machine_state('M20 S2 P"/%s/"' % path)
+        return self.files[path]
+
+        res = uasyncio.run_until_complete(self.uart_reader.readline())
         try:
             return self.parse_m20_response(json.loads(res))
         except Exception:
