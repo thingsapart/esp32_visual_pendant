@@ -132,28 +132,28 @@ class TabProbe:
         [
             [],
             # '\\' => Back
-            ['M5000 G6520.1 ', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6520.1 ', {'W': None, 'H': 3, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_s.png', 'back face'],
             [],
         ],
         [
             # '/' => Left
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None},
+            ['MG500 G6520.1', {'W': None, 'H': 0, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_e.png', 'left face'],
             # 'O' => Z
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None},
+            ['MG500 G6520.1', {'W': None, 'H': 4, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/center_boss.png', 'top surface'],
             # '\\' => Right
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None},
+            ['MG500 G6520.1', {'W': None, 'H': 1, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_w.png', 'right face'],
         ],
         [
             [],
             # '\\' => Front
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None},
+            ['M5000 G6520.1', {'W': None, 'H': 2, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_n.png', 'front face'],
             # => Reference Surface
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None},
+            ['M5000 G6520.1', {},
              'img/ref_sfc.png', 'reference surface'],
         ],
     ]
@@ -161,18 +161,18 @@ class TabProbe:
     PROBE_MODES_3D = [
         [
             # '\\' => Back-Left
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_se.png', 'back-left vise corner'],
             # '/' => Back-Right
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_sw.png', 'back-right vise corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_ne.png', 'front-left vise corner'],
             # '\\' => Front-Right
-            ['G6520.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_nw.png', 'front-right vise corner'],
         ],
     ]
@@ -180,52 +180,52 @@ class TabProbe:
     PROBE_MODES_2D_OUT = [
         [
             # '\\' => Back-Left
-            ['G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_se.png', 'back-left corner'],
             # '/' => Back-Right
-            ['G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_sw.png', 'back-right corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_ne.png', 'front-left corner'],
             # '\\' => Front-Right
-            ['G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_nw.png', 'front-right corner'],
         ],
         [
             # '[]' => Block
-            ['G6503.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6503.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/pkt_in.png', 'outside rectangle'],
             # 'O' => Boss
-            ['G6501.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6501.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/ctr1_boss.png', 'outside boss'],
         ]
     ]
     PROBE_MODES_2D_IN = [
         [
             # '\\' => Back-Left
-            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_nw.png', 'back-left inside corner'],
             # '/' => Back-Right
-            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_ne.png', 'back-right inside corner'],
         ],
         [
             # '/' => Front-Left
-            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_sw.png', 'front-left inside corner'],
             # '\\' => Front-Right
-            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_se.png', 'front-right inside corner'],
         ],
         [
             # '[]' => Pocket
-            ['G6502.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6502.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/pkt_out.png', 'inside pocket'],
             # 'O' => Bore
-            ['G6500.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6500.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/ctr1_bore.png', 'inside bore'],
         ]
     ]
@@ -233,7 +233,7 @@ class TabProbe:
     SETTINGS = [
         ['Width / Dia', 50.0, 1.0, 200.0, 'H'],
         ['Length', 100.0, 1.0, 200.0, 'I'],
-        ['Depth', 2.0, 0.0, 10.0, 'Z'],
+        ['Depth / Dist', 2.0, 0.0, 10.0, 'Z'],
         ['Surf Clear', 5.0, 0.0, 20.0, 'T'],
         ['Corner Clear', 5.0, 0.0, 20.0, 'C'],
         ['Overtravel', 2.0, 0.0, 10.0, 'O'],
