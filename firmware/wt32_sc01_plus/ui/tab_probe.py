@@ -161,18 +161,18 @@ class TabProbe:
     PROBE_MODES_3D = [
         [
             # '\\' => Back-Left
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_se.png', 'back-left vise corner'],
             # '/' => Back-Right
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_sw.png', 'back-right vise corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_ne.png', 'front-left vise corner'],
             # '\\' => Front-Right
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_nw.png', 'front-right vise corner'],
         ],
     ]
@@ -180,52 +180,52 @@ class TabProbe:
     PROBE_MODES_2D_OUT = [
         [
             # '\\' => Back-Left
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_se.png', 'back-left corner'],
             # '/' => Back-Right
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_sw.png', 'back-right corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_ne.png', 'front-left corner'],
             # '\\' => Front-Right
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_nw.png', 'front-right corner'],
         ],
         [
             # '[]' => Block
-            ['M5000 G6503.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6503.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/pkt_in.png', 'outside rectangle'],
             # 'O' => Boss
-            ['M5000 G6501.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6501.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
              'img/ctr1_boss.png', 'outside boss'],
         ]
     ]
     PROBE_MODES_2D_IN = [
         [
             # '\\' => Back-Left
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_nw.png', 'back-left inside corner'],
             # '/' => Back-Right
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_ne.png', 'back-right inside corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_sw.png', 'front-left inside corner'],
             # '\\' => Front-Right
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_se.png', 'front-right inside corner'],
         ],
         [
             # '[]' => Pocket
-            ['M5000 G6502.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6502.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/pkt_out.png', 'inside pocket'],
             # 'O' => Bore
-            ['M5000 G6500.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['M5000 G6500.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
              'img/ctr1_bore.png', 'inside bore'],
         ]
     ]
