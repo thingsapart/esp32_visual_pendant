@@ -511,6 +511,12 @@ class MachineRRF(MachineInterface):
     def is_connected(self):
         return self.connected
 
+    def _continuous_stop(self):
+        self._send_gcode('M98 P"pendant-continuous-stop.g"')
+
+    def _continuous_move(self, axis, feed, direction):
+        self._send_gcode('M98 P"pendant-continuous-run.g" A"%c" F%u D%u' % (axis, feed, direction))
+
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
     m.move('X', 100.0, 22.0)

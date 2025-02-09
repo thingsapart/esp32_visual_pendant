@@ -8,8 +8,7 @@ def modal_active():
     return active_modal
 
 def close_modal(m):
-    m.close_async()
-
+    # m.close_async()
     global active_modal
     active_modal = False
 

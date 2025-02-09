@@ -2,10 +2,10 @@ import lvgl as lv
 from lv_style import *
 import ui.modals
 
-PRB_Z = '{{global.mosMI[2] - {Z}}}'
-PRB_J = '{{global.mosMI[0]}}'
-PRB_K = '{{global.mosMI[1]}}'
-PRB_L = '{{global.mosMI[2]}}'
+PRB_Z = '{{ global.mosMI[2] - {Z} }}'
+PRB_J = '{{ global.mosMI[0] }}'
+PRB_K = '{{ global.mosMI[1] }}'
+PRB_L = '{{ global.mosMI[2] }}'
 
 class TabProbe:
     class ProbeBtnMatrix:
@@ -57,6 +57,7 @@ class TabProbe:
                 mbox = lv.msgbox(lv.screen_active())
 
                 def mbox_event_cb(e):
+                    interface.machine.send_gcode("M5000 P0", 0)
                     interface.machine.send_gcode(full_gcode, 0)
                     mbox.close()
 
@@ -132,7 +133,7 @@ class TabProbe:
         [
             [],
             # '\\' => Back
-            ['M5000 G6520.1 ', {'W': None, 'H': 3, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['G6520.1 ', {'W': None, 'H': 3, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_s.png', 'back face'],
             [],
         ],
@@ -150,10 +151,10 @@ class TabProbe:
         [
             [],
             # '\\' => Front
-            ['M5000 G6520.1', {'W': None, 'H': 2, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
+            ['G6520.1', {'W': None, 'H': 2, 'I': 'Z', 'J': PRB_J, 'K': PRB_K, 'L': PRB_L},
              'img/arr_n.png', 'front face'],
             # => Reference Surface
-            ['M5000 G6520.1', {},
+            ['G6520.1', {},
              'img/ref_sfc.png', 'reference surface'],
         ],
     ]
@@ -161,18 +162,18 @@ class TabProbe:
     PROBE_MODES_3D = [
         [
             # '\\' => Back-Left
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None, 'C': None},
              'img/arr_se.png', 'back-left vise corner'],
             # '/' => Back-Right
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None, 'C': None},
              'img/arr_sw.png', 'back-right vise corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None, 'C': None},
              'img/arr_ne.png', 'front-left vise corner'],
             # '\\' => Front-Right
-            ['M5000 G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6520.1', {'Q': None, 'W': None, 'P': 'Z', 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None, 'C': None},
              'img/arr_nw.png', 'front-right vise corner'],
         ],
     ]
@@ -180,52 +181,52 @@ class TabProbe:
     PROBE_MODES_2D_OUT = [
         [
             # '\\' => Back-Left
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6509.1', {'Q': None, 'W': None, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_se.png', 'back-left corner'],
             # '/' => Back-Right
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6509.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_sw.png', 'back-right corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6509.1', {'Q': None, 'W': None, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_ne.png', 'front-left corner'],
             # '\\' => Front-Right
-            ['M5000 G6509.1', {'Q': None, 'W': None, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6509.1', {'Q': None, 'W': None, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/arr_nw.png', 'front-right corner'],
         ],
         [
             # '[]' => Block
-            ['M5000 G6503.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6503.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/pkt_in.png', 'outside rectangle'],
             # 'O' => Boss
-            ['M5000 G6501.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
+            ['G6501.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
              'img/ctr1_boss.png', 'outside boss'],
         ]
     ]
     PROBE_MODES_2D_IN = [
         [
             # '\\' => Back-Left
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 3, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_nw.png', 'back-left inside corner'],
             # '/' => Back-Right
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_ne.png', 'back-right inside corner'],
         ],
         [
             # '/' => Front-Left
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 0, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_sw.png', 'front-left inside corner'],
             # '\\' => Front-Right
-            ['M5000 G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
+            ['G6508.1', {'Q': None, 'W': None, 'Z': PRB_Z, 'N': 1, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_L, 'H': None, 'I': None, 'T': None},
              'img/arr_se.png', 'front-right inside corner'],
         ],
         [
             # '[]' => Pocket
-            ['M5000 G6502.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
+            ['G6502.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None, 'I': None, 'T': None},
              'img/pkt_out.png', 'inside pocket'],
             # 'O' => Bore
-            ['M5000 G6500.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
+            ['G6500.1', {'Q': None, 'W': None, 'N': 2, 'O': None, 'J': PRB_J, 'K': PRB_K, 'L': PRB_Z, 'H': None},
              'img/ctr1_bore.png', 'inside bore'],
         ]
     ]
@@ -460,19 +461,19 @@ class TabProbe:
         tabv = lv.tabview(tab2d)
         tabv.set_tab_bar_size(40)
 
-        tab = tabv.add_tab('Inside -> Out')
-        flex_col(tab)
-        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab,
-                                                  self.settings,
-                                                  TabProbe.PROBE_MODES_2D_IN,
-                                                  self.interface)
-
         tab = tabv.add_tab('Outside -> In')
         flex_col(tab)
         self.btns_2d_out = TabProbe.ProbeBtnMatrix(tab,
                                                    self.settings,
                                                    TabProbe.PROBE_MODES_2D_OUT,
                                                    self.interface)
+
+        tab = tabv.add_tab('Inside -> Out')
+        flex_col(tab)
+        self.btns_2d_in = TabProbe.ProbeBtnMatrix(tab,
+                                                  self.settings,
+                                                  TabProbe.PROBE_MODES_2D_IN,
+                                                  self.interface)
 
         tabv.add_event_cb(self.update_quick, lv.EVENT.VALUE_CHANGED, None)
 

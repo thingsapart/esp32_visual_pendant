@@ -1,5 +1,6 @@
 import sys
 import math
+import time
 from micropython import const
 
 platform = sys.platform
@@ -127,6 +128,8 @@ class MachineInterface:
 
         self.polli = -1
 
+        self.last_continuous_tick = None
+
     def set_state_change_callback(self, state_update_callback):
         self.cb = state_update_callback
 
@@ -172,6 +175,8 @@ class MachineInterface:
         self.gcode_queue.append(gcode)
 
         self.poll_state = self.poll_state | poll_state
+
+        print(gcode)
 
     def _send_gcode(self, gcode):
         _childclass_override()
@@ -256,6 +261,8 @@ class MachineInterface:
         #     Loop.run_forever()
 
     def maybe_execute_continuous_move(self):
+        return
+
         # Check if there are any continous moves to execute.
         for i in range(len(self.position)):
             wcs = self.wcs_position[i]
@@ -336,8 +343,27 @@ class MachineInterface:
         self.send_gcode("M120\n%s\nG1 %s%.3f F%.3f\nM121" % (mode, axis, pos, feed),
                         PollState.MACHINE_POSITION)
 
-    # Always a differential move, value is an offset from current position.
+    def move_continuous(self, axis, feed, direction):
+        print("> CONTINUOS")
+        curr = time.ticks_ms()
+        # Send continuous move immediately or keep-alive every ~ 20ms.
+        if self.last_continuous_tick is None or time.ticks_diff(curr, self.last_continuous_tick) >= 20:
+            self._continuous_move(axis, feed, direction)
+        self.last_continuous_tick = curr
+
+    def move_continuous_stop(self):
+        if self.last_continuous_tick is not None:
+            print("< END CONTINUOS")
+            self._continuous_stop()
+            self.last_continuous_tick = None
+
     def move(self, axis, feed, value):
+        axi = self._axis_idx(axis)
+        print('move0', self.target_position[axi], value)
+        self._move_to(axis, feed, value, relative=True)
+
+    # Always a differential move, value is an offset from current position.
+    def __move_with_continues(self, axis, feed, value):
         axi = self._axis_idx(axis)
         print('move0', self.target_position[axi], value)
         has_target = self.target_position[axi] is not None

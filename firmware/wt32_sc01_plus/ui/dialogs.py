@@ -13,7 +13,7 @@ def button_dialog(title, text, add_close_btn, btns, btn_cbs):
                 mbox.close()
             else:
                 mbox.close()
-                cb()
+                cb(mbox)
 
         print('MBOX')
         for btn in btns:
