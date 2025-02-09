@@ -14,6 +14,8 @@ import lvgl as lv
 
 import task_handler
 
+import settings
+
 class HardwareSetupSim:
     def __init__(self):
         import display_driver
@@ -223,9 +225,16 @@ mach.set_state_change_callback(machine_update_cb)
 
 if evt:
     import uasyncio
+    import time
+
+    # Used to keep track of the last time a wheel click was captured for cont mode.
+    last_tick = time.ticks_ms()
+    last_dir = 0
 
     #@micropython.native
     def update_v(vv):
+        global last_tick, last_dir
+
         v = vv // 4
         jog = interface.tab_jog.jog_dial
         if v != jog.last_rotary_pos:
@@ -239,11 +248,31 @@ if evt:
                     if not ui.modals.modal_active(): ui.modals.home_modal(interface)
                     return
                 else:
-                    job = interface.tab_jog.jog_dial
-                    vv = jog.arc.get_value() + diff
-                    jog.set_value(vv % 100)
-                    mach.move(jog.axis, jog.feed * 1000, diff)
-                    # print(mach.debug_print())
+                    lt = last_tick
+                    last_tick = time.ticks_ms()
+                    tick_diff = time.ticks_diff(last_tick, lt)
+
+                    # Cheap attempt at a debounce
+                    ldir = -1 if diff < 0 else 1
+                    if abs(diff) == 1 and ldir != last_dir and tick_diff < settings.CONTINOUS_TICKS_DIFF_MAX_MS:
+                        last_dir = ldir
+                        return
+                    last_dir = ldir
+
+                    # Check for continuous mode => more than 10 ticks/second.
+                    print('tick_diff', tick_diff, settings.CONTINOUS_TICKS_DIFF_MAX_MS)
+                    if tick_diff < settings.CONTINOUS_TICKS_DIFF_MAX_MS:
+                        mach.move_continuous(jog.axis,
+                                             jog.feed * settings.CONTINUOUS_FEED_MM_PER_S,
+                                             1 if diff >= 0 else 0)
+                    else:
+                        # Single step.
+                        job = interface.tab_jog.jog_dial
+                        vv = jog.arc.get_value() + diff
+                        jog.set_value(vv % 100)
+                        mach.move(jog.axis, jog.feed * 1000, diff)
+                        mach.move_continuous_stop()
+                        # print(mach.debug_print())
 
     print("EVT Loops:")
 

@@ -74,7 +74,7 @@ class TabMachine:
                 'Start macro "%s" now?' % file,
                 True,
                 ['Yes', 'No'],
-                [(lambda: self.interface.machine.run_macro(file)), None])
+                [(lambda: self.interface.machine.run_macro('/macros/' + file)), None])
 
     def init_tab_jobs(self, tab):
         self.jobs_list = file_list(tab, 'gcodes', self.interface,

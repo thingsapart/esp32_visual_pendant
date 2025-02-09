@@ -210,7 +210,6 @@ class MachineRRF(MachineInterface):
         self.input_sel = ''
 
     def _send_gcode(self, gcode):
-        print("SEND", gcode)
         gcodes = gcode.split('\n')
         for gcode_ in gcodes:
             self.uart.write(gcode_ + '\n')
@@ -227,6 +226,7 @@ class MachineRRF(MachineInterface):
 
     async def _proc_machine_state(self, cmd):
         self._send_gcode(cmd)
+        res = None
         try:
             res = await uasyncio.wait_for(self.uart_reader.readline(), 0.5)
             self.parse_json_response(res)
@@ -239,7 +239,7 @@ class MachineRRF(MachineInterface):
                 self.connected = True
                 self.connected_updated()
         except Exception as e:
-            print('Timeout or Error:', e)
+            print('Timeout or Error:', e, cmd, res)
             import sys
             sys.print_exception(e)
             if self.connected == True:
@@ -365,10 +365,10 @@ class MachineRRF(MachineInterface):
         pass
 
     def parse_m20_response(self, json_resp):
-        print(json_resp)
         jdir = json_resp['dir']
         jdir = jdir.replace('/', '')
         files = json_resp['files']
+        self.files[jdir] = files
         self.files_updated(jdir)
         return files
 
@@ -487,12 +487,18 @@ class MachineRRF(MachineInterface):
             return [None, None]
 
     def list_files(self, path):
+        self.send_gcode('M20 S2 P"/%s/"' % path, 0)
+
+        return
+
         self._send_gcode('M20 S2 P"/%s/"' % path)
         res = self.uart.readline()
-        print('RES' ,res)
         try:
             return self.parse_m20_response(json.loads(res))
-        except Exception:
+        except Exception as exc:
+            print(exc)
+            import sys
+            sys.print_exception(exc)
             return ['Failed']
 
     def run_macro(self, macro_name):
@@ -504,6 +510,12 @@ class MachineRRF(MachineInterface):
 
     def is_connected(self):
         return self.connected
+
+    def _continuous_stop(self):
+        self._send_gcode('M98 P"pendant-continuous-stop.g"')
+
+    def _continuous_move(self, axis, feed, direction):
+        self._send_gcode('M98 P"pendant-continuous-run.g" A"%c" F%u D%u' % (axis, feed, direction))
 
 if __name__ == '__main__':
     m = MachineRRF(lambda x: print(x))
