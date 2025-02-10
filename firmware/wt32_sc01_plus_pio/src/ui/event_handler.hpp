@@ -6,7 +6,7 @@
 #include <functional>
 #include <map>
 
-void invoke_event_handler(lv_event_t *e);
+static void evt_invoke_event_handler(lv_event_t *e);
 
 typedef std::function<void (lv_event_t *)> evt_handler_t;
 

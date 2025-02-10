@@ -9,6 +9,7 @@
 
 #include "machine/machine_interface.hpp"
 #include "ui/tab_jog.hpp"
+#include "ui/debug.hpp"
 
 // Forward declarations for the UI classes
 class TabProbe;

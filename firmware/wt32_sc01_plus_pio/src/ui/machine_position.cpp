@@ -99,7 +99,6 @@ MachinePositionWCS::MachinePositionWCS(lv_obj_t* parent, const std::vector<std::
         if (i == 1) {
             lv_obj_add_event_cb(lbl, [](lv_event_t* e) {
                 MachinePositionWCS* self = (MachinePositionWCS*) lv_event_get_user_data(e);
-                Serial.println("NEXT");  // Replace print with Serial.println
                 self->interface->machine->nextWcs();
             }, LV_EVENT_CLICKED, this);
             lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);

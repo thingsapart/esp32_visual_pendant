@@ -44,4 +44,7 @@ int st_color(lv_color_t c);
 int s_color(uint8_t r, uint8_t g, uint8_t b);
 lv_color_t t_color(int c);
 
+int st_quad(uint8_t top, uint8_t right, uint8_t bottom, uint8_t left);
+int st_tup(uint8_t top_bot, uint8_t right_left);
+
 #endif

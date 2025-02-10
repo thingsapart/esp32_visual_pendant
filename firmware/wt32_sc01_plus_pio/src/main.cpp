@@ -186,10 +186,9 @@ lv_indev_t * indev = NULL;
 lv_display_t * display1 = NULL;
 
 /*Read the touchpad*/
-#define DEBUG_TOUCH 1
+#define DEBUG_TOUCH 0
 
 void my_touch_read(lv_indev_t * indev, lv_indev_data_t * data) {
-    Serial.write(".");
     uint16_t touchX, touchY;
     bool touched = tft.getTouch(&touchX, &touchY);
     if (!touched) { data->state = LV_INDEV_STATE_REL; }
@@ -259,6 +258,7 @@ void setup() {
   machine = new MachineRRF();
   // test_screen();
   interface = new Interface(machine);
+  Serial.write("LOADED..\n");
 }
 
 void loop() {

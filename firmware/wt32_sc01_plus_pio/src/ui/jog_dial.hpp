@@ -16,7 +16,7 @@ class MachinePositionWCS;
 
 class JogDial {
 public:
-    static const std::vector<std::vector<std::string>> FEEDS;
+    static const std::vector<std::tuple<std::string, float>> FEEDS;
     static const std::vector<std::string> AXES_OPTIONS;
     static const std::vector<std::string> AXES;
     static const std::map<std::string, int> AXIS_IDS;

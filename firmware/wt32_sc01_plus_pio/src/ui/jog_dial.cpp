@@ -8,20 +8,21 @@
 #include "ui/event_handler.hpp"
 
 // Define static members
-const std::vector<std::vector<std::string>> JogDial::FEEDS = {
-    {"100%", "1.0"},
-    {"25%", "0.25"},
-    {"10%", "0.1"},
-    {"1%", "0.01"}
+const std::vector<std::tuple<std::string, float>> JogDial::FEEDS = {
+    {"100%", 1.0},
+    {"25%", 0.25},
+    {"10%", 0.1},
+    {"1%", 0.01}
 };
 
+static const char * axes_btn_map[] = { "X", "\n", "Y", "\n", "Z", "\n", "Off", nullptr };
 const std::vector<std::string> JogDial::AXES_OPTIONS = {"X", "Y", "Z", "Off"};
 const std::vector<std::string> JogDial::AXES = {"X", "Y", "Z"};
 const std::map<std::string, int> JogDial::AXIS_IDS = {
     {"X", 0},
     {"Y", 1},
     {"Z", 2},
-    {"Off", -1} // Changed to -1 to represent None
+    {"Off", -1}
 };
 
 JogDial::JogDial(lv_obj_t* parent, Interface* interface) :
@@ -41,20 +42,8 @@ JogDial::JogDial(lv_obj_t* parent, Interface* interface) :
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* btns = lv_buttonmatrix_create(parent);
-    std::vector<std::string> axs_delim;
-    for (size_t i = 0; i < AXES_OPTIONS.size() - 1; ++i) {
-        axs_delim.push_back(AXES_OPTIONS[i] + "\n");
-    }
-    axs_delim.push_back(AXES_OPTIONS.back());
 
-    //Convert vector of strings to vector of char* before setting the map.
-    std::vector<const char*> buttonMap;
-    for (const auto& s : axs_delim) {
-      buttonMap.push_back(s.c_str());
-    }
-    buttonMap.push_back(nullptr); // Null terminate
-
-    lv_buttonmatrix_set_map(btns, buttonMap.data());
+    lv_buttonmatrix_set_map(btns, axes_btn_map);
     lv_buttonmatrix_set_button_ctrl_all(btns, LV_BUTTONMATRIX_CTRL_CHECKABLE);
     lv_buttonmatrix_set_button_ctrl(btns, 0, LV_BUTTONMATRIX_CTRL_CHECKED); //Corrected argument order.
     lv_obj_set_size(btns, 60, LV_PCT(100));
@@ -65,7 +54,6 @@ JogDial::JogDial(lv_obj_t* parent, Interface* interface) :
 
     lv_obj_align(btns, LV_ALIGN_CENTER, 0, 0);
 
-    //lv_obj_add_event_cb(btns, &JogDial::_axisClickedStatic, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_add_event_fn(btns, LV_EVENT_VALUE_CHANGED, evt_bind(JogDial::_axisClicked, this));
     axis_btns = btns;
 
@@ -82,7 +70,6 @@ JogDial::JogDial(lv_obj_t* parent, Interface* interface) :
     lv_arc_set_mode(arc_obj, LV_ARC_MODE_SYMMETRICAL);
     lv_obj_set_flex_grow(arc_obj, 1);
     // style(arc_obj, { "padding": lv_style_padding_args_t{10, 0, 0, 40} });  // Use lv_style_padding_args_t instead
-    //lv_obj_add_event_cb(arc_obj, &JogDial::_jogDialValueChangedEventCbStatic, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_add_event_fn(arc_obj, LV_EVENT_VALUE_CHANGED, evt_bind(JogDial::_jogDialValueChangedEventCb, this));
 
     lv_obj_t* label = lv_label_create(parent);
@@ -94,7 +81,6 @@ JogDial::JogDial(lv_obj_t* parent, Interface* interface) :
     lv_slider_set_range(slider, 0, 200);
     lv_slider_set_value(slider, 100, LV_ANIM_OFF);
     lv_obj_set_size(slider, 15, LV_PCT(100));
-    //lv_obj_add_event_cb(slider, &JogDial::_feedChangedStatic, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_add_event_fn(slider, LV_EVENT_VALUE_CHANGED, evt_bind(JogDial::_feedChanged, this));
 
     lv_obj_update_layout(parent);
@@ -119,6 +105,8 @@ std::string JogDial::currentAxis() {
 }
 
 void JogDial::setAxis(const std::string& ax) {
+    _df(0, "SET AXIS %s", ax.c_str());
+    
     axis = ax;
     auto it = AXIS_IDS.find(ax);
     axis_id = (it != AXIS_IDS.end()) ? it->second : -1;  // Default to -1 if not found
@@ -171,6 +159,7 @@ void JogDial::_machineStateUpdated(MachineInterface* machine) {
 }
 
 void JogDial::_axisClicked(lv_event_t* evt) {
+    _d(0, "AXIS CLICKED");
     lv_obj_t* tgt = static_cast<lv_obj_t *>(lv_event_get_target(evt));
     int id = lv_buttonmatrix_get_selected_button(tgt);
     const char* txt = lv_buttonmatrix_get_button_text(tgt, id);
@@ -180,8 +169,8 @@ void JogDial::_axisClicked(lv_event_t* evt) {
 void JogDial::_feedClicked(lv_event_t* evt) {
   lv_obj_t* tgt = static_cast<lv_obj_t *>(lv_event_get_target(evt));
   int id = lv_buttonmatrix_get_selected_button(tgt);
-  feed = std::stof(FEEDS[id][1]); // Convert string to float
-  lv_label_set_text(feed_label, (std::string(FEEDS[id][0])).c_str());
+  feed = std::get<1>(FEEDS[id]);
+  lv_label_set_text(feed_label, (std::string(std::get<0>(FEEDS[id]))).c_str());
 }
 
 void JogDial::_feedChanged(lv_event_t* evt) {

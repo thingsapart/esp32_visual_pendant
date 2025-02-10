@@ -1,6 +1,19 @@
 #include "ui/lv_style.hpp"
 #include <stdio.h>
 
+enum tag_quad_uint7 { q_singular = 0, q_tuple = 1, q_quad = 2 };
+union quat_uint7 {
+    int full_value;
+    struct {
+        unsigned int top : 7;
+        unsigned int bottom : 7;
+        unsigned int right : 7;
+        unsigned int left : 7;
+
+        tag_quad_uint7 tag : 2;
+    } parts;
+};
+
 lv_obj_t* create_container(lv_obj_t* parent) {
     lv_obj_t* obj = lv_obj_create(parent);
     lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_STATE_DEFAULT);
@@ -345,4 +358,50 @@ lv_color_t t_color(int c) {
     res.red = c & 0xFF;
 
     return res;
+}
+
+void unpack_st_quad_tup(int v, int& top, int& right, int& bottom, int& left) {
+    if (v >> 16 & 0xFFFF == 0xFFFF) {
+        top = bottom = (v >> 8) & 0xFF;
+        right = left = v & 0xFF;
+    } else {
+        top = v >> 24 & 0xFF;
+        right = v >> 16 & 0xFF;
+        bottom = v >> 8 & 0xFF;
+        left = v & 0xFF;
+    }
+}
+
+// Values of 0-127 are acceptable.
+int st_quad(uint8_t top, uint8_t right, uint8_t bottom, uint8_t left) {
+    assert(top <= 127 && right <= 127 && bottom <= 127 && left <= 127);
+
+    quat_uint7 res = { 
+        .parts {
+            .top = top,
+            .bottom = bottom,
+            .right = right,
+            .left = left,
+            .tag = q_quad       
+        }
+    };
+
+    return res.full_value;
+}
+
+// Values of 0-127 are acceptable.
+int st_tup(uint8_t top_bot, uint8_t right_left) {
+    assert(top_bot <= 127 && right_left <= 127);
+
+    quat_uint7 res = { 
+        .parts {
+            .top = top_bot,
+            .bottom = top_bot,
+            .right = right_left,
+            .left = right_left,
+            .tag = q_quad       
+        }
+    };
+
+    return res.full_value;
 }
