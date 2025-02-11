@@ -24,7 +24,7 @@
 
 #include "Arduino.h"
 
-static const char *TAG = "example";
+static const char *TAG = "ESP32_CNC_HMI";
 
 // #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -181,14 +181,18 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) 
 
 #endif
 
-/*Initialize the input device driver*/
+/* Initialize the input device driver */
 lv_indev_t * indev = NULL;
 lv_display_t * display1 = NULL;
 
+/* Initialize a second indev for the encoder wheel */
+lv_indev_t * indev_encoder = NULL;        /* Create input device connected to Default Display. */
+
 /*Read the touchpad*/
 #define DEBUG_TOUCH 0
+#define DEBUG_ENCODER 1
 
-void my_touch_read(lv_indev_t * indev, lv_indev_data_t * data) {
+void touch_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
     uint16_t touchX, touchY;
     bool touched = tft.getTouch(&touchX, &touchY);
     if (!touched) { data->state = LV_INDEV_STATE_REL; }
@@ -204,11 +208,29 @@ void my_touch_read(lv_indev_t * indev, lv_indev_data_t * data) {
     }
 }
 
+#include "machine/encoder.hpp"
+
+void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
+  if (!encoder.isUiMode()) {
+    data->enc_diff = 0;
+  } else {
+    data->enc_diff = encoder.readAndReset();
+    
+    if (data->enc_diff > 0) {
+      #if DEBUG_ENCODER != 0
+        Serial.print( "Data ENC delta: " ); Serial.println( data->enc_diff );
+      #endif
+    }
+  }
+  data->state = LV_INDEV_STATE_RELEASED;
+}
+
 //************************************************************************************
 //  SETUP AND LOOP
 //************************************************************************************
 
 #include "ui/interface.hpp"
+#include "ui/jog_dial.hpp"
 #include "machine/machine_rrf.hpp"
 
 static MachineRRF *machine;
@@ -241,6 +263,7 @@ void setup() {
 
   display1 = lv_display_create(screenWidth, screenHeight);
   indev = lv_indev_create();
+  indev_encoder = lv_indev_create();
 
   #if LV_USE_LOG != 0
     lv_log_register_print_cb( my_print ); /* register print function for debugging */
@@ -252,7 +275,10 @@ void setup() {
 
   /*Initialize the input device driver*/
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-  lv_indev_set_read_cb(indev, my_touch_read);
+  lv_indev_set_read_cb(indev, touch_indev_read);
+
+  lv_indev_set_type(indev_encoder, LV_INDEV_TYPE_ENCODER);
+  lv_indev_set_read_cb(indev_encoder, encoder_indev_read);
 
   // start the UI
   machine = new MachineRRF();
@@ -262,12 +288,21 @@ void setup() {
 }
 
 void loop() {
-  //lv_timer_handler();
-  //delay(5);
-
-  auto time_start     = millis();
+  auto time_start = millis();
   uint32_t sleep_time = lv_task_handler();
   delay(sleep_time);
   auto time_end = millis();
+
+  if (!encoder.isUiMode()) {
+    int diff = encoder.readAndReset();
+    if (diff != 0) { 
+      // interface->tab_jog->jog_dial->setValue(encoder.position());
+      auto dial = interface->tab_jog->jog_dial;
+      if (dial->axisSelected()) { dial->applyDiff(diff); }
+
+      _df(0, "ENCODER DIFF %d", diff); 
+    }
+  }
+
   lv_tick_inc(time_end - time_start);
 }

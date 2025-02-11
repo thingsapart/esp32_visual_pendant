@@ -32,6 +32,9 @@ public:
     void registerStateChangeCb(std::function<void (MachineInterface *)> cb);
     void updateMachineState(MachineInterface* machine);
 
+    TabJog* tab_jog;
+    // TabProbe* tab_probe;
+    // TabMachine* tab_machine;
 private:
     void init_fonts();
     void fs_init();
@@ -45,9 +48,6 @@ private:
     lv_obj_t* wheel_tick_target;
 
     lv_obj_t* main_tabs;
-    TabJog* tab_jog;
-    // TabProbe* tab_probe;
-    // TabMachine* tab_machine;
     lv_obj_t* tab_job_gcode;
     lv_obj_t* tab_tool;
     lv_obj_t* tab_cam;

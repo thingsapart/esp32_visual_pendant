@@ -190,12 +190,22 @@ bool JogDial::axisSelected() {
     return axis_id != -1; // Compare with -1 instead of None
 }
 
+void JogDial::applyDiff(int diff) {
+    int val = lv_arc_get_value(arc) + diff;
+    _df(0, "val %d, diff %d, res %d", val, diff, 100 - val % 100);
+    if (val < 0) {
+        val = 100 + val % 100;
+    } else {
+        val = val % 100;
+    }
+    lv_arc_set_value(arc, val);
+}
 void JogDial::inc() {
-    lv_arc_set_value(arc, lv_arc_get_value(arc) + 1);
+    applyDiff(1);
 }
 
 void JogDial::dec() {
-    lv_arc_set_value(arc, lv_arc_get_value(arc) - 1);
+    applyDiff(-1);
 }
 
 void JogDial::_jogDialValueChangedEventCb(lv_event_t* evt) {

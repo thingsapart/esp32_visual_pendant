@@ -15,11 +15,11 @@ public:
     TabJog(lv_obj_t* tabv, Interface* interface, lv_obj_t* tab);
     ~TabJog();
 
+    JogDial* jog_dial;
 private:
     lv_obj_t* tabv;
     Interface* interface;
     lv_obj_t* tab;
-    JogDial* jog_dial;
 };
 
 #endif // TAB_JOG_HPP

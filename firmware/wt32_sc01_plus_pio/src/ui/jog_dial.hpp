@@ -34,8 +34,8 @@ public:
     bool axisSelected();
     void inc();
     void dec();
+    void applyDiff(int diff);
     void setValue(int v);
-
 private:
     void _machineStateUpdated(MachineInterface* machine);
     void _axisClicked(lv_event_t* evt);
