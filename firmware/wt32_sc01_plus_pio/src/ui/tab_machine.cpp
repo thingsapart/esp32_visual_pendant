@@ -2,11 +2,12 @@
 #include "tab_machine.hpp"
 #include "interface.hpp"
 #include "lv_style.hpp"
-#include "handwheel_slider.h"
+#include "handwheel_slider.hpp"
 #include "tab_jog.hpp"
 #include "file_list.hpp"
-#include "machine_position.hpp"
 #include "dialogs.hpp"
+#include "jog_dial.hpp"
+#include "event_handler.hpp"
 
 #include <iostream> //Used for Serial out
 
@@ -30,7 +31,11 @@ const std::map<std::string, std::map<std::string, std::vector<double>>> MachineS
   {"Soft Plastic", {}}
 };
 
-TabMachine::TabMachine(lv_obj_t* tabv, Interface* interface, lv_obj_t* tab) : tab(tab)
+TabMachine::TabMachine(lv_obj_t* tabv, Interface* interface, lv_obj_t* tab) :
+  tab(tab),
+  mach_meter(MachineStatusMeter(tab, interface, 16000, 6000)),
+  jobs_list(FileList(tab, "gcodes", interface->machine, [this](const std::string& file) { this->_gcode_clicked(file); })),
+  macro_list(FileList(tab, "macros", interface->machine, [this](const std::string& file) { this->_macro_clicked(file); }))
 {
     this->tab = tab;
     this->interface = interface;
@@ -50,16 +55,23 @@ void TabMachine::init_axis_float_btn() {
     lv_obj_add_flag(this->float_btn, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(this->float_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     lv_obj_t* label = lv_label_create(this->float_btn);
-    lv_label_set_text(label, jog_dial->current_axis().c_str());
+    lv_label_set_text(label, jog_dial->currentAxis().c_str());
     lv_obj_center(label);
 
+    /*
     lv_obj_add_event_cb(this->float_btn, [](lv_event_t* e) {
       TabMachine* self = (TabMachine*)lv_obj_get_user_data(lv_event_get_target(e));
       JogDial* jog_dial = self->interface->tab_jog->jog_dial;
       lv_label_set_text(lv_obj_get_child(lv_event_get_target(e), 0), jog_dial->next_axis().c_str());
     }, LV_EVENT_CLICKED, this); // Store 'this' in user_data
+    */
+    lv_obj_add_event_cb(this->float_btn, [](lv_event_t* e) {
+      TabMachine* self = static_cast<TabMachine*>(lv_event_get_user_data(e));
+      JogDial* jog_dial = self->interface->tab_jog->jog_dial;
+      lv_label_set_text(lv_obj_get_child(evt_target_obj(e), 0), jog_dial->nextAxis().c_str());
+    }, LV_EVENT_CLICKED, this);
 
-    jog_dial->add_axis_change_db([label](const std::string& t) {
+    jog_dial->addAxisChangeCb([label](const std::string& t) {
         lv_label_set_text(label, t.c_str());
     });
 
@@ -91,55 +103,54 @@ void TabMachine::init_machine_tabv(lv_obj_t* parent) {
 }
 
 void TabMachine::init_tab_status(lv_obj_t* tab) {
-    this->mach_meter = new MachineStatusMeter(tab, this->interface, 16000, 6000);
-    lv_obj_set_size(this->mach_meter, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_size(mach_meter.self, LV_PCT(100), LV_PCT(100));
 }
 
 void TabMachine::_gcode_clicked(const std::string& file) {
-    auto lambda1 = [this, file]() {
-        std::cout << "calling interface->machine->start_job()" << std::endl;
-        this->interface->machine->start_job(file);
+    auto lambda1 = [this, file](lv_event_t *e) {
+        _d(0, "calling interface->machine->start_job()");
+        this->interface->machine->startJob(file);
     };
 
-    ui::button_dialog(
+    std::vector<evt_handler_t> cbs = {lambda1, [](lv_event_t* e){ }};
+    std::vector<std::string> btns = {"Yes", "No"};
+
+    button_dialog(
             "Run Job?",
             ("Start job \"" + file + "\" now?").c_str(),
             true,
-            {"Yes", "No"},
-            {lambda1, nullptr}
+            btns,
+            cbs
             );
 }
 
 void TabMachine::_macro_clicked(const std::string& file) {
-    auto lambda2 = [this, file]() {
-        std::cout << "calling interface->machine->run_macro()" << std::endl;
-        this->interface->machine->run_macro("/macros/" + file);
+    auto lambda2 = [this, file](lv_event_t *b) {
+        _d(0, "calling interface->machine->start_job()");
+        this->interface->machine->runMacro("/macros/" + file);
     };
 
-    ui::button_dialog(
+    std::vector<evt_handler_t> cbs = {lambda2, [](lv_event_t* e){ }};
+    std::vector<std::string> btns = {"Yes", "No"};
+
+    button_dialog(
             "Run Macro?",
-            ("Start macro \"" + file + "\" now?").c_str(),
+            ("Start job \"" + file + "\" now?").c_str(),
             true,
-            {"Yes", "No"},
-            {lambda2, nullptr}
+            btns,
+            cbs
             );
 }
 
 void TabMachine::init_tab_jobs(lv_obj_t* tab) {
-    this->jobs_list = new file_list(tab, "gcodes", this->interface,
-                                       [this](const std::string& file) { _gcode_clicked(file); });
-
-    lv_obj_t* jl = this->jobs_list;
+    lv_obj_t* jl = jobs_list.list;
     lv_obj_set_size(jl, LV_PCT(100), LV_PCT(100));
     no_margin_pad_border(tab);
     no_margin_pad_border(jl);
 }
 
 void TabMachine::init_tab_macros(lv_obj_t* tab) {
-    this->macro_list = new file_list(tab, "macros", this->interface,
-                                        [this](const std::string& file) { _macro_clicked(file); });
-
-    lv_obj_t* jl = this->macro_list;
+    lv_obj_t* jl = this->macro_list.list;
     lv_obj_set_size(jl, LV_PCT(100), LV_PCT(100));
     no_margin_pad_border(tab);
     no_margin_pad_border(jl);
@@ -165,47 +176,61 @@ void TabMachine::init_tab_macros(lv_obj_t* tab) {
 //  {"Soft Plastic", {}}
 //};
 
-MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, int spindle_max_rpm, int max_feed) : lv_obj_t(parent){
-    style(this, {{"border_width", 0}, {"padding", 0}, {"margin", 0}});
+MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, int spindle_max_rpm, int max_feed) {
+    self = lv_obj_create(parent);
+
+    style(self, {{"border_width", 0}, {"padding", 0}, {"margin", 0}});
     style(parent, {{"border_width", 0}, {"padding", 0}, {"margin", 0}});
 
     this->spindle_max_rpm = spindle_max_rpm / 100 * 100;
     this->max_feed = max_feed / 100 * 100;
     this->interface = interface;
 
-    flex_row(this);
-    lv_obj_set_style_pad_row(this, 0, LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_column(this, 0, LV_STATE_DEFAULT);
+    flex_row(self);
+    lv_obj_set_size(self, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_row(self, 0, LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_column(self, 0, LV_STATE_DEFAULT);
 
-    this->left_side = container_col(this,0,0);
-    lv_obj_set_flex_grow(this->left_side, 5);
-    lv_obj_set_height(this->left_side, LV_SIZE_CONTENT);
-    style(this->left_side, {{"bg_opa", 0}, {"border_width", 0}, {"padding", 5}});
-    lv_obj_set_style_text_font(this->left_side, &lv_font_montserrat_12, LV_STATE_DEFAULT);
+    _d(0, "creating left side");
 
-    this->right_side = lv_obj_create(this);
+    left_side = container_col(self, 0, 0);
+    lv_obj_set_flex_grow(left_side, 5);
+    //lv_obj_set_height(left_side, LV_SIZE_CONTENT);
+    lv_obj_set_height(left_side, LV_PCT(100));
+    lv_obj_set_width(left_side, LV_PCT(50));
+    style(left_side, {{"bg_opa", 0}, {"border_width", 0}, {"padding", 5}});
+    lv_obj_set_style_text_font(left_side, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+
+    _d(0, "creating right side");
+    this->right_side = lv_obj_create(self);
     lv_obj_set_height(this->right_side, LV_PCT(100));
     lv_obj_set_width(this->right_side, LV_SIZE_CONTENT);
 
     flex_row(this->right_side, 0, 0, true);
     lv_obj_set_flex_align(this->right_side, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    style(this->right_side, {{"bg_opa", 0}, {"border_width", 0}, {"padding", {0, 10, 0, 0}}, {"margin", 0}});
-    lv_obj_set_style_text_font(this->right_side, &lv_font_montserrat_12, LV_STATE_DEFAULT);
+    style(this->right_side, {{"bg_opa", 0}, {"border_width", 0}, {"padding", st_quad(0, 10, 0, 0)}, {"margin", 0}});
+    lv_obj_set_style_text_font(this->right_side, &lv_font_montserrat_14, LV_STATE_DEFAULT);
     non_scrollable(this->right_side);
 
-    lv_obj_t* label_feed = lv_label_create(this->left_side);
+    dbg_layout(self);
+    dbg_layout(left_side);
+    dbg_layout(right_side);
+
+    _d(0, "creating feed side");
+    lv_obj_t* label_feed = lv_label_create(left_side);
     lv_label_set_text(label_feed, "Feed (mm/min):");
-    this->bar_feed = lv_bar_create(this->left_side);
+    this->bar_feed = lv_bar_create(left_side);
     lv_bar_set_range(this->bar_feed, 0, this->max_feed);
     no_margin_pad_border(this->bar_feed);
-    style(this->bar_feed, {{"padding", {5, 18}}, {"bg_opa", 0}});
+    style(this->bar_feed, {{"padding", st_tup(5, 18)}, {"bg_opa", 0}});
     lv_obj_set_height(this->bar_feed, 18);
     lv_obj_set_width(this->bar_feed, LV_PCT(100));
     lv_obj_set_style_margin_bottom(this->bar_feed, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_bottom(this->bar_feed, 0, LV_STATE_DEFAULT);
     lv_obj_add_flag(this->bar_feed, LV_OBJ_FLAG_ADV_HITTEST);
 
-    lv_style_t style_indic;
+    _d(0, "styling feed side");
+    static lv_style_t style_indic;
     lv_style_init(&style_indic);
     lv_style_set_bg_opa(&style_indic, LV_OPA_COVER);
     lv_style_set_bg_color(&style_indic, lv_color_make(0, 220, 0));
@@ -213,14 +238,15 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_style_set_bg_grad_dir(&style_indic, LV_GRAD_DIR_HOR);
     lv_style_set_bg_main_stop(&style_indic, 175);
     lv_obj_add_style(this->bar_feed, &style_indic, LV_PART_INDICATOR);
+
     lv_bar_set_value(this->bar_feed, 5000, LV_ANIM_ON);
     lv_obj_set_style_radius(this->bar_feed, 3, LV_PART_MAIN);
     lv_obj_set_style_radius(this->bar_feed, 3, LV_PART_INDICATOR);
 
-    this->scale_feed = lv_scale_create(this->left_side);
+    this->scale_feed = lv_scale_create(left_side);
     lv_obj_set_style_margin_top(this->scale_feed, 0, LV_STATE_DEFAULT);
     no_margin_pad_border(this->scale_feed);
-    style(this->scale_feed, {{"margin", {0, 18}}});
+    style(this->scale_feed, {{"margin", st_tup(0, 18)}});
     lv_obj_set_style_pad_top(this->scale_feed, 0, LV_STATE_DEFAULT);
     lv_scale_set_mode(this->scale_feed, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
     lv_scale_set_total_tick_count(this->scale_feed, this->max_feed / 1000 + 1);
@@ -230,13 +256,15 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_obj_set_height(this->scale_feed, 30);
     lv_obj_set_width(this->scale_feed, LV_PCT(100));
 
-    lv_obj_t* label_spindle_rpm = lv_label_create(this->left_side);
+    lv_obj_t* label_spindle_rpm = lv_label_create(left_side);
     lv_label_set_text(label_spindle_rpm, "Spindle (RPM):");
-    lv_obj_set_style_text_font(label_spindle_rpm, &lv_font_montserrat_12, LV_STATE_DEFAULT);
-    HandwheelSlider* slider_spindle_rpm = new HandwheelSlider(this->left_side, this->interface);
+    lv_obj_set_style_text_font(label_spindle_rpm, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    HandwheelSlider* slider_spindle_rpm_cl = new HandwheelSlider(left_side);
+    lv_obj_t *slider_spindle_rpm = slider_spindle_rpm_cl->slider;
+
     lv_slider_set_range(slider_spindle_rpm, 0, this->spindle_max_rpm);
     no_margin_pad_border(slider_spindle_rpm);
-    style(slider_spindle_rpm, {{"margin", {0, 18}}});
+    style(slider_spindle_rpm, {{"margin", st_tup(0, 18)}});
     lv_obj_set_height(slider_spindle_rpm, 18);
     lv_obj_set_width(slider_spindle_rpm, LV_PCT(100));
     lv_obj_set_style_margin_bottom(slider_spindle_rpm, 0, LV_STATE_DEFAULT);
@@ -245,11 +273,11 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_obj_add_style(slider_spindle_rpm, &style_indic, LV_PART_INDICATOR);
     lv_obj_set_style_radius(slider_spindle_rpm, 3, LV_PART_MAIN);
 
-    this->scale_spindle_rpm = lv_scale_create(this->left_side);
+    this->scale_spindle_rpm = lv_scale_create(left_side);
     lv_scale_set_mode(this->scale_spindle_rpm, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
     lv_scale_set_total_tick_count(this->scale_spindle_rpm, this->spindle_max_rpm / 1000 + 1);
     no_margin_pad_border(this->scale_spindle_rpm);
-    style(this->scale_spindle_rpm, {{"margin", {0, 18}}});
+    style(this->scale_spindle_rpm, {{"margin", st_tup(0, 18)}});
     lv_scale_set_major_tick_every(this->scale_spindle_rpm, 5);
     lv_scale_set_label_show(this->scale_spindle_rpm, true);
     lv_scale_set_range(this->scale_spindle_rpm, 0, this->spindle_max_rpm / 1000);
@@ -257,7 +285,7 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_obj_set_width(this->scale_spindle_rpm, LV_PCT(100));
 
     // Material and End Mill Dropdowns.
-    lv_obj_t* mat_end_container = container_row(this->left_side, 0, 0);
+    lv_obj_t* mat_end_container = container_row(left_side, 0, 0);
     lv_obj_set_style_pad_bottom(mat_end_container, 5, LV_STATE_DEFAULT);
     this->material_dd = lv_dropdown_create(mat_end_container);
     std::string matOptions;
@@ -271,12 +299,12 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_obj_set_width(this->mill_dd, LV_PCT(25));
 
     lv_obj_add_event_cb(this->material_dd, [](lv_event_t* e) {
-        MachineStatusMeter* self = (MachineStatusMeter*)lv_obj_get_user_data(lv_event_get_target(e));
+        MachineStatusMeter* self = (MachineStatusMeter*) lv_event_get_user_data(e);
         self->_mat_dd_change(e);
     }, LV_EVENT_VALUE_CHANGED, this);
 
     lv_obj_add_event_cb(this->mill_dd, [](lv_event_t* e) {
-        MachineStatusMeter* self = (MachineStatusMeter*)lv_obj_get_user_data(lv_event_get_target(e));
+        MachineStatusMeter* self = (MachineStatusMeter*) lv_event_get_user_data(e);
         self->_mill_dd_change(e);
     }, LV_EVENT_VALUE_CHANGED, this);
 
@@ -287,10 +315,10 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_dropdown_set_options(this->flute_dd, "1F\n2F\n3F\n4F");
 
     // Chip Load.
-    lv_obj_t* chip_ld_container = container_col(this->left_side, 0, 0);
+    lv_obj_t* chip_ld_container = container_col(left_side, 0, 0);
     lv_obj_set_height(chip_ld_container, 60);
     non_scrollable(chip_ld_container);
-    style(chip_ld_container, {{"padding", {0, 18}}});
+    style(chip_ld_container, {{"padding", st_tup(0, 18)}});
 
     // Label.
     lv_obj_t* label_spindle_chip = lv_label_create(chip_ld_container);
@@ -301,7 +329,7 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     lv_obj_t* chip_ldmc = container_col(chip_ld_container, 0, 0);
     lv_obj_set_flex_grow(chip_ldmc, 1);
     non_scrollable(chip_ldmc);
-    style(chip_ldmc, {{"padding", {0, 18}}});
+    style(chip_ldmc, {{"padding", st_tup(0, 18)}});
 
     // Chip Load Bar.
     double cl_min = 0.3;
@@ -310,14 +338,14 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     this->bar_cl = lv_bar_create(chip_ldmc);
     lv_bar_set_range(this->bar_cl, 0, 50);
     no_margin_pad_border(this->bar_cl);
-    style(this->bar_cl, {{"padding", {5, 0}}, {"bg_opa", 0}});
+    style(this->bar_cl, {{"padding", st_tup(5, 0)}, {"bg_opa", 0}});
     lv_obj_set_height(this->bar_cl, 18);
     lv_obj_set_width(this->bar_cl, LV_PCT(100));
     lv_obj_set_style_margin_bottom(this->bar_cl, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_bottom(this->bar_cl, 0, LV_STATE_DEFAULT);
     lv_obj_add_flag(this->bar_cl, LV_OBJ_FLAG_ADV_HITTEST);
 
-    lv_style_t style_barc;
+    static lv_style_t style_barc;
     lv_style_init(&style_barc);
     lv_style_set_bg_opa(&style_barc, LV_OPA_COVER);
     lv_style_set_bg_color(&style_barc, lv_color_make(0, 220, 0));
@@ -343,32 +371,47 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
     no_margin_pad_border(this->scale_spindle_chipload);
     lv_obj_add_style(this->scale_spindle_chipload, &style_barc, LV_PART_INDICATOR);
 
-    auto style_sec = [](lv_obj_t* bar, int low, int high, lv_color_t color) {
-        lv_style_t st;
-        lv_style_init(&st);
-        lv_style_set_line_color(&st, color);
-        lv_style_set_bg_color(&st, color);
-        lv_scale_section_dsc_t* sec = lv_scale_add_section(bar);
+    // Style a secion.
+    auto style_sec = [](lv_obj_t* bar, int low, int high, lv_color_t color, lv_style_t *style, lv_style_t *style_main) {
+        lv_style_init(style);
+        lv_style_set_line_color(style, color);
+        lv_style_set_bg_color(style, color);
+        lv_scale_section_t* sec = lv_scale_add_section(bar);
         lv_scale_section_set_range(sec, low, high);
-        lv_scale_section_set_style(sec, LV_PART_INDICATOR, &st);
-        lv_scale_section_set_style(sec, LV_PART_ITEMS, &st);
+        lv_scale_section_set_style(sec, LV_PART_INDICATOR, style);
+        lv_scale_section_set_style(sec, LV_PART_ITEMS, style);
         lv_style_t stm;
-        lv_style_init(&stm);
-        lv_style_set_line_color(&stm, color);
-        lv_style_set_bg_color(&stm, color);
-        lv_scale_section_set_style(sec, LV_PART_MAIN, &stm);
+        lv_style_init(style_main);
+        lv_style_set_line_color(style_main, color);
+        lv_style_set_bg_color(style_main, color);
+        lv_scale_section_set_style(sec, LV_PART_MAIN, style_main);
     };
 
-    style_sec(this->scale_spindle_chipload, 0, round(50 * cl_min), lv_color_make(0, 120, 120));
+    static lv_style_t style_sec_yellow, style_yellow_main;
+    style_sec(this->scale_spindle_chipload, 
+              0, 
+              round(50 * cl_min), 
+              lv_color_make(0, 120, 120), 
+              &style_sec_yellow, 
+              &style_yellow_main);
+
+    static lv_style_t style_sec_green, style_green_main;
     style_sec(this->scale_spindle_chipload,
               round(50 * cl_min),
               round(50 * cl_max),
-              lv_color_make(0, 220, 0));
-    style_sec(this->scale_spindle_chipload, round(50 * cl_max), 50,
-              lv_color_make(0, 0, 220));
+              lv_color_make(0, 220, 0),
+              &style_sec_green,
+              &style_green_main);
+    static lv_style_t style_sec_red, style_sec_red_main;
+    style_sec(this->scale_spindle_chipload,
+              round(50 * cl_max), 
+              50,
+              lv_color_make(0, 0, 220),
+              &style_sec_red,
+              &style_sec_red_main);
 
-    this->update_layout();
-    lv_obj_update_layout(this->left_side);
+    lv_obj_update_layout(self);
+    lv_obj_update_layout(left_side);
 
     // Machine Coordinates.
     std::vector<std::string> coords = MachinePositionWCS::DEFAULT_COORD_SYSTEMS;
@@ -378,8 +421,8 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
                                        this->interface, 6,
                                        coords);
 
-    lv_obj_align_to(this->position, this->right_side, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_margin_top(this->position, 20, LV_STATE_DEFAULT);
+    lv_obj_align_to(this->position->self, this->right_side, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_margin_top(this->position->self, 20, LV_STATE_DEFAULT);
 
     for (size_t i = 0; i < this->axes.size(); ++i) {
         lv_obj_t* btn = lv_button_create(this->right_side);
@@ -391,16 +434,16 @@ MachineStatusMeter::MachineStatusMeter(lv_obj_t* parent, Interface* interface, i
         MachineInterface* machine = this->interface->machine;
 
         lv_obj_add_event_cb(btn, [](lv_event_t* e) {
-              lv_obj_t* btn = lv_event_get_target(e);
+              lv_obj_t* btn = evt_target_obj(e);
               MachineStatusMeter* self = (MachineStatusMeter*)lv_obj_get_user_data(btn);
               MachineInterface* machine = self->interface->machine;
               size_t i = (size_t)lv_obj_get_index(btn);
-              machine->set_wcs_zero(machine->wcs, {self->axes[i]});
+              machine->setWcsZero(machine->wcs, {self->axes[i]});
           }, LV_EVENT_CLICKED, this);
 
         lv_obj_add_flag(btn, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
         lv_obj_set_user_data(btn, this);
-        lv_obj_set_index(btn, i);
+        lv_obj_move_to_index(btn, i);
         this->set_wcs_btns.push_back(btn);
     }
 }

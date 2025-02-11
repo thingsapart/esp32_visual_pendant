@@ -1,6 +1,5 @@
 // dialogs.cpp
 #include "ui/dialogs.hpp"
-#include "ui/event_handler.hpp"
 
 #include <iostream> //Used for Serial out
 #include <map>

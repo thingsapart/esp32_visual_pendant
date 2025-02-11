@@ -28,7 +28,7 @@ public:
     void setAxis(const std::string& ax);
     void setAxisVis(const std::string& ax);
     std::string nextAxis();
-    void addAxisChangeDb(void (*cb)(const std::string&));
+    void addAxisChangeCb(std::function<void (const std::string&)> cb);
     void connectionList();
     void updatePosLabels(const std::vector<float>& vals);
     bool axisSelected();
@@ -52,7 +52,7 @@ private:
     std::string axis;
     int axis_id;
     int last_rotary_pos;
-    std::vector<void (*)(const std::string&)> axis_change_cb;
+    std::vector<std::function<void (const std::string&)>> axis_change_cb;
 
     lv_obj_t* axis_btns;
     lv_obj_t* arc;

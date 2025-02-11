@@ -9,6 +9,7 @@
 
 #include "machine/machine_interface.hpp"
 #include "ui/tab_jog.hpp"
+#include "ui/tab_machine.hpp"
 #include "ui/debug.hpp"
 
 // Forward declarations for the UI classes
@@ -34,7 +35,7 @@ public:
 
     TabJog* tab_jog;
     // TabProbe* tab_probe;
-    // TabMachine* tab_machine;
+    TabMachine* tab_machine;
 private:
     void init_fonts();
     void fs_init();

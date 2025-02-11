@@ -8,7 +8,8 @@
 #include <map>
 
 #include "machine/machine_interface.hpp"
-#include "ui/interface.hpp"
+
+class Interface;
 
 class MachinePositionWCS {
 public:

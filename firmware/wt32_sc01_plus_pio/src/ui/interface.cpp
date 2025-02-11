@@ -26,11 +26,11 @@ Interface::Interface(MachineInterface* machine) : machine(machine) {
 Interface::~Interface() {
     if (tab_jog != nullptr) delete tab_jog;
     // if (tab_probe != nullptr) delete tab_probe;
-    // if (tab_machine != nullptr) delete tab_machine;
+    if (tab_machine != nullptr) delete tab_machine;
 
-    // if(font_lcd != nullptr) lv_font_delete(font_lcd);
-    // if(font_lcd_18 != nullptr) lv_font_delete(font_lcd_18);
-    // if(font_lcd_24 != nullptr) lv_font_delete(font_lcd_24);
+    if(font_lcd != nullptr) lv_binfont_destroy(font_lcd);
+    if(font_lcd_18 != nullptr) lv_binfont_destroy(font_lcd_18);
+    if(font_lcd_24 != nullptr) lv_binfont_destroy(font_lcd_24);
 }
 
 bool Interface::processWheelTick(int32_t diff) {
@@ -85,6 +85,7 @@ void Interface::fs_init() {
 }
 
 void Interface::init_main_tabs() {
+    _d(0, "Initializing Tabs");
     main_tabs = lv_tabview_create(scr);
     lv_obj_t* tabv = main_tabs;
     lv_tabview_set_tab_bar_size(tabv, TAB_HEIGHT);
@@ -98,7 +99,8 @@ void Interface::init_main_tabs() {
     tab_tool = lv_tabview_add_tab(tabv, "Tools");
     tab_cam = lv_tabview_add_tab(tabv, "CAM");
 
+    _d(0, "Initializing Tab Objects");
     this->tab_jog = new TabJog(tabv, this, tab_jog);
     //this->tab_probe = new TabProbe(tabv, this, tab_probe);
-    //this->tab_machine = new TabMachine(tabv, this, tab_machine);
+    this->tab_machine = new TabMachine(tabv, this, tab_machine);
 }

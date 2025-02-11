@@ -1,5 +1,9 @@
 #include "modals.hpp"
-#include "ui/dialogs.hpp" // Assuming this is where your ui.dialogs.button_dialog function resides
+
+#include <string>
+
+#include "ui/dialogs.hpp"
+#include "ui/event_handler.hpp"
 
 // Global variable definition
 bool active_modal = false;
@@ -17,20 +21,22 @@ lv_obj_t* home_modal(Interface* interface) {
     active_modal = true;
     const char* title = "Machine not homed";
     const char* text = "\nHome machine now?\n";
-    std::vector<const char*> btns = {"Home All", "Cancel"};
+    std::vector<std::string> btns = {"Home All", "Cancel"};
+    
+    lv_obj_t* mbox = nullptr;
 
     // Define callbacks using std::function.
-    std::vector<std::function<void(lv_obj_t*)>> cbs = {
-        [interface](lv_obj_t* mbox) {
+    std::vector<evt_handler_t> cbs = {
+        [interface, mbox](lv_event_t* e) {
             close_modal(mbox);
             interface->machine->homeAll();
         },
-        [](lv_obj_t* mbox) {
+        [mbox](lv_event_t* e) {
             close_modal(mbox);
         }
     };
 
-    lv_obj_t* mbox = button_dialog(title, text, false, btns, cbs);
+    mbox = button_dialog(title, text, false, btns, cbs);
     return mbox;
 }
 

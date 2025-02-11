@@ -21,5 +21,8 @@ env.AddTarget(
     group="Analyze"
 )
 
+print('Adding CPP flags: -Wno-deprecated-enum-enum-conversion') 
+env.Append(CXXFLAGS=['-Wno-deprecated-enum-enum-conversion'])
+env.Append(CPPFLAGS=['-Wno-deprecated-enum-enum-conversion'])
 
-print('=====================================')
+print('=====================================>')

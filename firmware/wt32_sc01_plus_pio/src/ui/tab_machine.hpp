@@ -1,0 +1,74 @@
+// TabMachine.h
+#ifndef TABMACHINE_H
+#define TABMACHINE_H
+
+#include <Arduino.h>
+#include <lvgl.h>
+#include <vector>
+#include <string>
+#include <map>
+#include <functional>
+
+#include "machine/machine_interface.hpp"
+#include "ui/file_list.hpp"
+#include "ui/machine_position.hpp"
+#include "ui/interface.hpp"
+
+class MachineStatusMeter {
+public:
+    MachineStatusMeter(lv_obj_t* parent, Interface* interface, int spindle_max_rpm, int max_feed);
+
+    lv_obj_t *self;
+    MachinePositionWCS* position;
+private:
+    static const std::map<std::string, std::map<std::string, std::vector<double>>> CHIP_LOAD_RANGES;
+
+    int spindle_max_rpm;
+    int max_feed;
+    Interface* interface;
+
+    lv_obj_t* left_side;
+    lv_obj_t* right_side;
+    lv_obj_t* scale_feed;
+    lv_obj_t* bar_feed;
+    lv_obj_t* bar_cl;
+    lv_obj_t* scale_spindle_rpm;
+    lv_obj_t* scale_spindle_chipload;
+    lv_obj_t* material_dd;
+    lv_obj_t* mill_dd;
+    lv_obj_t* flute_dd;
+    std::vector<std::string> axes;
+    std::vector<lv_obj_t*> set_wcs_btns;
+
+    void _mill_dd_change(lv_event_t* e);
+    void _mat_dd_change(lv_event_t* e);
+};
+
+class TabMachine {
+public:
+    TabMachine(lv_obj_t* tabv, Interface* interface, lv_obj_t* tab);
+
+    FileList jobs_list;
+    FileList macro_list;
+    MachineStatusMeter mach_meter;
+private:
+    lv_obj_t* tab;
+    Interface* interface;
+
+    lv_obj_t* main_tabs;
+    lv_obj_t* tab_status;
+    lv_obj_t* tab_macros;
+    lv_obj_t* tab_jobs;
+    lv_obj_t* float_btn;
+
+    void init_axis_float_btn();
+    void init_machine_tabv(lv_obj_t* parent);
+    void init_tab_status(lv_obj_t* tab);
+    void init_tab_jobs(lv_obj_t* tab);
+    void init_tab_macros(lv_obj_t* tab);
+
+    void _gcode_clicked(const std::string& file);
+    void _macro_clicked(const std::string& file);
+};
+
+#endif

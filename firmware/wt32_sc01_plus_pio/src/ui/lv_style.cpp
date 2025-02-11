@@ -145,7 +145,8 @@ int pl_color(const char* name, const char* palette) {
 }
 
 std::vector<int> _style_spread(int v) {
-    return {v, v, v, v};
+    quat_uint7 vv = { .full_value = v };
+    return { (int) vv.parts.top, (int) vv.parts.right, (int) vv.parts.bottom, (int) vv.parts.left };
 }
 
 std::vector<int> _style_spread(const std::vector<int>& v) {

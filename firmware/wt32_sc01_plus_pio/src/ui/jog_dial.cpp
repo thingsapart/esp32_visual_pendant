@@ -136,7 +136,7 @@ std::string JogDial::nextAxis() {
     return axis;
 }
 
-void JogDial::addAxisChangeDb(void (*cb)(const std::string&)) {
+void JogDial::addAxisChangeCb(std::function<void (const std::string&)> cb) {
     axis_change_cb.push_back(cb);
 }
 
