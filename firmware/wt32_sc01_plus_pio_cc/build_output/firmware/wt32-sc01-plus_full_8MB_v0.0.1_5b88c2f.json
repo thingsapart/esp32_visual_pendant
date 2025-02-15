@@ -1,0 +1,19 @@
+{
+    "name": "openHASP",
+    "version": "v0.0.1",
+    "home_assistant_domain": "openhasp",
+    "funding_url": "https://ko-fi.com/openhasp",
+    "new_install_prompt_erase": true,
+    "builds": [
+        {
+            "chipFamily": "ESP32-S3",
+            "improv": false,
+            "parts": [
+                {
+                    "path": "wt32-sc01-plus_full_8MB_v0.0.1_5b88c2f.json",
+                    "offset": 0
+                }
+            ]
+        }
+    ]
+}
