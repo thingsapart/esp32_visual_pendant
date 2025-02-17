@@ -24,7 +24,6 @@ typedef enum {
     JOB_STATUS           = (1 << 8),
     LIST_FILES           = (1 << 9),
     LIST_MACROS          = (1 << 10),
-    // Add more states as needed, up to 32 total (using all bits of uint32_t)
 } poll_state_t;
 
 typedef enum {
@@ -75,10 +74,12 @@ typedef struct sensors_changed_callback_t { void *user_data; machine_callback_t 
 typedef struct dialogs_changed_callback_t { void *user_data; machine_callback_t cb_fn; } dialogs_changed_callback_t;
 typedef struct spindles_tools_changed_callback_t { void *user_data; machine_callback_t cb_fn; } spindles_tools_changed_callback_t;
 typedef struct connected_callback_t { void *user_data; machine_callback_t cb_fn; } connected_callback_t;
+
+typedef void (* files_changed_callback_cb_t)(machine_interface_t *mach, void *self, const char *path, const char **files);
 typedef struct files_changed_callback_t {
     const char *path;
     void *user_data;
-    void (*cb_fn)(machine_interface_t *mach, void *self, const char *path, const char **files);
+    files_changed_callback_cb_t cb_fn;
 } files_changed_callback_t;
 
 // --- G-code Queue ---
@@ -144,7 +145,7 @@ typedef struct machine_interface_t {
     dialogs_changed_callback_t dialogs_changed_cb[MAX_CALLBACKS];
     spindles_tools_changed_callback_t spindles_tools_changed_cb[MAX_CALLBACKS];
     connected_callback_t connected_changed_cb[MAX_CALLBACKS];
-    files_changed_callback_t files_changed_cbs[MAX_CALLBACKS];
+    files_changed_callback_t files_changed_cb[MAX_CALLBACKS];
 
     // --- Internal State ---
     int polli;
@@ -169,7 +170,7 @@ typedef struct machine_interface_t {
     void (*set_wcs)(machine_interface_t *self, int wcs);
     void (*set_wcs_zero)(machine_interface_t *self, int wcs, const char *axes);
     void (*next_wcs)(machine_interface_t *self);
-    const char* (*debug_print)(machine_interface_t *self);
+    char* (*debug_print)(machine_interface_t *self);
     // Add other "virtual" methods here
 } machine_interface_t;
 
@@ -201,6 +202,10 @@ void machine_interface_update_position(machine_interface_t *self, float *values,
 bool machine_interface_is_continuous_move(machine_interface_t *self);
 uint32_t machine_interface_next_poll_state(machine_interface_t *self);
 
+bool machine_interface_add_files_changed_cb(machine_interface_t *self, const char *path, void *user_data, files_changed_callback_cb_t cb);
+
+// <type>_add_<callback_name>_cb(<tye> *self, void *user_data, <callback_t> callback);
+// => eg machine_interface_add_state_changed_cb(...), machine_interface_add_pos_changed_cb(...).
 #define add_callback_proto(type, cbs_name) \
 bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data, machine_callback_t cb);
 

@@ -4,38 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ui/tab_jog.h"
+#include "ui/tab_probe.h"
+#include "ui/tab_machine.h"
 #include "ui_helpers.h"
+
+#include "debug.h"
 
 // #include "fs_driver.h"  // Include your fs_driver implementation
 
 // --- Helper Functions ---
-
-// Placeholder for fs_driver_register.  You'll need your actual implementation.
-// This is just to make the code compile.
-static void fs_driver_register(lv_fs_drv_t *drv, char letter) {
-    // Replace this with your actual fs_driver registration code
-    // This is highly platform-specific (ESP-IDF, Arduino, etc.)
-    // You need to implement the file system driver callbacks (open, close, read, write, seek, etc.)
-    // and register them with LVGL.
-
-     // Example (very basic, doesn't actually do anything):
-    drv->letter = letter;
-    drv->ready_cb = NULL;
-    drv->open_cb = NULL;
-    drv->close_cb = NULL;
-    drv->read_cb = NULL;
-    drv->write_cb = NULL;
-    drv->seek_cb = NULL;
-    drv->tell_cb = NULL;
-    drv->dir_open_cb = NULL;
-    drv->dir_read_cb = NULL;
-    drv->dir_close_cb = NULL;
-    drv->user_data = NULL;
-
-    lv_fs_drv_register(drv); // Register with LVGL
-
-    printf("fs_driver_register placeholder called for letter '%c'\n", letter);
-}
 
 // --- Interface Implementation ---
 
@@ -69,21 +47,19 @@ void interface_deinit(interface_t *interface) {
     if (!interface) return;
 
     // Clean up resources:
-    // 1. Delete LVGL objects
      if (interface->main_tabs) {
         lv_obj_del(interface->main_tabs); // This will delete child tabs as well
     }
 
-    // 2. Destroy custom objects like TabJog, TabProbe, TabMachine (if they exist)
     if (interface->tab_jog) {
         // tab_jog_destroy(interface->tab_jog);  // Implement this in jog_ui.c/.h
     }
-    //  if (interface->tab_probe) {
-    //      tab_probe_destroy(interface->tab_probe);
-    //  }
-    //  if (interface->tab_machine) {
-    //     tab_machine_destroy(interface->tab_machine);
-    //  }
+    if (interface->tab_probe) {
+        tab_probe_destroy(interface->tab_probe);
+    }
+    if (interface->tab_machine) {
+         tab_machine_destroy(interface->tab_machine);
+    }
 
     // 3. Free dynamically allocated fonts (if loaded successfully)
     if (interface->font_lcd) {
@@ -107,8 +83,32 @@ void interface_destroy(interface_t *interface) {
 
 
 void interface_fs_init(interface_t *interface) {
-    lv_fs_drv_init(&interface->fs_drv);  // Initialize the file system driver struct
-    fs_driver_register(&interface->fs_drv, 'S'); // Register the driver (replace with your implementation)
+    #ifdef ESP32_HW
+        lv_fs_arduino_esp_littlefs_init();
+    #elif POSIX
+        _d(0, "Loading FS...");
+        lv_fs_posix_init();
+
+        #if 0
+        lv_fs_dir_t dir;
+        char buf[200];
+        printf("Letters: %s\n", lv_fs_get_letters(buf));
+        lv_fs_res_t res;
+        if ((res = lv_fs_dir_open(&dir, "S:/img")) == LV_FS_RES_OK) {
+            while (lv_fs_dir_read(&dir, buf, 200) == LV_FS_RES_OK && buf[0] != '\0') {
+                _df(0, "%s\n", buf);
+            }
+            lv_fs_dir_close(&dir);
+        } else {
+            _df(0, "FAILED to open S: %d\n", res);
+        }
+        #endif
+        lv_fs_file_t fp;
+        printf("FILE OPEN: %d\n", lv_fs_open(&fp, "S:/img/arr_s.png", LV_FS_MODE_RD));
+        lv_fs_close(&fp);
+
+        _d(0, "[done]");
+    #endif
 }
 
 void interface_init_fonts(interface_t *interface) {
@@ -145,14 +145,6 @@ void interface_init_fonts(interface_t *interface) {
     }
 }
 
-bool interface_process_wheel_tick(interface_t *interface, int diff) {
-    if (!interface || !interface->wheel_tick) {
-        return false;
-    }
-    interface->wheel_tick(diff);
-    return true;
-}
-
 void interface_init_main_tabs(interface_t *interface) {
     // interface->main_tabs = lv_tabview_create(interface->scr, LV_DIR_TOP, TAB_HEIGHT);
     lv_obj_t *tabv = interface->main_tabs = TABV("itf:main_tabv", interface->scr,
@@ -166,8 +158,7 @@ void interface_init_main_tabs(interface_t *interface) {
     }
 
     lv_obj_t *tab_content = lv_tabview_get_content(tabv);
-     if (!tab_content)
-     {
+     if (!tab_content) {
         LV_LOG_ERROR("tabview get_content() failed");
         return;
      }
@@ -182,8 +173,8 @@ void interface_init_main_tabs(interface_t *interface) {
     interface->tab_cam = lv_tabview_add_tab(tabv, "CAM");
 
     interface->tab_jog = tab_jog_create(tabv, interface, tab_jog);
-    // interface->tab_probe = tab_probe_create(tabv, interface, tab_probe);      // will implement.
-    // interface->tab_machine = tab_machine_create(tabv, interface, tab_machine);  // will implement.
+    interface->tab_probe = tab_probe_create(tabv, interface, tab_probe);
+    interface->tab_machine = tab_machine_create(tabv, interface, tab_machine);
 }
 
 

@@ -8,6 +8,8 @@
 #include <ctype.h>
 #include <math.h>  // For fabs()
 
+#include "debug.h"
+
 // --- Helper Functions ---
 
 static void trim_string(char *str) {
@@ -43,44 +45,44 @@ static void parse_gcode_line(duet_simulator_t *sim, const char *gcode_line) {
     if (strcmp(command, "G28") == 0) {
          // Simple homing simulation:  set all axes to homed and position to 0.
         for (int i = 0; i < 3; i++) {
-            sim->axes_homed[i] = true;
-            sim->pos[i] = 0.0f;
-             sim->base.wcs_position[i] =  sim->wcs_offsets[sim->wcs][i];
+            sim->base.axes_homed[i] = true;
+            sim->base.position[i] = 0.0f;
+             sim->base.wcs_position[i] =  sim->wcs_offsets[sim->base.wcs][i];
         }
         machine_interface_home_updated(&sim->base);
         machine_interface_position_updated(&sim->base);
 
     } else if (strcmp(command, "G53") == 0) {
-        sim->wcs = 0; // Machine Coordinate System
+        sim->base.wcs = 0; // Machine Coordinate System
          machine_interface_wcs_updated(&sim->base);
     }  else if (strncmp(command, "G54", 3) == 0) {
-        sim->wcs = 1;
+        sim->base.wcs = 1;
         machine_interface_wcs_updated(&sim->base);
     } else if (strncmp(command, "G55", 3) == 0) {
-        sim->wcs = 2;
+        sim->base.wcs = 2;
         machine_interface_wcs_updated(&sim->base);
     } else if (strncmp(command, "G56", 3) == 0) {
-        sim->wcs = 3;
+        sim->base.wcs = 3;
         machine_interface_wcs_updated(&sim->base);
     } else if (strncmp(command, "G57", 3) == 0) {
-       sim->wcs = 4;
+       sim->base.wcs = 4;
        machine_interface_wcs_updated(&sim->base);
     } else if (strncmp(command, "G58", 3) == 0) {
-       sim->wcs = 5;
+       sim->base.wcs = 5;
        machine_interface_wcs_updated(&sim->base);
     } else if (strncmp(command, "G59", 3) == 0) {
         // Check for G59, G59.1, G59.2, G59.3
         if (strlen(command) == 3) {
-            sim->wcs = 6; // G59
+            sim->base.wcs = 6; // G59
             machine_interface_wcs_updated(&sim->base);
         } else if (strcmp(command, "G59.1") == 0) {
-            sim->wcs = 7;
+            sim->base.wcs = 7;
             machine_interface_wcs_updated(&sim->base);
         } else if (strcmp(command, "G59.2") == 0) {
-           sim->wcs = 8;
+           sim->base.wcs = 8;
            machine_interface_wcs_updated(&sim->base);
         } else if (strcmp(command, "G59.3") == 0) {
-          sim->wcs = 9;
+          sim->base.wcs = 9;
           machine_interface_wcs_updated(&sim->base);
         }
     } else if (strcmp(command, "G10") == 0) {
@@ -125,7 +127,7 @@ static void parse_gcode_line(duet_simulator_t *sim, const char *gcode_line) {
         {
              // apply the offset relative to the current position
             for (int i = 0; i < 3; i++) {
-                  sim->wcs_offsets[wcs_index][i] = offsets[i] - sim->pos[i];
+                  sim->wcs_offsets[wcs_index][i] = offsets[i] - sim->base.position[i];
             }
            
             printf("Setting WCS offsets for index %d: X=%.3f, Y=%.3f, Z=%.3f\n", wcs_index, sim->wcs_offsets[wcs_index][0], sim->wcs_offsets[wcs_index][1], sim->wcs_offsets[wcs_index][2]);
@@ -137,11 +139,11 @@ static void parse_gcode_line(duet_simulator_t *sim, const char *gcode_line) {
         char *token = strtok(NULL, " "); // Start parsing arguments from the rest of the line
          while (token != NULL) {
             if (token[0] == 'X') {
-                sim->pos[0] = atof(token + 1);
+                sim->base.position[0] = atof(token + 1);
             } else if (token[0] == 'Y') {
-               sim->pos[1] = atof(token + 1);
+               sim->base.position[1] = atof(token + 1);
             } else if (token[0] == 'Z') {
-               sim->pos[2] = atof(token + 1);
+               sim->base.position[2] = atof(token + 1);
             } // TODO: handle other axes/args.
              token = strtok(NULL, " ");
         }
@@ -151,6 +153,8 @@ static void parse_gcode_line(duet_simulator_t *sim, const char *gcode_line) {
 }
 
 static void duet_send_gcode(machine_interface_t *self, const char *gcode, uint32_t poll_state) {
+    _df(0, "SENDING GCODE: %s\n", gcode);
+
     // In a real implementation, you'd send the G-code to the Duet via UART.
     // Here, we'll just parse it and update the simulator's state.
     duet_simulator_t *sim = (duet_simulator_t *)self;  // Cast to the derived type
@@ -352,12 +356,12 @@ static void duet_next_wcs(machine_interface_t *self)
     duet_set_wcs(self, next_wcs);
 }
 
-static const char* duet_debug_print(machine_interface_t *self)
+static char* duet_debug_print(machine_interface_t *self)
 {
     duet_simulator_t *sim = (duet_simulator_t*) self;
     // Create a buffer for the debug string.
     #define DEBUG_BUFFER_SIZE 512
-    static char buffer[DEBUG_BUFFER_SIZE];  // Static to avoid stack overflow.
+    char *buffer = (char *) malloc(sizeof(char) * 512);
 
     snprintf(buffer, DEBUG_BUFFER_SIZE,
         "Duet Simulator:\n"
@@ -367,11 +371,11 @@ static const char* duet_debug_print(machine_interface_t *self)
         "  WCS: %s\n"
         "  Feed Multiplier: %.2f\n"
         ,
-        sim->pos[0], sim->pos[1], sim->pos[2],
+        self->position[0], self->position[1], self->position[2],
         self->wcs_position[0], self->wcs_position[1], self->wcs_position[2],
-        sim->axes_homed[0] ? "true" : "false", sim->axes_homed[1] ? "true" : "false", sim->axes_homed[2] ? "true" : "false",
+        self->axes_homed[0] ? "true" : "false", self->axes_homed[1] ? "true" : "false", sim->base.axes_homed[2] ? "true" : "false",
         machine_interface_get_wcs_str(self, self->wcs),
-        sim->feed_multiplier
+        self->feed_multiplier
     );
     return buffer;
 
@@ -386,17 +390,17 @@ static void duet_update_machine_state(machine_interface_t *mach, uint32_t poll_s
 
      if (poll_state & MACHINE_POSITION) {
          // Simulate response to M409 K"move.axes"
-          float x = self->pos[0];
-          float xwcs = self->wcs_offsets[self->wcs][0];
-          const char *xh = self->axes_homed[0] ? "true" : "false";
+          float x = self->base.position[0];
+          float xwcs = self->wcs_offsets[self->base.wcs][0];
+          const char *xh = self->base.axes_homed[0] ? "true" : "false";
           float xu = x + xwcs;
-          float y = self->pos[1];
-          const char *yh = self->axes_homed[1] ? "true" : "false";
-          float ywcs = self->wcs_offsets[self->wcs][1];
+          float y = self->base.position[1];
+          const char *yh = self->base.axes_homed[1] ? "true" : "false";
+          float ywcs = self->wcs_offsets[self->base.wcs][1];
           float yu = y + ywcs;
-          float z = self->pos[2];
-          const char *zh = self->axes_homed[2] ? "true" : "false";
-          float zwcs = self->wcs_offsets[self->wcs][2];
+          float z = self->base.position[2];
+          const char *zh = self->base.axes_homed[2] ? "true" : "false";
+          float zwcs = self->wcs_offsets[self->base.wcs][2];
           float zu = z + zwcs;
 
 
@@ -472,11 +476,11 @@ static void duet_update_machine_state(machine_interface_t *mach, uint32_t poll_s
          gcode_queue_push(&self->base.gcode_queue, response);
 
         // move.currentMove
-         snprintf(response, sizeof(response), "{\"key\":\"move.currentMove\",\"flags\":\"\",\"result\":{\"acceleration\":0,\"deceleration\":0,\"extrusionRate\":0,\"requestedSpeed\":%d,\"topSpeed\":%d}}\n", (int)self->feed_multiplier, 1000);
+         snprintf(response, sizeof(response), "{\"key\":\"move.currentMove\",\"flags\":\"\",\"result\":{\"acceleration\":0,\"deceleration\":0,\"extrusionRate\":0,\"requestedSpeed\":%d,\"topSpeed\":%d}}\n", (int)self->base.feed_multiplier, 1000);
          gcode_queue_push(&self->base.gcode_queue, response);
 
          //'move.speedFactor'
-         snprintf(response, sizeof(response), "{\"key\":\"move.speedFactor\",\"flags\":\"\",\"result\":%f}\n", self->feed_multiplier);
+         snprintf(response, sizeof(response), "{\"key\":\"move.speedFactor\",\"flags\":\"\",\"result\":%f}\n", self->base.feed_multiplier);
          gcode_queue_push(&self->base.gcode_queue, response);
 
          snprintf(response, sizeof(response), "{\"key\":\"job\",\"flags\":\"d3\",\"result\":{\"file\":{\"filament\":[],\"height\":0,\"layerHeight\":0,\"numLayers\":0,\"size\":0,\"thumbnails\":[]},\"filePosition\":0,\"lastDuration\":0,\"lastWarmUpDuration\":0,\"timesLeft\":{}}}\n");
@@ -491,7 +495,7 @@ static void duet_update_machine_state(machine_interface_t *mach, uint32_t poll_s
           snprintf(response, sizeof(response), "{\"key\":\"sensors.endstops[]\",\"flags\":\"\",\"result\":[null,null,null],\"next\":0}\n");
           gcode_queue_push(&self->base.gcode_queue, response);
 
-        snprintf(response, sizeof(response),  "{\"key\":\"move.workplaceNumber\",\"flags\":\"\",\"result\":%d}\n", self->wcs);
+        snprintf(response, sizeof(response),  "{\"key\":\"move.workplaceNumber\",\"flags\":\"\",\"result\":%d}\n", self->base.wcs);
           gcode_queue_push(&self->base.gcode_queue, response);
 
           snprintf(response, sizeof(response), "{\"key\":\"sensors.probes[].values[]\",\"flags\":\"\",\"result\":[0, 10],\"next\":0}\n");
@@ -516,15 +520,15 @@ duet_simulator_t *duet_simulator_create(uint16_t sleep_ms) {
 
     // Initialize Duet-specific state
     for (int i = 0; i < 3; i++) {
-        sim->pos[i] = 0.0f;
-        sim->axes_homed[i] = false;
+        sim->base.position[i] = 0.0f;
+        sim->base.axes_homed[i] = false;
          for (int j = 0; j < 10; j++)
          {
             sim->wcs_offsets[j][i] = 0.0f; // Initialize all WCS offsets to 0
          }
     }
-    sim->wcs = 0;  // Machine coordinates
-    sim->feed_multiplier = 1.0f;
+    sim->base.wcs = 0;  // Machine coordinates
+    sim->base.feed_multiplier = 1.0f;
 
 
     // Override the virtual methods with Duet-specific implementations

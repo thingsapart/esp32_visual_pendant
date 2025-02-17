@@ -213,6 +213,7 @@ void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
 
 #include "machine/machine_interface.h"
 #include "machine/machine_rrf.h"
+#include "ui/tab_jog.h"
 #include "ui/interface.h"
 #include "debug.h"
 
@@ -321,12 +322,16 @@ void read_core_dump() {
 
 extern "C" void test_ui(lv_obj_t *screen);
 
+#include "machine/arduino_serial_wrapper.h"
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 
   delay(1000);
   Serial.println("TESTING...");
+
+  add_standard_serial();
 
   _d(0, "LV_INIT");
   lv_init();
@@ -367,7 +372,7 @@ void setup() {
 
   _d(0, "Interface loaded..\n");
 
-  _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL))
+  _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
 }
 
 static unsigned int ctr = 0;
@@ -377,8 +382,9 @@ void loop() {
   delay(sleep_time);
   auto time_end = millis();
   if ((ctr++ % 10) == 0) {
-    _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL))
+    _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
   }
+
   if (!encoder.isUiMode()) {
     int diff = encoder.readAndReset();
     if (diff != 0) { 

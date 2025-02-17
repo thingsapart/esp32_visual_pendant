@@ -17,19 +17,6 @@ static const char *TAG = "machine_interface"; // Used for logging
 # include "freertos/task.h"
 #endif
 
-#define add_callback_fn(type, cbs_name) \
-bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data, machine_callback_t cb) { \
-    for (int i = 0; i < MAX_CALLBACKS; i++) { \
-        if (!self->cbs_name##_cb[i].cb_fn) { \
-            self->cbs_name##_cb[i].cb_fn = cb; \
-            self->cbs_name##_cb[i].user_data = user_data; \
-            return true; \
-        } \
-    } \
-    assert(0 && "Maximum number of callbacks reached"); \
-    return false; \
-}
-
 #define call_callbacks(cbs_name) do { \
     for (int i = 0; i < MAX_CALLBACKS; i++) { \
         if (self->cbs_name[i].cb_fn) { \
@@ -191,10 +178,10 @@ static void _default_next_wcs(machine_interface_t *self) {
     _default_set_wcs(self, self->wcs + 1);
 }
 
-static const char* _default_debug_print(machine_interface_t *self) {
+static char* _default_debug_print(machine_interface_t *self) {
     // Create a static buffer to hold the debug string.  This is thread-safe
     // because it's static and read-only after initialization.  Adjust size as needed.
-    static char debug_str[512];
+    char *debug_str = (char *) malloc(sizeof(char) * 512);
 
     snprintf(debug_str, sizeof(debug_str),
         "{ status: %d, homed: [%d, %d, %d], pos: [%f, %f, %f], wcs_pos: [%f, %f, %f], wcs: %d, tool: %s, feedm: %f, zoffs: %f, gcode_q_count: %zu, poll_state: %d }",
@@ -323,6 +310,7 @@ bool machine_interface_is_homed(machine_interface_t *self, const char *axes) {
             int axis_index = machine_interface_axis_idx(self, *p);
             if (axis_index >= 0 && axis_index < 3) {
                 if (!self->axes_homed[axis_index]) {
+                    _df(1,  "Axis not homed: %c", *p);
                     return false;
                 }
             } else {
@@ -449,8 +437,8 @@ void machine_interface_spindles_tools_updated(machine_interface_t *self) {
 
 void machine_interface_files_updated(machine_interface_t *self, const char *fdir) {
     for (int i = 0; i < MAX_CALLBACKS; i++) {
-        if (strcmp(fdir, self->files_changed_cbs[i].path) == 0) {
-           self->files_changed_cbs[i].cb_fn(self, self->files_changed_cbs[i].user_data, fdir, self->filelists[i].files);
+        if (strcmp(fdir, self->files_changed_cb[i].path) == 0) {
+           self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data, fdir, self->filelists[i].files);
         }
     }
 }
@@ -468,6 +456,31 @@ void machine_interface_update_position(machine_interface_t *self, float *values,
 
 bool machine_interface_is_continuous_move(machine_interface_t *self) {
     return !self->move_step;
+}
+
+bool machine_interface_add_files_changed_cb(machine_interface_t *self, const char *path, void *user_data, files_changed_callback_cb_t cb) {
+    for (int i = 0; i < MAX_CALLBACKS; i++) {
+        if (!self->files_changed_cb[i].cb_fn) {
+            self->files_changed_cb[i].cb_fn = cb;
+            self->files_changed_cb[i].user_data = user_data;
+            return true;
+        }
+    }
+    assert(0 && "Maximum number of callbacks reached");
+    return false;
+}
+
+#define add_callback_fn(type, cbs_name) \
+bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data, machine_callback_t cb) { \
+    for (int i = 0; i < MAX_CALLBACKS; i++) { \
+        if (!self->cbs_name##_cb[i].cb_fn) { \
+            self->cbs_name##_cb[i].cb_fn = cb; \
+            self->cbs_name##_cb[i].user_data = user_data; \
+            return true; \
+        } \
+    } \
+    assert(0 && "Maximum number of callbacks reached"); \
+    return false; \
 }
 
 add_callback_fn(machine_interface, state_change)

@@ -19,6 +19,8 @@ typedef struct machine_position_wcs_t machine_position_wcs_t;
 
 // JogDial related structures and enums
 
+extern const char *axes_options[];
+
 typedef enum {
     AXIS_X,
     AXIS_Y,

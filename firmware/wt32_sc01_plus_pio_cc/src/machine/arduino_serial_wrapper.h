@@ -50,6 +50,10 @@ int serial_peek(serial_handle_t handle);
 void serial_flush(serial_handle_t handle);
 size_t serial_read_bytes(serial_handle_t handle, uint8_t *buffer, size_t length);
 
+void add_standard_serial();
+
+serial_handle_t get_serial_handle(int uart_num);
+
 // Alloc's a string, caller is responsible for freeing it.
 char *serial_read_line(serial_handle_t handle);
 size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long timeout_ms);

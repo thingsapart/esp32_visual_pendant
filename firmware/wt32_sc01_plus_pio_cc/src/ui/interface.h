@@ -6,7 +6,8 @@
 #include <stdbool.h>
 
 #include "machine/machine_interface.h"
-#include "ui/tab_jog.h"
+// #include "ui/tab_jog.h"
+// #include "ui/tab_probe.h"
 
 // --- Constants ---
 
@@ -20,6 +21,10 @@
 
 typedef struct interface_t interface_t;
 
+struct tab_probe_t;
+struct tab_jog_t;
+struct tab_machine_t;
+
 typedef void (*machine_state_change_cb_t)(machine_interface_t *machine, void *user_data);
 
 struct interface_t {
@@ -30,17 +35,14 @@ struct interface_t {
     lv_font_t *font_lcd_18;
     lv_font_t *font_lcd_24;
     lv_obj_t *main_tabs;
-    tab_jog_t *tab_jog;
-  //  tab_probe_t *tab_probe;      // will implement
-  //  tab_machine_interface_t *tab_machine;  // will implement
+    struct tab_jog_t *tab_jog;
+    struct tab_probe_t *tab_probe;
+    struct tab_machine_t *tab_machine;
     lv_obj_t *tab_job_gcode;
-    lv_obj_t *tab_tool;          // repeated name in the py code, refactored.
+    lv_obj_t *tab_tool;
     lv_obj_t *tab_cam;
-    void (*wheel_tick)(int diff);  // Function pointer for wheel tick
-    lv_obj_t *wheel_tick_target;
-    machine_state_change_cb_t machine_change_cb; // Single callback for simplicity
-    void *machine_change_user_data;              // User data for the callback
-
+    machine_state_change_cb_t machine_change_cb;
+    void *machine_change_user_data;
 };
 
 // Function prototypes

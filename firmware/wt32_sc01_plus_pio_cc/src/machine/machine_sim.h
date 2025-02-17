@@ -15,10 +15,6 @@ typedef struct duet_simulator_t duet_simulator_t;
 struct duet_simulator_t {
     machine_interface_t base; // Inheritance-like structure
     // Add any Duet-specific state here
-    float pos[3];             // Machine position
-    bool axes_homed[3];
-    int wcs;
-    float feed_multiplier;
      float wcs_offsets[10][3]; // Simulate up to 10 WCS (G54-G59.3)
 };
 

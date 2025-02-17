@@ -16,7 +16,7 @@ static const feed_t feeds[] = {
 };
 static const size_t num_feeds = sizeof(feeds) / sizeof(feeds[0]);
 
-static const char *axes_options[] = {"X", "Y", "Z", "Off"};
+const char *axes_options[] = {"X", "Y", "Z", "Off"};
 static const size_t num_axes_options = sizeof(axes_options) / sizeof(axes_options[0]);
 static const char *axes_option_btns[] = {"X", "\n", "Y", "\n", "Z", "\n", "Off", NULL};
 
@@ -220,8 +220,8 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
     lv_obj_update_layout(jd->arc);
     _flag(jd->position->container, LV_OBJ_FLAG_IGNORE_LAYOUT, true);
     lv_obj_align_to(jd->position->container, jd->arc, LV_ALIGN_CENTER, 0, 0);
-    dbg_layout(jd->position->container);
-    dbg_layout(jd->arc);
+    // dbg_layout(jd->position->container);
+    // dbg_layout(jd->arc);
 
     //Initial state.
     jog_dial_set_axis_vis(jd, AXIS_OFF);

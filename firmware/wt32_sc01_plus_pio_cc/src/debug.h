@@ -8,11 +8,16 @@
 #define UI_DEBUG_LOG D_INFO
 
 #ifdef UI_DEBUG_LOG
+
+
 # if ESP32_HW
-#  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) { Serial.println(s); } } while (false)
-#  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { char __temp[1024]; snprintf(__temp, 1023, format, ##__VA_ARGS__); Serial.println(__temp); } }  while (false)
+#  include "machine/arduino_serial_wrapper.h"
+#  include <string.h>
+#  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) { serial_write(get_serial_handle(-1), (uint8_t*) s, strlen(s)); } } while (false)
+#  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { char __temp[1024]; snprintf(__temp, 1023, format, ##__VA_ARGS__); _d(lvl, __temp); } }  while (false)
 # else
-#  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) { printf(s); } } while (false)
+#  include <stdio.h>
+#  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) { printf("%s\n", s); } } while (false)
 #  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { printf(format, __VA_ARGS__); } } while (0)
 # endif
 #else

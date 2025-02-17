@@ -1,11 +1,17 @@
 #include "arduino_serial_wrapper.h"
+
+#include "Arduino.h"
 #include "HardwareSerial.h" // Include the Arduino HardwareSerial header
 #include <map>
 
 // Use a static std::map to store the HardwareSerial instances.
 // This is necessary because HardwareSerial is a C++ class, and we
 // need a way to manage instances from C.  The key is the UART number.
-static std::map<uint8_t, HardwareSerial*> serial_instances;
+static std::map<int, Stream*> serial_instances;
+
+void add_standard_serial() {
+    serial_instances[-1] = &Serial;
+}
 
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
     // Check if an instance already exists for this UART number
@@ -45,49 +51,49 @@ void serial_end(serial_handle_t handle) {
 
 size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size) {
     if (!handle) return 0;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->write(buffer, size);
 }
 
 int serial_read(serial_handle_t handle) {
     if (!handle) return -1;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->read();
 }
 
 size_t serial_available(serial_handle_t handle) {
     if (!handle) return 0;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->available();
 }
 
 size_t serial_available_for_write(serial_handle_t handle) {
     if (!handle) return 0;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->availableForWrite();
 }
 
 int serial_peek(serial_handle_t handle) {
     if (!handle) return -1;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->peek();
 }
 
 void serial_flush(serial_handle_t handle) {
     if (!handle) return;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     serial->flush();
 }
 
 size_t serial_read_bytes(serial_handle_t handle, uint8_t *buffer, size_t length) {
     if (!handle) return 0;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     return serial->readBytes(buffer, length);
 }
 
 char *serial_read_line(serial_handle_t handle) {
     if (!handle) return NULL;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     String sres = serial->readStringUntil('\n');
     size_t len = sres.length();
     const char *read = sres.c_str();
@@ -101,7 +107,7 @@ char *serial_read_line(serial_handle_t handle) {
 
 size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long timeout_ms) {
     if (!handle) return 0;
-    HardwareSerial* serial = (HardwareSerial*)handle;
+    Stream* serial = (Stream*)handle;
     serial->setTimeout(timeout_ms);
     String sres = serial->readStringUntil('\n');
     size_t slen = sres.length();
@@ -110,4 +116,8 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
     buf[slen] = '\0';
     serial->setTimeout(0);
     return slen;
+}
+
+serial_handle_t get_serial_handle(int uart_num) {
+    return serial_instances[uart_num];
 }

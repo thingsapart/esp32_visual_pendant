@@ -78,6 +78,9 @@
         "interface.h": "c",
         "esp_log.h": "c",
         "stdio.h": "c",
-        "ui_helpers.h": "c"
+        "ui_helpers.h": "c",
+        "tab_probe.h": "c",
+        "string.h": "c",
+        "lv_tileview.h": "c"
     }
 }
