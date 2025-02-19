@@ -81,37 +81,54 @@ void interface_destroy(interface_t *interface) {
     free(interface);
 }
 
+void debug_test_fs() {
+#if 1
+    lv_fs_dir_t dir;
+    char buf[200];
+    printf("Letters: %s\n", lv_fs_get_letters(buf));
+    lv_fs_res_t res;
+    if ((res = lv_fs_dir_open(&dir, "S:/")) == LV_FS_RES_OK) {
+        while (lv_fs_dir_read(&dir, buf, 200) == LV_FS_RES_OK && buf[0] != '\0') {
+            _df(0, "%s\n", buf);
+        }
+        lv_fs_dir_close(&dir);
+    } else {
+        _df(0, "FAILED to open S: %d\n", res);
+    }
+#endif
+    lv_fs_file_t fp;
+    printf("FILE OPEN: %d\n", lv_fs_open(&fp, "S:/img/arr_s.png", LV_FS_MODE_RD));
+    uint32_t read_num;
+    uint8_t bufs[0];
+    res = lv_fs_read(&fp, bufs, 8, &read_num);
+    if(res != LV_FS_RES_OK || read_num != 8) {
+        _d(2, "FAILED TO READ FILE\n");
+    } else {
+        bufs[8] = '\0';
+        _df(0, "CONTENTS[8]: %s\n", bufs);
+    }
+    lv_fs_close(&fp);
+}
 
 void interface_fs_init(interface_t *interface) {
     #ifdef ESP32_HW
-        lv_fs_arduino_esp_littlefs_init();
+        //lv_fs_arduino_esp_littlefs_init();
     #elif POSIX
         _d(0, "Loading FS...");
         lv_fs_posix_init();
 
-        #if 0
-        lv_fs_dir_t dir;
-        char buf[200];
-        printf("Letters: %s\n", lv_fs_get_letters(buf));
-        lv_fs_res_t res;
-        if ((res = lv_fs_dir_open(&dir, "S:/img")) == LV_FS_RES_OK) {
-            while (lv_fs_dir_read(&dir, buf, 200) == LV_FS_RES_OK && buf[0] != '\0') {
-                _df(0, "%s\n", buf);
-            }
-            lv_fs_dir_close(&dir);
-        } else {
-            _df(0, "FAILED to open S: %d\n", res);
-        }
-        #endif
-        lv_fs_file_t fp;
-        printf("FILE OPEN: %d\n", lv_fs_open(&fp, "S:/img/arr_s.png", LV_FS_MODE_RD));
-        lv_fs_close(&fp);
-
         _d(0, "[done]");
     #endif
+
+    // debug_test_fs();
 }
 
+#ifndef LOAD_BIN_FONT_FS
+    LV_FONT_DECLARE(lcd_7_segment_24);
+#endif
+
 void interface_init_fonts(interface_t *interface) {
+#ifdef LOAD_BIN_FONT_FS
     // Construct the font paths.  This assumes the fonts are in a "font"
     // subdirectory relative to the location of the executable.
     char font_path[MAX_PATH_LEN];
@@ -143,6 +160,9 @@ void interface_init_fonts(interface_t *interface) {
     if (!interface->font_lcd_24) {
         LV_LOG_WARN("Failed to load font: %s", font_path);
     }
+#else
+    interface->font_lcd_24 = &lcd_7_segment_24;
+#endif
 }
 
 void interface_init_main_tabs(interface_t *interface) {

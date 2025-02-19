@@ -408,7 +408,7 @@ void machine_position_wcs_coords_undefined(machine_position_wcs_t *mp) {
     for (size_t i = 0; i < mp->num_coord_systems; i++) {
          for (size_t j = 0; j < mp->num_coords; j++) {
             mp->coord_vals[i][j] = NAN; // Set to NaN
-            _label_text(mp->coord_val_labels[i][j], "?");
+            lv_label_set_text_fmt(mp->coord_val_labels[i][j], "%.*s.??", mp->digits - 2, "?????????????");
         }
     }
 }

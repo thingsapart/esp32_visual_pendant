@@ -93,10 +93,11 @@ void lvgl_test()
 
     lv_display_t *disp;
     disp = lv_sdl_window_create(screen_width, screen_height);
+    lv_sdl_window_set_zoom(disp, 1);
 
     lv_sdl_window_set_title(disp, "LVGL v9.2.2");
-    lv_theme_t *theme = lv_theme_default_init(NULL, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), false, LV_FONT_DEFAULT);
-    lv_disp_set_theme(disp, theme);
+    //lv_theme_t *theme = lv_theme_default_init(NULL, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), false, LV_FONT_DEFAULT);
+    //lv_disp_set_theme(disp, theme);
 
     lv_indev_t *mouse = lv_sdl_mouse_create();
     lv_indev_t *keyboard = lv_sdl_keyboard_create();

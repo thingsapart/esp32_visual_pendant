@@ -1,5 +1,7 @@
 #include "ui_helpers.h"
 #include <string.h>
+#include <stdio.h>
+#include <assert.h>
 
 typedef struct {
     char id[MAX_ID_LENGTH];
@@ -80,4 +82,11 @@ void dbg_layout(lv_obj_t *obj) {
     _bg_color(obj, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
     _border_color(obj, lv_palette_main(LV_PALETTE_ORANGE), LV_PART_MAIN);
     _border_width(obj, 1, LV_PART_MAIN);
+}
+
+void _assert(bool condition, const char *desc) {
+    if (!condition) {
+        _df(2, "ERROR: Assert FAILED: %s\n\n", desc);
+        assert(false);
+    }
 }

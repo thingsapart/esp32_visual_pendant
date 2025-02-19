@@ -4,10 +4,12 @@
 #include "lvgl.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
+
+#include "debug.h"
 
 #define MAX_OBJECTS 128     // Maximum number of registered objects
 #define MAX_ID_LENGTH 20    // Maximum length of an object ID
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,14 +26,19 @@ lv_obj_t *get_object_by_id(const char *id);
 // Register object in the registry. Internal function.
 bool register_object(const char *id, lv_obj_t *obj);
 
+void _assert(bool condition, const char *desc);
+
 // Core object creation macro.
 #define CREATE_OBJECT(type, id, parent, ...) \
     ({ \
         lv_obj_t *obj = lv_##type##_create(parent); \
         if (obj == NULL) { \
             LV_LOG_ERROR("Failed to create " #type " object: %s", id); \
+            _assert(false, "Failed to create " #type " object: " # id); \
         } else { \
             register_object(id, obj); \
+            _df(0, "Created %s (%s) => %p (ln %d, fn %s).\n", id ? id : "NULL", #type, obj, __LINE__, __func__); \
+            lv_obj_t *outer_obj = obj; \
             SET_STYLE(obj, ##__VA_ARGS__); \
         } \
         obj; \
@@ -60,6 +67,21 @@ bool register_object(const char *id, lv_obj_t *obj);
 #define TABV(id, parent, ...)   CREATE_OBJECT(tabview, id, parent, __VA_ARGS__)
 // Add more as needed (e.g., CHART, TABLE, etc.)
 
+#define mk_label(id, parent, ...) CREATE_OBJECT(label, id, parent, __VA_ARGS__)
+#define mk_btn(id, parent, ...)   CREATE_OBJECT(btn, id, parent, __VA_ARGS__)
+#define mk_img(id, parent, ...)    CREATE_OBJECT(img, id, parent, __VA_ARGS__)
+#define mk_container(id, parent, ...)   CREATE_OBJECT(obj, id, parent, __VA_ARGS__) // Container
+#define mk_slider(id, parent, ...) CREATE_OBJECT(slider, id, parent, __VA_ARGS__)
+#define mk_switch(id, parent, ...) CREATE_OBJECT(switch, id, parent, __VA_ARGS__)
+#define mk_textarea(id, parent, ...) CREATE_OBJECT(textarea, id, parent, __VA_ARGS__)
+#define mk_checkbox(id, parent, ...) CREATE_OBJECT(checkbox, id, parent, __VA_ARGS__)
+#define mk_dropdown(id, parent, ...) CREATE_OBJECT(dropdown, id, parent, __VA_ARGS__)
+#define mk_roller(id, parent, ...)   CREATE_OBJECT(roller, id, parent, __VA_ARGS__)
+#define mk_tabv(id, parent, ...)   CREATE_OBJECT(tabview, id, parent, __VA_ARGS__)
+#define mk_bar(id, parent, ...)   CREATE_OBJECT(bar, id, parent, __VA_ARGS__)
+#define mk_scale(id, parent, ...)   CREATE_OBJECT(scale, id, parent, __VA_ARGS__)
+#define mk_dropdown(id, parent, ...)   CREATE_OBJECT(dropdown, id, parent, __VA_ARGS__)
+
 
 //--------------------------------------------------
 // Abbreviated LVGL Function Macros (SETTERS)
@@ -77,7 +99,9 @@ bool register_object(const char *id, lv_obj_t *obj);
 #define _hidden(obj, hidden)       lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN) // Shortcut for hiding
 #define _clickable(obj, enabled)   _flag(obj, LV_OBJ_FLAG_CLICKABLE, enabled)
 #define _scrollable(obj, enabled)  _flag(obj, LV_OBJ_FLAG_SCROLLABLE, enabled)
+#define _use_layout(obj, enabled)  _flag(obj, LV_OBJ_FLAG_IGNORE_LAYOUT, !enabled)
 #define _layout(obj, layout)       lv_obj_set_layout(obj, layout)
+#define _update_layout(obj)        lv_obj_update_layout(obj)
 
 // --- Style Helpers (General) ---
 #define _style_local(obj, prop, part, val) lv_obj_set_style_##prop(obj, val, part)
@@ -85,8 +109,10 @@ bool register_object(const char *id, lv_obj_t *obj);
 
 // --- Specific Style Properties ---
 // (These are just examples, add many more based on LVGL's API)
+#define _M LV_PART_MAIN
 #define _text_color(obj, color, part) lv_obj_set_style_text_color(obj, color, part)
 #define _bg_color(obj, color, part)   lv_obj_set_style_bg_color(obj, color, part)
+#define _bg_opa(obj, opa, part)   lv_obj_set_style_bg_opa(obj, opa, part)
 #define _border_color(obj, color, part) lv_obj_set_style_border_color(obj, color, part)
 #define _border_width(obj, width, part) lv_obj_set_style_border_width(obj, width, part)
 #define _border_opa(obj, opa, part) lv_obj_set_style_border_opa(obj, opa, part)
@@ -112,6 +138,21 @@ bool register_object(const char *id, lv_obj_t *obj);
 
 #define _margin(obj, margin) _margin_all(obj, margin, LV_PART_MAIN)
 #define _pad(obj, margin) _pad_all(obj, margin, LV_PART_MAIN)
+
+#define _margins(obj, top, right, bot, left) \
+    do { \
+        _margin_top(obj, top, LV_PART_MAIN); \
+        _margin_right(obj, right, LV_PART_MAIN); \
+        _margin_bottom(obj, bot, LV_PART_MAIN); \
+        _margin_left(obj, left, LV_PART_MAIN); \
+    } while (0);
+#define _pads(obj, top, right, bot, left) \
+    do { \
+        _pad_top(obj, top, LV_PART_MAIN); \
+        _pad_right(obj, right, LV_PART_MAIN); \
+        _pad_bottom(obj, bot, LV_PART_MAIN); \
+        _pad_left(obj, left, LV_PART_MAIN); \
+    } while (0);
 
 // --- Widget-Specific Setters ---
 
@@ -158,6 +199,39 @@ bool register_object(const char *id, lv_obj_t *obj);
 #define _tv_bar_pos(obj, pos) lv_tabview_set_tab_bar_position(obj, pos)
 #define _tv_bar_size(ob, sz) lv_tabview_set_tab_bar_size(ob, sz)
 
+#define COMBINE1(X, Y, Z) X##Y##Z
+#define TEMP_VAR(X, Y, Z) COMBINE1(X, Y, Z)
+
+#define _bar_indicator(bar, name, bg_oa, bg_color, bg_grad_color, bg_grad_dir, bg_main_stop, radius) \
+    do { \
+        static lv_style_t TEMP_VAR(style_indic_, __func__, name); \
+        lv_style_init(&TEMP_VAR(style_indic_, __func__, name)); \
+        lv_style_set_bg_opa(&TEMP_VAR(style_indic_, __func__, name), LV_OPA_COVER); \
+        lv_style_set_bg_color(&TEMP_VAR(style_indic_, __func__, name), lv_color_hex(0x00DD00)); \
+        lv_style_set_bg_grad_color(&TEMP_VAR(style_indic_, __func__, name), lv_color_hex(0x0000DD)); \
+        lv_style_set_bg_grad_dir(&TEMP_VAR(style_indic_, __func__, name), LV_GRAD_DIR_HOR); \
+        lv_style_set_bg_main_stop(&TEMP_VAR(style_indic_, __func__, name), 175); \
+        lv_style_set_radius(&TEMP_VAR(style_indic_, __func__, name), 3); \
+        lv_obj_add_style(msm->bar_feed, &TEMP_VAR(style_indic_, __func__, name), LV_PART_INDICATOR); \
+    } while (0);
+
+#define _style_gradient(obj, main_color, grad_color, grad_dir, main_stop, border_width, border_color, shadow_w, shadow_color, line_color, radius) \
+    do { \
+        if (!lv_color_eq(main_color, lv_color_hex(0x00000000)) && lv_color_eq(grad_color, lv_color_hex(0x00000000))) { \
+            _bg_opa(obj, LV_OPA_COVER, _M); \
+            _bg_color(obj, main_color, _M); \
+            lv_obj_set_style_bg_grad_color(obj, grad_color, _M); \
+            lv_obj_set_style_bg_grad_dir(obj, grad_dir, _M); \
+            lv_obj_set_style_bg_main_stop(obj, main_stop, _M); \
+        } else { _bg_opa(obj, LV_OPA_0, _M); } \
+        _border_width(obj, border_width, _M); \
+        _border_color(obj, border_color, _M); \
+        lv_obj_set_style_shadow_width(obj, shadow_w, _M); \
+        lv_obj_set_style_shadow_color(obj, shadow_color, _M); \
+        lv_obj_set_style_line_color(obj, line_color, _M); \
+        _radius(obj, radius, _M); \
+    } while (0);
+
 //--------------------------------------------------
 // Abbreviated LVGL Function Macros (GETTERS)
 //--------------------------------------------------
@@ -202,6 +276,8 @@ bool register_object(const char *id, lv_obj_t *obj);
 
 #define _pad_row(...) _sset(pad_row, __VA_ARGS__)
 #define _pad_column(...) _sset(pad_column, __VA_ARGS__)
+
+#define _center lv_obj_center
 
 
 //--------------------------------------------------

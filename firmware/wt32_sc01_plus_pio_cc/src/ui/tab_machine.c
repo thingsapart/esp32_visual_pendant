@@ -76,11 +76,10 @@ static void axis_float_btn_cb(lv_event_t *e)
 
 static void axis_change_cb(axis_t axis, void *user_data)
 {
-   lv_obj_t * float_btn_label = (lv_obj_t*) user_data;
-   if (float_btn_label)
-   {
-    lv_label_set_text(float_btn_label, axes_options[axis]); // get current axis.
-   }
+    lv_obj_t * float_btn_label = (lv_obj_t*) user_data;
+    if (float_btn_label) {
+        lv_label_set_text(float_btn_label, axes_options[axis]); // get current axis.
+    }
 }
 
 // --- file list click handlers, stubs. ---
@@ -112,8 +111,7 @@ static void set_wcs_btns_cb(lv_event_t *e)
 {
     lv_obj_t * btn = lv_event_get_target(e);
     machine_status_meter_t * msm = (machine_status_meter_t*) lv_event_get_user_data(e);
-    if(btn && msm)
-    {
+    if(btn && msm) {
           // Find which button was clicked by comparing pointers.
         for (size_t i = 0; i < num_axes; i++) {
             if (btn == msm->position->axis_labels[i]) {
@@ -127,14 +125,11 @@ static void set_wcs_btns_cb(lv_event_t *e)
 }
 
 // Material dropdown changed
-static void mat_dd_change(lv_event_t *e)
-{
+static void mat_dd_change(lv_event_t *e) {
    // lv_obj_t* dd = (lv_obj_t*) lv_event_get_target(e);
     machine_status_meter_t * msm = (machine_status_meter_t*) lv_event_get_user_data(e);
     if (msm) {
         size_t selected_index = lv_dropdown_get_selected(msm->material_dd);
-        _df(0, "%zu => %s\n\n", selected_index, mill_map[selected_index]);
-        fflush(stdout);
         lv_dropdown_set_options_static(msm->mill_dd, mill_map[selected_index]);
     }
 }
@@ -184,14 +179,13 @@ void tab_machine_destroy(tab_machine_t *tm) {
 }
 
 void tab_machine_init_axis_float_btn(tab_machine_t *tm) {
-    if(!tm->interface->tab_jog)
-    {
+    if(!tm->interface->tab_jog) {
         LV_LOG_ERROR("tab jog not initialized");
         return; //TODO: should we fail here instead?
     }
 
     tm->float_btn = lv_button_create(tm->tab);
-    if(!tm->float_btn){
+    if(!tm->float_btn) {
         LV_LOG_ERROR("Failed to create float_btn");
         return;
     }
@@ -200,8 +194,7 @@ void tab_machine_init_axis_float_btn(tab_machine_t *tm) {
     lv_obj_align(tm->float_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
     lv_obj_t *label = lv_label_create(tm->float_btn);
-    if (!label)
-    {
+    if (!label) {
         LV_LOG_ERROR("Failed to create float_btn label");
         lv_obj_del(tm->float_btn);
         return;
@@ -242,6 +235,7 @@ void tab_machine_init_machine_tabv(tab_machine_t *tm, lv_obj_t *parent) {
 }
 
 void tab_machine_init_tab_status(tab_machine_t *tm, lv_obj_t *tab) {
+    _maximize_client_area(tab);
     tm->mach_meter = machine_status_meter_create(tab, tm->interface, 16000, 6000);
     if (!tm->mach_meter) {
         LV_LOG_ERROR("Failed to create machine status meter");
@@ -251,6 +245,7 @@ void tab_machine_init_tab_status(tab_machine_t *tm, lv_obj_t *tab) {
 }
 
 void tab_machine_init_tab_jobs(tab_machine_t *tm, lv_obj_t *tab) {
+    return;
     tm->jobs_list = file_list_create(tab, "gcodes", tm->interface->machine, gcode_clicked);
     if (!tm->jobs_list) {
         // Handle error
@@ -265,6 +260,7 @@ void tab_machine_init_tab_jobs(tab_machine_t *tm, lv_obj_t *tab) {
 }
 
 void tab_machine_init_tab_macros(tab_machine_t *tm, lv_obj_t *tab) {
+    return;
     tm->macro_list = file_list_create(tab, "macros", tm->interface->machine, macro_clicked);
     if (!tm->macro_list) {
        // Handle error
@@ -295,334 +291,211 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
     msm->spindle_max_rpm = (spindle_max_rpm / 100) * 100; // Round down to nearest 100
     msm->max_feed = (max_feed / 100) * 100; // Round down to nearest 100
 
-    msm->container = lv_obj_create(parent);
-    if (!msm->container) {
-        LV_LOG_ERROR("Failed to create container for machine_status_meter_t");
-        free(msm);
-        return NULL;
-    }
-    _size(msm->container, LV_PCT(100), LV_PCT(100));
+    msm->container = mk_container("msm:container", parent,
+        _size(obj, lv_pct(100), lv_pct(100));
+        _maximize_client_area(obj);
+        _flex_flow(obj, LV_FLEX_FLOW_ROW);
+        _pad_row(obj, 0);
+        _pad_column(obj, 0);
 
-    _style_local(msm->container, border_width, LV_PART_MAIN, 5);
-    _style_local(msm->container, pad_all, LV_PART_MAIN, 0);
-    _style_local(msm->container, margin_all, LV_PART_MAIN, 0);
+        msm->left_side = mk_container("msm:left", outer_obj,            
+            _flex_grow(obj, 1);
+            _size(obj, lv_pct(60), lv_pct(100));
+            _bg_opa(obj, LV_OPA_TRANSP, _M);
+            _maximize_client_area(obj);
+            _style_local(obj, pad_top, LV_PART_MAIN, 5);
+            _text_font(obj, &lv_font_montserrat_12, _M);
+            _flex_flow(obj, LV_FLEX_FLOW_COLUMN);
 
-    _flex_flow(msm->container, LV_FLEX_FLOW_ROW);
-    _pad_row(msm->container, 0);
-    _pad_column(msm->container, 0);
+            mk_label(NULL, outer_obj,
+                _maximize_client_area(obj);
+                _label_text(obj, "Feed (mm/min):");
+                _size(obj, LV_SIZE_CONTENT, 16);
+            );
 
-    msm->left_side = container_col(msm->container);
-    if(!msm->left_side) {
-         LV_LOG_ERROR("Failed to create msm->left_side");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    lv_obj_set_flex_grow(msm->left_side, 5);
-    _height(msm->left_side, LV_SIZE_CONTENT);
-    _style_local(msm->left_side, bg_opa, LV_PART_MAIN, LV_OPA_TRANSP);
-    _style_local(msm->left_side, border_width, LV_PART_MAIN, 0);
-    _style_local(msm->left_side, pad_top, LV_PART_MAIN, 5);
-    _style_local(msm->left_side, pad_bottom, LV_PART_MAIN, 0);
-    _style_local(msm->left_side, pad_left, LV_PART_MAIN, 0);
-    _style_local(msm->left_side, pad_right, LV_PART_MAIN, 0);
-    lv_obj_set_style_text_font(msm->left_side, &lv_font_montserrat_12, LV_PART_MAIN);
+            msm->bar_feed = mk_bar("msm:bar_feed", outer_obj,
+                lv_bar_set_range(obj, 0, msm->max_feed);
+                _maximize_client_area(obj);
+                _bg_opa(obj, LV_OPA_TRANSP, _M);
+                _pads(obj, 5, 18, 5, 18);
+                _size(obj, lv_pct(100), 18);
+                lv_bar_set_value(obj, 5000, LV_ANIM_ON);
+                //_bar_indicator(obj, bar_feed, LV_OPA_COVER, lv_color_hex(0x00DD00), lv_color_hex(0x0000DD), LV_GRAD_DIR_HOR, 175, 3);
+                _flag(obj, LV_OBJ_FLAG_ADV_HITTEST, true);
+            );
+            msm->scale_feed = mk_scale(NULL, outer_obj,
+                _maximize_client_area(obj);
+                _margins(obj, -12, 18, 0, 18); 
+                _pad_all(obj, 0, _M);
+                _size(obj, lv_pct(100), 20);
+                lv_scale_set_mode(obj, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
+                lv_scale_set_total_tick_count(obj, msm->max_feed / 1000 + 1);
+                lv_scale_set_major_tick_every(obj, 1);
+                lv_scale_set_label_show(obj, true);
+                lv_scale_set_range(obj, 0, msm->max_feed / 1000);
+            );
 
-    msm->right_side = lv_obj_create(msm->container);
-    if(!msm->right_side) {
-        LV_LOG_ERROR("Failed to create msm->right_side");
-        machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _height(msm->right_side, lv_pct(100));
-    _width(msm->right_side, LV_SIZE_CONTENT);
+            // --- Spindle RPM Section ---
+            mk_label(NULL, outer_obj,
+                _label_text(obj, "Spindle (RPM):");
+                _maximize_client_area(obj);
+                _size(obj, LV_SIZE_CONTENT, 16);
+            );
 
-    _flex_flow(msm->right_side, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(msm->right_side, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+            msm->spindle_rpm = mk_bar("msm:spindle_rpm", outer_obj,
+                _maximize_client_area(obj);
+                lv_bar_set_range(obj, 0, msm->spindle_max_rpm);
+                _pads(obj, 5, 18, 5, 18);
+                _size(obj, lv_pct(100), 18);
+                _bg_opa(obj, LV_OPA_TRANSP, _M);
+                lv_bar_set_value(obj, 5000, LV_ANIM_ON); // example value.
+            );
+            msm->scale_spindle_rpm = mk_scale(NULL, outer_obj,
+                _maximize_client_area(obj);
+                _margins(obj, -12, 18, 0, 18); 
+                _pad_all(obj, 0, _M);
+                _size(obj, lv_pct(100), 20);
 
-    _style_local(msm->right_side, bg_opa, LV_PART_MAIN, LV_OPA_TRANSP);
-    _style_local(msm->right_side, border_width, LV_PART_MAIN, 0);
-    _style_local(msm->right_side, pad_top, LV_PART_MAIN, 0);
-    _style_local(msm->right_side, pad_bottom, LV_PART_MAIN, 0);
-    _style_local(msm->right_side, pad_left, LV_PART_MAIN, 0);
-    _style_local(msm->right_side, pad_right, LV_PART_MAIN, 10);
-    _style_local(msm->right_side, margin_all, LV_PART_MAIN, 0);
-
-    lv_obj_set_style_text_font(msm->right_side, &lv_font_montserrat_12, LV_PART_MAIN);
-    _flag(msm->right_side, LV_OBJ_FLAG_SCROLLABLE, false);
-
-    // --- Feed Section ---
-
-    lv_obj_t *label_feed = lv_label_create(msm->left_side);
-     if (!label_feed) {
-        LV_LOG_ERROR("Failed to create label_feed");
-        machine_status_meter_destroy(msm); // Clean up
-        return NULL;
-    }
-    _label_text(label_feed, "Feed (mm/min):");
-
-    msm->bar_feed = lv_bar_create(msm->left_side);
-    if (!msm->bar_feed) {
-        LV_LOG_ERROR("Failed to create bar_feed");
-        machine_status_meter_destroy(msm); // Clean up
-        return NULL;
-    }
-    lv_bar_set_range(msm->bar_feed, 0, msm->max_feed);
-     _style_local(msm->bar_feed, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->bar_feed, pad_top, LV_PART_MAIN, 5);
-    _style_local(msm->bar_feed, pad_bottom, LV_PART_MAIN, 5);
-    _style_local(msm->bar_feed, pad_left, LV_PART_MAIN, 18);
-     _style_local(msm->bar_feed, pad_right, LV_PART_MAIN, 18);
-    _style_local(msm->bar_feed, bg_opa, LV_PART_MAIN, LV_OPA_TRANSP);
-
-    _height(msm->bar_feed, 18);
-    _width(msm->bar_feed, lv_pct(100));
-    lv_bar_set_value(msm->bar_feed, 5000, LV_ANIM_ON); // example value.
-
-    //  Define the style for bar indicator
-    lv_style_t style_indic;
-    lv_style_init(&style_indic);
-    lv_style_set_bg_opa(&style_indic, LV_OPA_COVER);
-    lv_style_set_bg_color(&style_indic, lv_color_hex(0x00DD00)); // Green
-    lv_style_set_bg_grad_color(&style_indic, lv_color_hex(0x0000DD)); // Blue
-    lv_style_set_bg_grad_dir(&style_indic, LV_GRAD_DIR_HOR);
-    lv_style_set_bg_main_stop(&style_indic, 175);
-    lv_obj_add_style(msm->bar_feed, &style_indic, LV_PART_INDICATOR);
-    lv_style_set_radius(&style_indic, 3);
-    _flag(msm->bar_feed, LV_OBJ_FLAG_ADV_HITTEST, true);
+                lv_scale_set_mode(obj, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
+                lv_scale_set_total_tick_count(obj, msm->spindle_max_rpm / 1000 + 1);
+                lv_scale_set_major_tick_every(obj, 5);
+                lv_scale_set_label_show(obj, true);
+                lv_scale_set_range(obj, 0, msm->spindle_max_rpm / 1000);
+            );
 
 
-    msm->scale_feed = lv_scale_create(msm->left_side);
-    if (!msm->scale_feed) {
-        LV_LOG_ERROR("Failed to create scale_feed");
-        machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _margin_top(msm->scale_feed, 0, LV_STATE_DEFAULT);
-    _style_local(msm->scale_feed, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->scale_feed, margin_left, LV_PART_MAIN, 18);
-    _style_local(msm->scale_feed, margin_right, LV_PART_MAIN, 18);
-    _style_local(msm->scale_feed, pad_all, LV_PART_MAIN, 0);
+            // Chipload Scale + Label container.
+            mk_container(NULL, outer_obj,
+                _size(obj, lv_pct(100), LV_SIZE_CONTENT);
+                _flag(obj, LV_OBJ_FLAG_SCROLLABLE, false);
+                _flex_flow(obj, LV_FLEX_FLOW_COLUMN);
+                _maximize_client_area(obj);
+                _scrollable(obj, false);
 
-    lv_scale_set_mode(msm->scale_feed, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
-    lv_scale_set_total_tick_count(msm->scale_feed, msm->max_feed / 1000 + 1);
-    lv_scale_set_major_tick_every(msm->scale_feed, 1);
-    lv_scale_set_label_show(msm->scale_feed, true);
-    lv_scale_set_range(msm->scale_feed, 0, msm->max_feed / 1000);
-    _height(msm->scale_feed, 30);
-    _width(msm->scale_feed, lv_pct(100));
+                mk_label(NULL, outer_obj,
+                    _label_text(obj, "Chip Load (x0.1mm)");
+                    _maximize_client_area(obj);
+                    _size(obj, LV_SIZE_CONTENT, 16);
+                );
 
-    // --- Spindle RPM Section ---
-    lv_obj_t *label_spindle_rpm = lv_label_create(msm->left_side);
-     if (!label_spindle_rpm) {
-        LV_LOG_ERROR("Failed to create label_spindle_rpm");
-        machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _label_text(label_spindle_rpm, "Spindle (RPM):");
-     lv_obj_set_style_text_font(label_spindle_rpm, &lv_font_montserrat_12, LV_PART_MAIN);
+                // Chipload scale container.
+                mk_container(NULL, outer_obj,
+                    _maximize_client_area(obj);
+                    _flex_grow(obj, 1);
+                    _scrollable(obj, false);
+                    _pads(obj, 0, 18, 10, 18);
+                    _flex_flow(obj, LV_FLEX_FLOW_COLUMN);
+                    _size(obj, lv_pct(100), LV_SIZE_CONTENT);
+                    _scrollable(obj, false);
 
-    msm->spindle_rpm = lv_bar_create(msm->left_side);
-    if (!msm->spindle_rpm) {
-        LV_LOG_ERROR("Failed to create spindle_rpm");
-        machine_status_meter_destroy(msm); // Clean up
-        return NULL;
-    }
-    lv_bar_set_range(msm->spindle_rpm, 0, msm->spindle_max_rpm);
-     _style_local(msm->spindle_rpm, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->spindle_rpm, pad_top, LV_PART_MAIN, 5);
-    _style_local(msm->spindle_rpm, pad_bottom, LV_PART_MAIN, 5);
-    _style_local(msm->spindle_rpm, pad_left, LV_PART_MAIN, 18);
-     _style_local(msm->spindle_rpm, pad_right, LV_PART_MAIN, 18);
-    _style_local(msm->spindle_rpm, bg_opa, LV_PART_MAIN, LV_OPA_TRANSP);
+                    msm->bar_cl = mk_bar("msm:bar_spnd_cl", outer_obj,
+                        lv_bar_set_range(obj, 0, 50);
+                        _margin(obj, 0);
+                        _bg_opa(obj, LV_OPA_TRANSP, _M);
+                        _pads(obj, 5, 18, 5, 18);
+                        _size(obj, lv_pct(100), 18);
+                        _flag(obj, LV_OBJ_FLAG_ADV_HITTEST, true);
+                        lv_bar_set_value(obj, 35, LV_ANIM_ON);
 
-    _height(msm->spindle_rpm, 18);
-    _width(msm->spindle_rpm, lv_pct(100));
-    lv_bar_set_value(msm->spindle_rpm, 5000, LV_ANIM_ON); // example value.
+                        _bar_indicator(obj, spnd_bar_cl, LV_OPA_COVER, lv_color_hex(0x00DDDD), lv_color_hex(0x00DD00), LV_GRAD_DIR_HOR, (int)(255 * 0.3f), 3);
+                    );
 
-    msm->scale_spindle_rpm = lv_scale_create(msm->left_side);
-     if (!msm->scale_spindle_rpm)
-     {
-        LV_LOG_ERROR("failed to create scale_spindle_rpm");
-         machine_status_meter_destroy(msm);
-         return NULL;
-     }
-    lv_scale_set_mode(msm->scale_spindle_rpm, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
-    lv_scale_set_total_tick_count(msm->scale_spindle_rpm, msm->spindle_max_rpm / 1000 + 1);
-    _style_local(msm->scale_spindle_rpm, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->scale_spindle_rpm, margin_left, LV_PART_MAIN, 18);
-    _style_local(msm->scale_spindle_rpm, margin_right, LV_PART_MAIN, 18);
-    _style_local(msm->scale_spindle_rpm, pad_all, LV_PART_MAIN, 0);
+                    msm->scale_spindle_chipload = mk_scale("msm:scl_spnd_cl", outer_obj,
+                        _maximize_client_area(obj);
+                        _margins(obj, -12, 18, 0, 18); 
+                        _pad_all(obj, 0, _M);
+                        _size(obj, lv_pct(100), 20);
 
-    lv_scale_set_major_tick_every(msm->scale_spindle_rpm, 5);
-    lv_scale_set_label_show(msm->scale_spindle_rpm, true);
-    lv_scale_set_range(msm->scale_spindle_rpm, 0, msm->spindle_max_rpm / 1000);
-    _height(msm->scale_spindle_rpm, 30);
-    _width(msm->scale_spindle_rpm, lv_pct(100));
+                        lv_scale_set_mode(obj, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
+                        lv_scale_set_total_tick_count(obj, 11);
+                        lv_scale_set_major_tick_every(obj, 5);
+                        lv_scale_set_label_show(obj, true);
+                        lv_scale_set_range(obj, 0, 50);
 
+                        _bar_indicator(obj, spnd_scale_cl, LV_OPA_COVER, lv_color_hex(0x00DDDD), lv_color_hex(0x00DD00), LV_GRAD_DIR_HOR, (int)(255 * 0.3f), 3);
+                    );
+                );
+            );
 
-    // --- Material and End Mill Dropdowns ---
+            // --- Material and End Mill Dropdowns ---
+            mk_container(NULL, outer_obj,
+                _bg_opa(obj, LV_OPA_TRANSP, _M);
+                _maximize_client_area(obj);
+                _pad_bottom(obj, 5, LV_STATE_DEFAULT);
+                _flex_flow(obj, LV_FLEX_FLOW_ROW);
+                _pad_column(obj, 5);
+                _size(obj, lv_pct(100), LV_SIZE_CONTENT);
 
-    lv_obj_t *mat_end_container = container_row(msm->left_side);
-    if(!mat_end_container) {
-        LV_LOG_ERROR("failed to create mat_end_container");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _pad_bottom(mat_end_container, 5, LV_STATE_DEFAULT);
+                msm->material_dd = mk_dropdown("msm:mat_dd", outer_obj,
+                    lv_dropdown_set_options_static(obj, "Aluminium\nH.Wood\nMDF\nS.Wood\nAcrylic\nH.Plastic\nS.Plastic");
+                    _maximize_client_area(obj);
+                    _flex_grow(obj, 1);
+                    lv_obj_add_event_cb(obj, mat_dd_change, LV_EVENT_VALUE_CHANGED, msm);
+                ); 
+                msm->mill_dd = mk_dropdown("msm:mill_dd", outer_obj,
+                    lv_dropdown_set_options_static(obj, mill_options);
+                    _maximize_client_area(obj);
+                    _flex_grow(obj, 1);
+                    lv_obj_send_event(obj, LV_EVENT_VALUE_CHANGED, msm);
+                );
+                msm->flute_dd = mk_dropdown("msm:flute_dd", outer_obj,
+                    lv_dropdown_set_options_static(obj, "1F\n2F\n3F\n4F");
+                    _maximize_client_area(obj);
+                    _flex_grow(obj, 1);
+                );
+            );
 
-    msm->material_dd = lv_dropdown_create(mat_end_container);
-    if (!msm->material_dd)
-    {
-        LV_LOG_ERROR("material_dd creation failed!");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    lv_dropdown_set_options_static(msm->material_dd, "Aluminium\nH.Wood\nMDF\nS.Wood\nAcrylic\nH.Plastic\nS.Plastic");
-    _width(msm->material_dd, lv_pct(40));
-    lv_obj_add_event_cb(msm->material_dd, mat_dd_change, LV_EVENT_VALUE_CHANGED, msm);
+        );
 
-    msm->mill_dd = lv_dropdown_create(mat_end_container);
-     if (!msm->mill_dd)
-    {
-        LV_LOG_ERROR("mill_dd creation failed!");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
+        msm->right_side = mk_container(NULL, outer_obj,
+            _maximize_client_area(obj);
+            _flex_flow(obj, LV_FLEX_FLOW_ROW_WRAP);
+            _size(obj, 220, lv_pct(100));
+            lv_obj_set_flex_align(obj, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+            _bg_opa(obj, LV_OPA_TRANSP, _M);
+            _border_width(obj, 0, _M);
+            _pad_right(obj, 10, _M);
+            _pad_bottom(obj, 10, _M);
+            _text_font(obj, &lv_font_montserrat_12, _M);
+            _scrollable(obj, false);
 
-    lv_dropdown_set_options_static(msm->mill_dd, "1/8\"\n3mm\n1/4\"\n6mm\n3/8\"\n10mm\n1/2\"\n12mm");
-    _width(msm->mill_dd, lv_pct(25));
+            // --- Machine Coordinates ---
+            static const char *default_coord_systems[] = {"Mach", "WCS"}; // Use static strings
+            static const size_t num_default_coord_systems = sizeof(default_coord_systems) / sizeof(default_coord_systems[0]);
 
-    // Initialize with options for the default selected material (Aluminium)
-    lv_obj_send_event(msm->material_dd, LV_EVENT_VALUE_CHANGED, msm);
+#if !HIDE_MACH_STATUS_METER_POS_WCS
+            msm->position = machine_position_wcs_create(outer_obj, axes, num_axes, msm->interface, 6, default_coord_systems, num_default_coord_systems , 40); // exclude "Move"
+            if (!msm->position) {
+                LV_LOG_ERROR("Failed to create machine position display");
+                _d(2, "Failed to create machine position display");
 
-    msm->flute_dd = lv_dropdown_create(mat_end_container);
-     if (!msm->flute_dd)
-    {
-        LV_LOG_ERROR("flute_dd creation failed!");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _width(msm->flute_dd, lv_pct(25));
-    lv_dropdown_set_options_static(msm->flute_dd, "1F\n2F\n3F\n4F");
+                return msm;
+            }
+            // machine_position_wcs_align_to(msm->position, msm->right_side, LV_ALIGN_TOP_MID, 0, 0);
+            _margin_top(msm->position->container, 20, LV_STATE_DEFAULT);
 
-    // --- Chip Load Section ---
-    lv_obj_t *chip_ld_container = container_col(msm->left_side);
-    if(!chip_ld_container) {
-        LV_LOG_ERROR("failed to create chip load container");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _height(chip_ld_container, 60);
-    _flag(chip_ld_container, LV_OBJ_FLAG_SCROLLABLE, false);
+            for (size_t i = 0; i < num_axes; i++) {
+                mk_btn("msm:wcs:x", outer_obj,
+                    msm->position->axis_labels[i] = obj;
+                    lv_obj_add_flag(obj, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+                    _maximize_client_area(obj);
+                    _size(obj, 150, 25);
+                    lv_obj_center(obj);
+                    lv_obj_add_event_cb(obj, set_wcs_btns_cb, LV_EVENT_CLICKED, msm); // save msm as user data.
 
-    lv_obj_t *label_spindle_chip = lv_label_create(chip_ld_container);
-     if (!label_spindle_chip) {
-        LV_LOG_ERROR("Failed to create label_spindle_chip");
-         machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    _label_text(label_spindle_chip, "Chip Load (x0.1mm)");
-    _width(label_spindle_chip, LV_SIZE_CONTENT);
+                    mk_label(NULL, outer_obj,
+                        _maximize_client_area(obj);
+                        _center(obj);
 
-    lv_obj_t *chip_ldmc = container_col(chip_ld_container);
-    if(!chip_ldmc){
-         LV_LOG_ERROR("Failed to create chip_ldmc");
-        machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    lv_obj_set_flex_grow(chip_ldmc, 1);
-    _flag(chip_ldmc, LV_OBJ_FLAG_SCROLLABLE, false);
-    _style_local(chip_ldmc, pad_top, LV_PART_MAIN, 0);
-    _style_local(chip_ldmc, pad_bottom, LV_PART_MAIN, 0);
-    _style_local(chip_ldmc, pad_left, LV_PART_MAIN, 18);
-    _style_local(chip_ldmc, pad_right, LV_PART_MAIN, 18);
-
-    msm->bar_cl = lv_bar_create(chip_ldmc);
-    if (!msm->bar_cl) {
-        LV_LOG_ERROR("Failed to create bar_cl");
-        machine_status_meter_destroy(msm);
-        return NULL;
-    }
-    lv_bar_set_range(msm->bar_cl, 0, 50);
-    _style_local(msm->bar_cl, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->bar_cl, pad_top, LV_PART_MAIN, 5);
-    _style_local(msm->bar_cl, pad_bottom, LV_PART_MAIN, 5);
-    _style_local(msm->bar_cl, pad_left, LV_PART_MAIN, 0);
-     _style_local(msm->bar_cl, pad_right, LV_PART_MAIN, 0);
-    _style_local(msm->bar_cl, bg_opa, LV_PART_MAIN, LV_OPA_TRANSP);
-    _height(msm->bar_cl, 18);
-    _width(msm->bar_cl, lv_pct(100));
-    _flag(msm->bar_cl, LV_OBJ_FLAG_ADV_HITTEST, true);
-    lv_bar_set_value(msm->bar_cl, 35, LV_ANIM_ON); // example value.
-
-     // Bar color style:
-    lv_style_t style_barc;
-    lv_style_init(&style_barc);
-    lv_style_set_bg_opa(&style_barc, LV_OPA_COVER);
-    lv_style_set_bg_color(&style_barc, lv_color_hex(0x00DD00)); // Green
-    lv_style_set_bg_grad_color(&style_barc, lv_color_hex(0x0000DD)); // Blue
-    lv_style_set_bg_grad_dir(&style_barc, LV_GRAD_DIR_HOR);
-    lv_style_set_bg_main_stop(&style_barc, (int)(255 * 0.3f)); // Example stops
-    lv_style_set_bg_grad_stop(&style_barc, (int)(255 * 0.5f));
-    lv_obj_add_style(msm->bar_cl, &style_barc, LV_PART_INDICATOR); // apply style.
-    lv_style_set_radius(&style_barc, 3);
-
-    msm->scale_spindle_chipload = lv_scale_create(chip_ldmc);
-    if(!msm->scale_spindle_chipload)
-    {
-        LV_LOG_ERROR("Failed to create scale_spindle_chipload");
-         machine_status_meter_destroy(msm);
-         return NULL;
-    }
-    lv_scale_set_mode(msm->scale_spindle_chipload, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
-    lv_scale_set_total_tick_count(msm->scale_spindle_chipload, 11);
-    lv_scale_set_major_tick_every(msm->scale_spindle_chipload, 5);
-    lv_scale_set_label_show(msm->scale_spindle_chipload, true);
-    lv_scale_set_range(msm->scale_spindle_chipload, 0, 50);
-    _height(msm->scale_spindle_chipload, 30);
-    _width(msm->scale_spindle_chipload, lv_pct(100));
-    _style_local(msm->scale_spindle_chipload, margin_all, LV_PART_MAIN, 0);
-    _style_local(msm->scale_spindle_chipload, pad_all, LV_PART_MAIN, 0);
-    lv_obj_add_style(msm->scale_spindle_chipload, &style_barc, LV_PART_INDICATOR); // apply style
-
-    // --- Machine Coordinates ---
-    static const char *default_coord_systems[] = {"Mach", "WCS"}; // Use static strings
-    static const size_t num_default_coord_systems = sizeof(default_coord_systems) / sizeof(default_coord_systems[0]);
-
-    msm->position = machine_position_wcs_create(msm->right_side, axes, num_axes, msm->interface, 6, default_coord_systems, num_default_coord_systems , 40); // exclude "Move"
-    if (!msm->position) {
-        LV_LOG_ERROR("Failed to create machine position display");
-        _d(2, "Failed to create machine position display");
-
-        return msm;
-    }
-    // machine_position_wcs_align_to(msm->position, msm->right_side, LV_ALIGN_TOP_MID, 0, 0);
-    _margin_top(msm->position->container, 20, LV_STATE_DEFAULT);
-
-    // --- Set WCS Buttons ---
-    for (size_t i = 0; i < num_axes; i++) {
-
-          lv_obj_t* btn = lv_button_create(msm->right_side);
-          if(!btn) {
-            LV_LOG_ERROR("Failed to create set WCS btn");
-             machine_status_meter_destroy(msm);
-            return NULL;
-          }
-
-        lv_obj_t *lbl = lv_label_create(btn);
-        if(!lbl) {
-             LV_LOG_ERROR("failed to create wcs btn label");
-            machine_status_meter_destroy(msm);
-            return NULL;
-        }
-        char btn_text[32];
-        lv_label_set_text(lbl, btn_text);
-        _size(btn, 150, 25);
-        lv_obj_center(lbl);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK); // new track in flex layout.
-        msm->position->axis_labels[i] = btn; // store in axis_labels array in mpos.
-        lv_obj_add_event_cb(btn, set_wcs_btns_cb, LV_EVENT_CLICKED, msm); // save msm as user data.
-    }
+                        char buf[65];
+                        snprintf (buf, 64, "%s Set WCS origin %s", LV_SYMBOL_REFRESH, axes[i]);
+                        _label_text(obj, buf);
+                    );
+                );
+            }
+#endif
+        );
+    );
 
     return msm;
 }

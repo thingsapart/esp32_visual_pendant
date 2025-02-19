@@ -29,3 +29,10 @@ From the ui directory, copy all files to this projects src/ui/ directory (you ca
 The ui.ino file can/should be deleted because this main.cpp files takes over.
 
 Then just build and upload (and manually reset), and the UI should be visible on the screen
+
+# Random Useful Info Dump:
+
+- LLDB show event target object class:
+    `p *(lv_obj_class_t*)(*(lv_obj_t*)e.current_target)->class_p`
+- LLDB show event object class:
+    `p *(lv_obj_class_t*)(*(lv_obj_t*)obj)->class_p`

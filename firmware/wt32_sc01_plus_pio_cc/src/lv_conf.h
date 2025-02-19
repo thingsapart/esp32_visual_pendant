@@ -860,7 +860,11 @@
 #endif
 
 /** LODEPNG decoder library */
-#define LV_USE_LODEPNG 0
+#ifndef POSIX
+#define LV_USE_LODEPNG 1
+#else
+#define LV_USE_LODEPNG 0                    /* POSIX uses libpng. */
+#endif
 
 /** PNG decoder(libpng) library */
 #ifdef POSIX

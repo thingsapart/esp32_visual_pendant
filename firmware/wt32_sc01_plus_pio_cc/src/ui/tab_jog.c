@@ -203,10 +203,10 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
 
 
     _flag(jd->feed_label, LV_OBJ_FLAG_IGNORE_LAYOUT, true);
-    lv_obj_align_to(jd->feed_label, jd->feed_slider, LV_ALIGN_OUT_LEFT_MID, -20, 0);
+    lv_obj_align_to(jd->feed_label, jd->feed_slider, LV_ALIGN_OUT_LEFT_MID, -5, 0);
 
     // Position Labels
-    jd->position = machine_position_wcs_create(jd->arc, axes, num_axes, interface, 4, coord_systems, num_coord_systems, 60);
+    jd->position = machine_position_wcs_create(jd->arc, axes, num_axes, interface, 6, coord_systems, num_coord_systems, 60);
     if (!jd->position)
     {
         LV_LOG_ERROR("failed to create position display");

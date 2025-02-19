@@ -57,7 +57,11 @@ typedef struct tab_probe_t {
 typedef struct {
     const char *gcode;
     const char **params; // Array of parameter names (strings).  NULL-terminated.
+#ifdef POSIX
     const char *img_path;
+#else
+    const lv_image_dsc_t *img_path;
+#endif
     const char *description;
 } probe_action_t;
 
@@ -88,6 +92,8 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                                              const probe_action_t (*actions)[],
                                              size_t num_rows,
                                              size_t num_cols,
+                                             float rect_width_percent,
+                                             float rect_height_percent,
                                              bool quick);
 void probe_btn_matrix_destroy(probe_btn_matrix_t *pbm);
 
