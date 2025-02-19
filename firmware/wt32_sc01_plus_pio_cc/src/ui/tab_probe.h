@@ -23,7 +23,8 @@ typedef struct tab_probe_t {
     lv_obj_t *tab_settings;
     lv_obj_t *tab_wcs;
     lv_obj_t *tab_probe;
-    lv_obj_t *tab_probe_2d;
+    lv_obj_t *tab_probe_2d_in;
+    lv_obj_t *tab_probe_2d_out;
     lv_obj_t *tab_surf;
     lv_obj_t *float_btn;
 
@@ -75,7 +76,6 @@ struct probe_btn_matrix_t {
 };
 
 
-
 // Function prototypes
 tab_probe_t *tab_probe_create(lv_obj_t *tabv, struct interface_t *interface, lv_obj_t *tab);
 void tab_probe_destroy(tab_probe_t *tp);
@@ -83,7 +83,8 @@ void tab_probe_init_probe_tabv(tab_probe_t *tp, lv_obj_t *parent);
 void tab_probe_init_sets_tab(tab_probe_t *tp, lv_obj_t *tab);
 void tab_probe_init_wcs_tab(tab_probe_t *tp, lv_obj_t *tab);
 void tab_probe_init_surface_tab(tab_probe_t *tp, lv_obj_t *tab);
-void tab_probe_init_probe_tab_2d(tab_probe_t *tp, lv_obj_t *tab2d);
+void tab_probe_init_probe_tab_2d_in(tab_probe_t *tp, lv_obj_t *tab2d);
+void tab_probe_init_probe_tab_2d_out(tab_probe_t *tp, lv_obj_t *tab2d);
 void tab_probe_init_probe_tab_3d(tab_probe_t *tp, lv_obj_t *tab3d); // will implement last.
 void tab_probe_init_axis_float_btn(tab_probe_t *tp);
 

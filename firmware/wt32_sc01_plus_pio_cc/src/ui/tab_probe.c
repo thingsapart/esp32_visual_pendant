@@ -48,8 +48,9 @@ static probe_setting_t probe_settings[] = {
 static const size_t num_probe_settings = sizeof(probe_settings) / sizeof(probe_settings[0]);
 
 #define IMG_USE_FS 0
+// #define IMG_USE_FS (POSIX != 1)
 
-#if (POSIX || IMG_USE_FS)
+#if IMG_USE_FS
 // Placeholder image paths. Replace with your actual paths.
 #define img_arr_s_data "S:/img/img_arr_s.png"
 #define img_arr_e_data "S:/img/img_arr_e.png"
@@ -60,6 +61,16 @@ static const size_t num_probe_settings = sizeof(probe_settings) / sizeof(probe_s
 #define img_arr_sw_data "S:/img/img_arr_sw.png" //Back-right
 #define img_arr_ne_data "S:/img/img_arr_ne.png" //Front-Left
 #define img_arr_nw_data "S:/img/img_arr_nw.png" //Front-right
+
+#define img_arr_s_o_data "S:/img/img_arr_s_o.png"
+#define img_arr_e_o_data "S:/img/img_arr_e_o.png"
+#define img_arr_w_o_data "S:/img/img_arr_w_o.png"
+#define img_arr_n_o_data "S:/img/img_arr_n_o.png"
+#define img_arr_se_o_data "S:/img/img_arr_se_o.png" //Back-left
+#define img_arr_sw_o_data "S:/img/img_arr_sw_o.png" //Back-right
+#define img_arr_ne_o_data "S:/img/img_arr_ne_o.png" //Front-Left
+#define img_arr_nw_o_data "S:/img/img_arr_nw_o.png" //Front-right
+
 #define img_pkt_in_data "S:/img/img_pkt_in.png"  //Outside Rect
 #define img_ctr1_boss_data "S:/img/img_center_boss.png" //Outside Boss
 #define img_pkt_out_data "S:/img/img_pkt_out.png"  //Inside Pocket
@@ -69,29 +80,48 @@ LV_IMG_DECLARE(img_arr_s)
 LV_IMG_DECLARE(img_arr_e)
 LV_IMG_DECLARE(img_arr_w)
 LV_IMG_DECLARE(img_arr_n)
-LV_IMG_DECLARE(img_ref_sfc)
+//LV_IMG_DECLARE(img_ref_sfc)
 LV_IMG_DECLARE(img_arr_se) //Back-left
 LV_IMG_DECLARE(img_arr_sw) //Back-right
 LV_IMG_DECLARE(img_arr_ne) //Front-Left
 LV_IMG_DECLARE(img_arr_nw) //Front-right
 LV_IMG_DECLARE(img_pkt_in)  //Outside Rect
 LV_IMG_DECLARE(img_ctr_boss) //Outside Boss
-LV_IMG_DECLARE(img_pkt_out)  //Inside Pocket
+//LV_IMG_DECLARE(img_pkt_out)  //Inside Pocket
+LV_IMG_DECLARE(img_arr_s_o)
+LV_IMG_DECLARE(img_arr_e_o)
+LV_IMG_DECLARE(img_arr_w_o)
+LV_IMG_DECLARE(img_arr_n_o)
+//LV_IMG_DECLARE(img_ref_sfc)
+LV_IMG_DECLARE(img_arr_se_o) //Back-left
+LV_IMG_DECLARE(img_arr_sw_o) //Back-right
+LV_IMG_DECLARE(img_arr_ne_o) //Front-Left
+LV_IMG_DECLARE(img_arr_nw_o) //Front-right
+LV_IMG_DECLARE(img_pkt_in_o)  //Outside Rect
 LV_IMG_DECLARE(img_ctr_bore) //Inside Bore
 
 #define img_arr_s_data &img_arr_s
 #define img_arr_e_data &img_arr_e
 #define img_arr_w_data &img_arr_w
 #define img_arr_n_data &img_arr_n
-#define img_ref_sfc_data &img_ref_sfc
+//#define img_ref_sfc_data &img_ref_sfc
 #define img_arr_se_data &img_arr_se //Back-left
 #define img_arr_sw_data &img_arr_sw //Back-right
 #define img_arr_ne_data &img_arr_ne //Front-Left
 #define img_arr_nw_data &img_arr_nw //Front-right
-#define img_pkt_in_data &img_pkt_in  //Outside Rect
+// #define img_pkt_in_data &img_pkt_in  //Outside Rect
 #define img_ctr1_boss_data &img_ctr_boss //Outside Boss
-#define img_pkt_out_data &img_pkt_out  //Inside Pocket
+//#define img_pkt_out_data &img_pkt_out  //Inside Pocket
 #define img_ctr1_bore_data &img_ctr_bore //Inside Bore
+
+#define img_arr_s_o_data &img_arr_s_o
+#define img_arr_e_o_data &img_arr_e_o
+#define img_arr_w_o_data &img_arr_w_o
+#define img_arr_n_o_data &img_arr_n_o
+#define img_arr_se_o_data &img_arr_se_o //Back-left
+#define img_arr_sw_o_data &img_arr_sw_o //Back-right
+#define img_arr_ne_o_data &img_arr_ne_o //Front-Left
+#define img_arr_nw_o_data &img_arr_nw_o //Front-right
 #endif
 
 // 3-Axis probing operations.
@@ -99,44 +129,6 @@ static const char *probe_modes_3d_bl[] = {"Q", "W", "P:$Z", "N:3", "J:"PRB_J, "K
 static const char *probe_modes_3d_br[] = {"Q", "W", "P:$Z", "N:2", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", "C", "O", NULL};
 static const char *probe_modes_3d_fl[] = {"Q", "W", "P:$Z", "N:0", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", "C", "O", NULL};
 static const char *probe_modes_3d_fr[] = {"Q", "W", "P:$Z", "N:1", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", "C", "O", NULL};
-
-static const probe_action_t probe_modes_3d[][2] = {
-    {
-        {"G6520.1", probe_modes_3d_bl, img_arr_se_data, "back-left vise corner"},       // Back-Left
-        {"G6520.1", probe_modes_3d_br, img_arr_sw_data, "back-right vise corner"},     // Back-Right
-    },
-    {
-        {"G6520.1", probe_modes_3d_fl, img_arr_ne_data, "front-left vise corner"},       // Front-Left
-        {"G6520.1", probe_modes_3d_fr, img_arr_nw_data, "front-right vise corner"},     // Front-Right
-    },
-};
-static const size_t probe_modes_3d_rows = sizeof(probe_modes_3d) / sizeof(probe_modes_3d[0]);
-static const size_t probe_modes_3d_cols = sizeof(probe_modes_3d[0]) / sizeof(probe_action_t);
-
-// 2-axis Probing Operations: outside-towards-inside.
-static const char *probe_modes_2d_out_params_bl[] = {"Q", "W", "Z:"PRB_Z, "N:3", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
-static const char *probe_modes_2d_out_params_br[] = {"Q", "W", "Z:"PRB_Z, "N:2", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
-static const char *probe_modes_2d_out_params_fl[] = {"Q", "W", "Z:"PRB_Z, "N:0", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
-static const char *probe_modes_2d_out_params_fr[] = {"Q", "W", "Z:"PRB_Z, "N:1", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
-static const char *probe_modes_2d_out_params_rect[] = {"Q", "W", "N", "O", "J", "K", "L", "H", "I", "T", NULL};
-static const char *probe_modes_2d_out_params_boss[] = {"Q", "W", "N", "O", "J", "K", "L", "H",  NULL};
-
-static const probe_action_t probe_modes_2d_out[][2] = {
-    {
-        {"G6509.1", probe_modes_2d_out_params_bl, img_arr_se_data, "back-left corner"},       // Back-Left
-        {"G6509.1", probe_modes_2d_out_params_br, img_arr_sw_data, "back-right corner"},     // Back-Right
-    },
-    {
-        {"G6509.1", probe_modes_2d_out_params_fl, img_arr_ne_data, "front-left corner"},       // Front-Left
-        {"G6509.1", probe_modes_2d_out_params_fr, img_arr_nw_data, "front-right corner"},     // Front-Right
-    },
-    {
-        {"G6503.1", probe_modes_2d_out_params_rect, img_pkt_in_data, "outside rectangle"}, // Outside Rectangle
-        {"G6501.1", probe_modes_2d_out_params_boss, img_ctr1_boss_data, "outside boss"},    // Outside Boss
-    }
-};
-static const size_t probe_modes_2d_out_rows = sizeof(probe_modes_2d_out) / sizeof(probe_modes_2d_out[0]);
-static const size_t probe_modes_2d_out_cols = sizeof(probe_modes_2d_out[0]) / sizeof(probe_action_t);
 
 // 2-axis Probing Operations: inside-towards-outside.
 static const char *probe_modes_2d_in_params_bl[] = {"Q", "W", "Z:"PRB_Z, "N:3", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
@@ -146,27 +138,15 @@ static const char *probe_modes_2d_in_params_fr[] = {"Q", "W", "Z:"PRB_Z, "N:1", 
 static const char *probe_modes_2d_in_params_pkt[] = {"Q", "W", "N", "O", "J", "K", "L", "H", "I", "T", NULL};
 static const char *probe_modes_2d_in_params_bore[] = {"Q", "W", "N", "O", "J", "K", "L", "H", NULL};
 
-// Create the 2D array (an array of row pointers)
-static const probe_action_t probe_modes_2d_in[][2] = {
-    {
-        {"G6508.1", probe_modes_2d_in_params_bl, img_arr_nw_data, "back-left inside corner"},    // Back-Left
-        {"G6508.1", probe_modes_2d_in_params_br, img_arr_ne_data, "back-right inside corner"},   // Back-Right
-    },
-    {
-        {"G6508.1", probe_modes_2d_in_params_fl, img_arr_sw_data, "front-left inside corner"},   // Front-Left
-        {"G6508.1", probe_modes_2d_in_params_fr, img_arr_se_data, "front-right inside corner"},  // Front-Right
-    },
-    {
-        {"G6502.1", probe_modes_2d_in_params_pkt, img_pkt_out_data, "inside pocket"},          // Inside Pocket
-        {"G6500.1", probe_modes_2d_in_params_bore, img_ctr1_bore_data, "inside bore"},          // Inside Bore
-    }
-};
-
-static const size_t probe_modes_2d_in_rows = sizeof(probe_modes_2d_in) / sizeof(probe_modes_2d_in[0]);
-static const size_t probe_modes_2d_in_cols = sizeof(probe_modes_2d_in[0]) / sizeof(probe_action_t);
+// 2-axis Probing Operations: outside-towards-inside.
+static const char *probe_modes_2d_out_params_bl[] = {"Q", "W", "Z:"PRB_Z, "N:3", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
+static const char *probe_modes_2d_out_params_br[] = {"Q", "W", "Z:"PRB_Z, "N:2", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
+static const char *probe_modes_2d_out_params_fl[] = {"Q", "W", "Z:"PRB_Z, "N:0", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
+static const char *probe_modes_2d_out_params_fr[] = {"Q", "W", "Z:"PRB_Z, "N:1", "O", "J:"PRB_J, "K:"PRB_K, "L:"PRB_L, "H", "I", "T", NULL};
+static const char *probe_modes_2d_out_params_rect[] = {"Q", "W", "N", "O", "J", "K", "L", "H", "I", "T", NULL};
+static const char *probe_modes_2d_out_params_boss[] = {"Q", "W", "N", "O", "J", "K", "L", "H",  NULL};
 
 // Single-axis, single-surface Probing.
-
 static const char* surface_probe_back_params[] = {"W", "H", "I", "J", "K", "L", NULL};
 static const char* surface_probe_left_params[] = {"W", "H", "I", "J", "K", "L", NULL};
 static const char* surface_probe_top_params[] = {"W", "H", "I", "J", "K", "L", NULL};
@@ -174,22 +154,73 @@ static const char* surface_probe_right_params[] = {"W", "H", "I", "J", "K", "L",
 static const char* surface_probe_front_params[] = {"W", "H", "I", "J", "K", "L", NULL};
 static const char* surface_probe_ref_params[] = {NULL}; // Empty - no parameters
 
-static const probe_action_t surface_probe_modes[][3] = {
+static const probe_action_t probe_modes_3d[][2] = {
     {
-        {NULL, NULL, NULL, NULL}, // Empty cell
-        {"G6520.1", surface_probe_back_params, img_arr_s_data, "back face"}, // Back
-        {NULL, NULL, NULL, NULL} // Empty cell
+        {"G6520.1", probe_modes_3d_bl, img_arr_nw_o_data, "back-left vise corner"},       // Back-Left
+        {"G6520.1", probe_modes_3d_br, img_arr_ne_o_data, "back-right vise corner"},     // Back-Right
     },
     {
-        {"G6520.1", surface_probe_left_params, img_arr_e_data, "left face"}, // Left
+        {"G6520.1", probe_modes_3d_fl, img_arr_sw_o_data, "front-left vise corner"},       // Front-Left
+        {"G6520.1", probe_modes_3d_fr, img_arr_se_o_data, "front-right vise corner"},     // Front-Right
+    },
+};
+static const size_t probe_modes_3d_rows = sizeof(probe_modes_3d) / sizeof(probe_modes_3d[0]);
+static const size_t probe_modes_3d_cols = sizeof(probe_modes_3d[0]) / sizeof(probe_action_t);
+
+static const probe_action_t probe_modes_2d_out[][3] = {
+    {
+        {"G6509.1", probe_modes_2d_out_params_bl, img_arr_nw_o_data, "outside back-left corner"},       // Back-Left
+        {"G6520.1", surface_probe_front_params, img_arr_n_o_data, "outside back face"},  // Outside back = inside front
+        {"G6509.1", probe_modes_2d_out_params_br, img_arr_ne_o_data, "outside back-right corner"},     // Back-Right
+    }, 
+    {
+        {"G6520.1", surface_probe_right_params, img_arr_w_o_data, "outside left face"},  // Outside left = Inside right
+        {"G6501.1", probe_modes_2d_out_params_boss, img_ctr1_boss_data, "center boss (outside)"},    // Outside Boss
+        {"G6520.1", surface_probe_left_params, img_arr_e_o_data, "outside right face"}, // Outside right = inside left
+    },
+    {
+        {"G6509.1", probe_modes_2d_out_params_fl, img_arr_sw_o_data, "outside front-left corner"},       // Front-Left
+        {"G6520.1", surface_probe_back_params, img_arr_s_o_data, "outside front face"}, // Outside front = inside back
+        {"G6509.1", probe_modes_2d_out_params_fr, img_arr_se_o_data, "front-right corner"},     // Front-Right
+    },
+    /* {
+        {"G6503.1", probe_modes_2d_out_params_rect, img_pkt_in_data, "outside rectangle"}, // Outside Rectangle
+    }*/
+};
+static const size_t probe_modes_2d_out_rows = sizeof(probe_modes_2d_out) / sizeof(probe_modes_2d_out[0]);
+static const size_t probe_modes_2d_out_cols = sizeof(probe_modes_2d_out[0]) / sizeof(probe_action_t);
+
+
+// Create the 2D array (an array of row pointers)
+static const probe_action_t probe_modes_2d_in[][3] = {
+    {
+        {"G6508.1", probe_modes_2d_in_params_bl, img_arr_nw_data, "back-left inside corner"},    // Back-Left
+        {"G6520.1", surface_probe_back_params, img_arr_n_data, "inside back face"}, // Outside front = inside back
+        {"G6508.1", probe_modes_2d_in_params_br, img_arr_ne_data, "back-right inside corner"},   // Back-Right
+    },
+    {
+        {"G6520.1", surface_probe_left_params, img_arr_w_data, "inside left face"}, // Outside right = inside left
+        {"G6500.1", probe_modes_2d_in_params_bore, img_ctr1_bore_data, "center bore (inside)"},          // Inside Bore
+        {"G6520.1", surface_probe_right_params, img_arr_e_data, "inside right face"}  // Outside left = Inside right
+    },
+    {
+        {"G6508.1", probe_modes_2d_in_params_fl, img_arr_sw_data, "front-left inside corner"},   // Front-Left
+        {"G6520.1", surface_probe_front_params, img_arr_s_data, "insider front face"},  // Outside back = inside front
+        {"G6508.1", probe_modes_2d_in_params_fr, img_arr_se_data, "front-right inside corner"},  // Front-Right
+    },
+    /* {
+        {"G6502.1", probe_modes_2d_in_params_pkt, img_pkt_out_data, "inside pocket"},          // Inside Pocket
+    }*/
+};
+
+static const size_t probe_modes_2d_in_rows = sizeof(probe_modes_2d_in) / sizeof(probe_modes_2d_in[0]);
+static const size_t probe_modes_2d_in_cols = sizeof(probe_modes_2d_in[0]) / sizeof(probe_action_t);
+
+static const probe_action_t surface_probe_modes[][2] = {
+    {
         {"G6520.1", surface_probe_top_params, img_ctr1_boss_data, "top surface"},  // Top surface
-        {"G6520.1", surface_probe_right_params, img_arr_w_data, "right face"}  // Right
+        {"G6520.1", surface_probe_ref_params, img_ctr1_bore_data, "reference surface"} // ref surface
     },
-    {
-        {NULL, NULL, NULL, NULL},  // Empty cell
-        {"G6520.1", surface_probe_front_params, img_arr_n_data, "front face"},  // Front
-        {"G6520.1", surface_probe_ref_params, img_ref_sfc_data, "reference surface"} // ref surface
-    }
 };
 
 static const size_t surface_probe_modes_rows = sizeof(surface_probe_modes) / sizeof(surface_probe_modes[0]);
@@ -452,6 +483,8 @@ void style_probe_obj(lv_obj_t *obj, float w_percent, float h_percent) {
     _size(obj, w, h);
 }
 
+#define PROBE_BTN_WIDTH 70
+#define PROBE_BTN_HEIGHT 76
 probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                                              tab_probe_t *tab_probe,
                                              const probe_action_t (*actions_)[],
@@ -480,6 +513,7 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
     _style_local(parent, pad_bottom, LV_PART_MAIN, 5);
     _style_local(parent, pad_left, LV_PART_MAIN, 0);
     _style_local(parent, pad_right, LV_PART_MAIN, 0);
+    _scrollable(parent, false);
 
     pbm->container = lv_obj_create(parent);
     if (!pbm->container) {
@@ -488,14 +522,16 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
         return NULL;
     }
 
+    _scrollable(pbm->container, false);
     _width(pbm->container, lv_pct(100));
     _height(pbm->container, LV_SIZE_CONTENT);
-    _maximize_client_area(pbm->container);
     _bg_opa(pbm->container, LV_OPA_0, _M);
-    _pads(pbm->container, 10, 20, 10, 20);
-    _margin_top(pbm->container, 15, LV_STATE_DEFAULT);
-
     _flex_flow(pbm->container, LV_FLEX_FLOW_COLUMN);
+    _maximize_client_area(pbm->container);
+    _margin_top(pbm->container, 15, LV_STATE_DEFAULT);
+    _pad_column(pbm->container, 1);
+    _pad_row(pbm->container, 1);
+    _margins(pbm->container, 0, 10, 0, 10);
 
     for (size_t j = 0; j < num_rows; j++) {
         lv_obj_t *row_container = lv_obj_create(pbm->container);
@@ -506,10 +542,10 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
         }
         _flex_flow(row_container, LV_FLEX_FLOW_ROW);
         _size(row_container, lv_pct(100), LV_SIZE_CONTENT);
-        _style_local(row_container, margin_all, LV_PART_MAIN, 0);
-        _style_local(row_container, pad_all, LV_PART_MAIN, 2);
-        _style_local(row_container, border_width, LV_PART_MAIN, 0);
+        _maximize_client_area(row_container);
         _bg_opa(row_container, LV_OPA_0, _M);
+        _pad_column(row_container, 1);
+        _pad_row(row_container, 1);
 
         for (size_t i = 0; i < num_cols; i++) {
             lv_obj_t *btn = NULL;
@@ -517,7 +553,7 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
             if (action->gcode == NULL)
             {
                 // empty cell.
-                 btn = lv_label_create(row_container); // Create an empty label
+                btn = lv_label_create(row_container); // Create an empty label
                 if (!btn) {
                     LV_LOG_ERROR("Failed to create empty btn");
                     probe_btn_matrix_destroy(pbm); // Clean up
@@ -536,7 +572,10 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                 }
 
                 lv_obj_set_user_data(btn, pbm);
-                _height(btn, 38);
+                _size(btn, PROBE_BTN_WIDTH, PROBE_BTN_HEIGHT);
+                _margin(btn, 0);
+                _pad(btn, 0);
+
                 lv_obj_add_event_cb(btn, probe_btn_matrix_click_handler, LV_EVENT_CLICKED, (void *) action);
 
                 lv_obj_t *img = lv_img_create(btn);
@@ -546,15 +585,15 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                     return NULL;
                  }
                 lv_img_set_src(img, actions[j][i].img_path);
+                _margin(img, 0);
+                _pad(img, 0);
                 lv_obj_center(img);
                 _style_local(btn, border_width, LV_PART_MAIN, 1);
-                _style_local(btn, border_color, LV_PART_MAIN, lv_color_hex(0x008080)); // Teal
+                //_style_local(btn, border_color, LV_PART_MAIN, lv_color_hex(0x008080)); // Teal
                 _style_local(btn, bg_opa, LV_PART_MAIN, LV_OPA_0);
             }
 
             lv_obj_set_flex_grow(btn, 1); // Use lv_obj_set_flex_grow
-            _style_local(btn, margin_all, LV_PART_MAIN, 0);
-            _style_local(btn, pad_all, LV_PART_MAIN, 0);
         }
     }
 
@@ -566,7 +605,7 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
           probe_btn_matrix_destroy(pbm);
           return NULL;
        }
-        lv_checkbox_set_text(pbm->quick_mode_chk, "Quick Mode");
+        lv_checkbox_set_text(pbm->quick_mode_chk, "Skew calibration");
         lv_obj_center(pbm->quick_mode_chk);
         lv_obj_add_event_cb(pbm->quick_mode_chk, quick_mode_cb, LV_EVENT_VALUE_CHANGED, pbm); // Pass pbm as user_data
 
@@ -576,6 +615,11 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
 
     _center(pbm->container);
     _update_layout(pbm->container);
+
+    if (pbm->quick_mode_chk) {
+        lv_obj_align_to(pbm->quick_mode_chk, pbm->container, LV_ALIGN_BOTTOM_LEFT, 0, 50);
+        _pad_bottom(pbm->container, 15, _M);
+    }
 
 // Draw a background representing the probed box' borders?
 #ifdef PROBE_BOX_BG
@@ -748,13 +792,15 @@ void tab_probe_init_probe_tabv(tab_probe_t *tp, lv_obj_t *parent) {
     tp->tab_settings = lv_tabview_add_tab(tp->main_tabs, "Setup");
     tp->tab_wcs = lv_tabview_add_tab(tp->main_tabs, "WCS");
     tp->tab_probe = lv_tabview_add_tab(tp->main_tabs, "3-axis");
-    tp->tab_probe_2d = lv_tabview_add_tab(tp->main_tabs, "2-axis");
-    tp->tab_surf = lv_tabview_add_tab(tp->main_tabs, "Surface");
+    tp->tab_probe_2d_in = lv_tabview_add_tab(tp->main_tabs, "Inside");
+    tp->tab_probe_2d_out = lv_tabview_add_tab(tp->main_tabs, "Outside");
+    tp->tab_surf = lv_tabview_add_tab(tp->main_tabs, "Extra");
 
     lv_obj_add_event_cb(tp->main_tabs, tab_probe_update_quick, LV_EVENT_VALUE_CHANGED, tp); // tp as user data
 
     tab_probe_init_sets_tab(tp, tp->tab_settings);
-    tab_probe_init_probe_tab_2d(tp, tp->tab_probe_2d);
+    tab_probe_init_probe_tab_2d_in(tp, tp->tab_probe_2d_in);
+    tab_probe_init_probe_tab_2d_out(tp, tp->tab_probe_2d_out);
     tab_probe_init_probe_tab_3d(tp, tp->tab_probe);
     tab_probe_init_surface_tab(tp, tp->tab_surf);
     tab_probe_init_wcs_tab(tp, tp->tab_wcs);
@@ -914,17 +960,63 @@ void tab_probe_init_surface_tab(tab_probe_t *tp, lv_obj_t *tab) {
     _center(container);
 
     tp->btns_surf = probe_btn_matrix_create(container, tp, surface_probe_modes,
-                                            surface_probe_modes_rows, surface_probe_modes_cols, 0.4, 0.3, false);
+                                            surface_probe_modes_rows, surface_probe_modes_cols, 0, 0, false);
     if(!tp->btns_surf)
     {
         LV_LOG_ERROR("Failed to create surface probe matrix");
     }
 }
 
-void tab_probe_init_probe_tab_2d(tab_probe_t *tp, lv_obj_t *tab2d) {
-    _style_local(tab2d, pad_all, LV_PART_MAIN, 5);
-    _style_local(tab2d, margin_all, LV_PART_MAIN, 0);
+void tab_probe_init_probe_tab_2d_out(tab_probe_t *tp, lv_obj_t *tab) {
+    _style_local(tab, pad_all, LV_PART_MAIN, 5);
+    _style_local(tab, margin_all, LV_PART_MAIN, 0);
+    _scrollable(tab, false);
 
+    _maximize_client_area(tab);
+    _size(tab, lv_pct(100), lv_pct(100));
+    _bg_opa(tab, 0, _M);
+
+    lv_obj_t *container = lv_obj_create(tab);
+     if (!container) {
+        LV_LOG_ERROR("surface tab container alloc failed");
+        return;
+    }
+    _maximize_client_area(container);
+    _style_local(container, pad_all, LV_PART_MAIN, 5);
+    _bg_opa(tab, 0, _M);
+    _center(container);
+
+    tp->btns_2d_out = probe_btn_matrix_create(container, tp, probe_modes_2d_out, probe_modes_2d_out_rows, probe_modes_2d_out_cols, 0, 0, true);
+    if(!tp->btns_2d_out) {
+        LV_LOG_ERROR("2d in probe matrix alloc failed");
+    }
+}
+
+void tab_probe_init_probe_tab_2d_in(tab_probe_t *tp, lv_obj_t *tab) {
+    _style_local(tab, pad_all, LV_PART_MAIN, 5);
+    _style_local(tab, margin_all, LV_PART_MAIN, 0);
+    _scrollable(tab, false);
+
+    _maximize_client_area(tab);
+    _size(tab, lv_pct(100), lv_pct(100));
+    _bg_opa(tab, 0, _M);
+
+    lv_obj_t *container = lv_obj_create(tab);
+     if (!container) {
+        LV_LOG_ERROR("surface tab container alloc failed");
+        return;
+    }
+    _maximize_client_area(container);
+    _style_local(container, pad_all, LV_PART_MAIN, 5);
+    _bg_opa(tab, 0, _M);
+    _center(container);
+
+    tp->btns_2d_in = probe_btn_matrix_create(container, tp, probe_modes_2d_in, probe_modes_2d_in_rows, probe_modes_2d_in_cols, 0, 0, true);
+    if(!tp->btns_2d_in) {
+        LV_LOG_ERROR("2d in probe matrix alloc failed");
+    }
+
+    /* Sub-tabview for in/out - no longer enough space with larger icons => move left
     lv_obj_t *tabv = lv_tabview_create(tab2d);
     _tv_bar_pos(tabv, LV_DIR_TOP);
     _tv_bar_size(tabv, 40);
@@ -936,7 +1028,7 @@ void tab_probe_init_probe_tab_2d(tab_probe_t *tp, lv_obj_t *tab2d) {
     lv_obj_t *tab_out = lv_tabview_add_tab(tabv, "Outside -> In");
     _flex_flow(tab_out, LV_FLEX_FLOW_COLUMN);
     tp->btns_2d_out = probe_btn_matrix_create(tab_out, tp, probe_modes_2d_out, probe_modes_2d_out_rows, probe_modes_2d_out_cols, 0.9, 0.75, true);
-     if(!tp->btns_2d_out) {
+    if(!tp->btns_2d_out) {
          LV_LOG_ERROR("2d out probe matrix alloc failed");
         return;
      }
@@ -949,6 +1041,7 @@ void tab_probe_init_probe_tab_2d(tab_probe_t *tp, lv_obj_t *tab2d) {
     }
 
     lv_obj_add_event_cb(tabv, tab_probe_update_quick, LV_EVENT_VALUE_CHANGED, tp); // tp as user data
+    */
 }
 
 void tab_probe_init_probe_tab_3d(tab_probe_t *tp, lv_obj_t *tab3d) {

@@ -171,6 +171,7 @@ void interface_init_main_tabs(interface_t *interface) {
         _tv_bar_pos(obj, LV_DIR_TOP);
         _tv_bar_size(obj, TAB_HEIGHT);
     );
+    _maximize_client_area(interface->main_tabs);
 
     if (!interface->main_tabs) {
         LV_LOG_ERROR("Failed to create main_tabs");
@@ -184,6 +185,7 @@ void interface_init_main_tabs(interface_t *interface) {
      }
      
     _flag(tab_content, LV_OBJ_FLAG_SCROLLABLE, false);
+    _maximize_client_area(tab_content);
 
     lv_obj_t *tab_jog = lv_tabview_add_tab(tabv, "Jog");
     lv_obj_t *tab_probe = lv_tabview_add_tab(tabv, "Probe");
@@ -191,6 +193,13 @@ void interface_init_main_tabs(interface_t *interface) {
     interface->tab_job_gcode = lv_tabview_add_tab(tabv, "Status");
     interface->tab_tool = lv_tabview_add_tab(tabv, "Tools");
     interface->tab_cam = lv_tabview_add_tab(tabv, "CAM");
+
+    _maximize_client_area(tab_jog);
+    _maximize_client_area(tab_probe);
+    _maximize_client_area(tab_machine);
+    _maximize_client_area(interface->tab_job_gcode);
+    _maximize_client_area(interface->tab_tool);
+    _maximize_client_area(interface->tab_cam);
 
     interface->tab_jog = tab_jog_create(tabv, interface, tab_jog);
     interface->tab_probe = tab_probe_create(tabv, interface, tab_probe);
