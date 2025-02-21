@@ -37,10 +37,8 @@ static void parse_gcode_line(duet_simulator_t *sim, const char *gcode_line) {
 
     if (strlen(line) == 0) return;
 
-
     char *command = strtok(line, " ");
     if (!command) return;
-
 
     if (strcmp(command, "G28") == 0) {
          // Simple homing simulation:  set all axes to homed and position to 0.
@@ -165,10 +163,12 @@ static void duet_send_gcode(machine_interface_t *self, const char *gcode, uint32
         return;
     }
 
-    char *line = strtok(gcode_copy, "\n");
+    char *saveptr;
+    char *line = strtok_r(gcode_copy, "\n", &saveptr);
     while (line != NULL) {
+        _df(0, ">> PARSE_GCODE: %s (%d / %d)", line, strlen(line), strlen(gcode));
         parse_gcode_line(sim, line);
-        line = strtok(NULL, "\n");
+        line = strtok_r(NULL, "\n", &saveptr);
     }
 
     free(gcode_copy);

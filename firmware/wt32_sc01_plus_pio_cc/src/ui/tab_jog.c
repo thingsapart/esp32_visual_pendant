@@ -49,8 +49,9 @@ static int get_axis_id(axis_t axis) {
 }
 
 void machine_curr_move_axis_changed(machine_interface_t *machine, void *user_data) {
-    tab_jog_t *tj = (tab_jog_t *) user_data;
-    if (tj) { jog_dial_set_axis_vis(tj->jog_dial, machine->current_move_axis); }
+    jog_dial_t *jd = (jog_dial_t *) user_data;
+
+    if (jd) { jog_dial_set_axis_vis(jd, machine->current_move_axis); }
 }
 
 // --- Event Handlers ---
@@ -60,9 +61,13 @@ static void axis_clicked_event_handler(lv_event_t *e) {
     uint32_t id = lv_btnmatrix_get_selected_btn(btnm);
     const char *txt = lv_btnmatrix_get_btn_text(btnm, id);
 
+    machine_interface_set_current_move_axis(jd->interface->machine, get_axis_from_string(txt));
+
+    /* - now happening on callback -
     if (jd && txt) {
         jog_dial_set_axis_vis(jd, get_axis_from_string(txt));
     }
+    */
 }
 
 static void feed_changed_event_handler(lv_event_t *e) {

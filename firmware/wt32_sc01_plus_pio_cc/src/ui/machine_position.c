@@ -29,8 +29,8 @@ static void label_home_clicked_event_handler(lv_event_t *e) {
         for (size_t i = 0; i < mp->num_coords; i++) {
             if (label == mp->axis_labels[i]) {
                 // Convert the axis name to a single character (X, Y, Z).
-                char axis_char = mp->coords[i][0];  // Get the first character (e.g., 'X')
-                mp->interface->machine->home(mp->interface->machine, (const char *)&axis_char); // Pass as string.
+                const char axis_char[2] = { mp->coords[i][0], '\0' };  // Get the first character (e.g., 'X')
+                mp->interface->machine->home(mp->interface->machine, (const char *)axis_char); // Pass as string.
                 break;
             }
         }

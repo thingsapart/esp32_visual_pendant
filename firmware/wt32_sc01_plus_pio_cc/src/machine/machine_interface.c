@@ -96,7 +96,7 @@ static void machinte_interface_send_gcode(machine_interface_t *self, const char 
 
 static void _default_send_gcode(machine_interface_t *self, const char *gcode) {
     // Default implementation:  Just log the G-code.  Replace with actual sending logic.
-    _df(0, "Sending G-code (default): %s", gcode);
+    _df(0, "Sending G-code (default): %s\n", gcode);
     //  _childclass_override(); // This is how you'd call a "virtual" method
 }
 
@@ -395,16 +395,25 @@ uint32_t machine_interface_next_poll_state(machine_interface_t *self)
 }
 
 axis_t machine_interface_move_current_axis(machine_interface_t *self, float feed, float value, bool relative) {
+    if (self->current_move_axis == AXIS_OFF) { return self->current_move_axis; }
     int axi = machine_interface_axis_t_idx(self->current_move_axis);
+    if (axi < 0 || axi >= AXIS_OFF) { return self->current_move_axis; }
+
     char axis = idx_to_axis(axi);
+    _df(0, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1], axes[2]);
     _default_move_to(self, axis, feed, value, relative);
     return self->current_move_axis;
 }
 
 axis_t machine_interface_step_current_axis(machine_interface_t *self, float feed, int steps) {
+    if (self->current_move_axis == AXIS_OFF) { return self->current_move_axis; }
     int axi = machine_interface_axis_t_idx(self->current_move_axis);
+    if (axi < 0 || axi >= AXIS_OFF) { return self->current_move_axis; }
+
     char axis = idx_to_axis(axi);
+
     float dist = self->current_move_step * steps;
+    _df(0, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1], axes[2]);
     _default_move_to(self, axis, feed, dist, true);
     return self->current_move_axis;
 }
@@ -424,6 +433,7 @@ axis_t machine_interface_get_current_move_axis(machine_interface_t *self) {
 }
 
 void machine_interface_set_current_move_axis(machine_interface_t *self, axis_t axis) {
+    _df(0, ">> SET_CURR_AX: %d => %d [%c, %c, %c].\n", self->current_move_axis, axis, axes[0], axes[1], axes[2]);
     if (self->current_move_axis != axis) {
         self->current_move_axis = axis;
         machine_interface_current_move_axis_updated(self);

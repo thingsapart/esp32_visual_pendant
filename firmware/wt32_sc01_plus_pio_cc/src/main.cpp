@@ -238,21 +238,6 @@ static machine_rrf_t machine;
 static interface_t interface;
 TaskHandle_t machine_task_handle = NULL;
 
-void test_screen() {
-    lv_obj_t * label1 = lv_label_create(lv_screen_active());
-    lv_label_set_long_mode(label1, LV_LABEL_LONG_WRAP);     /*Break the long lines*/
-    lv_label_set_text(label1, "Recolor is not supported for v9 now.");
-    lv_obj_set_width(label1, 150);  /*Set smaller width to make the lines wrap*/
-    lv_obj_set_style_text_align(label1, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(label1, LV_ALIGN_CENTER, 0, -40);
-
-    lv_obj_t * label2 = lv_label_create(lv_screen_active());
-    lv_label_set_long_mode(label2, LV_LABEL_LONG_SCROLL_CIRCULAR);     /*Circular scroll*/
-    lv_obj_set_width(label2, 150);
-    lv_label_set_text(label2, "It is a circularly scrolling text. ");
-    lv_obj_align(label2, LV_ALIGN_CENTER, 0, 40);
-}
-
 #include <esp_task_wdt.h>
 
 void print_reset_reason() {
@@ -342,7 +327,7 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "machine/arduino_serial_wrapper.h"
 
-#define MACHINE_POLL_INTERVAL 5000
+#define MACHINE_POLL_INTERVAL 200
 
 // Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
 void machine_task(void *pvParameters) {
@@ -400,7 +385,6 @@ void setup() {
   print_reset_reason();
 
   // test_ui(lv_screen_active());
-  //test_screen();
 
   _d(2, "Creating Machine Task..\n");
 

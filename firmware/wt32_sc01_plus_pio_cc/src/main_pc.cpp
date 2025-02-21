@@ -21,6 +21,14 @@ void signal_handler(int interrupt)
     }
 }
 
+extern "C" {
+    void encoder_set_ui_mode() {
+    }
+
+    void encoder_set_encoder_mode() {
+    }
+}
+
 #include "machine/machine_interface.h"
 #include "machine/machine_sim.h"
 #include "ui/interface.h"

@@ -53,13 +53,14 @@ static void _machine_rrf_send_gcode(machine_interface_t *self, const char *gcode
         return;
     }
 
-    char *line = strtok(gcode_copy, "\n");
+    char *saveptr;
+    char *line = strtok_r(gcode_copy, "\n", &saveptr);
     while (line != NULL) {
         _df(0, "Sending: %s", line);
         // Use the wrapper function here:
         serial_write(rrf_self->uart, (const uint8_t *)line, strlen(line));
         serial_write(rrf_self->uart, (const uint8_t *)"\n", 1);
-        line = strtok(NULL, "\n");
+        line = strtok_r(NULL, "\n", &saveptr);
     }
     free(gcode_copy);
 }

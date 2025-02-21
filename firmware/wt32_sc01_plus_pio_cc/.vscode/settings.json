@@ -81,6 +81,8 @@
         "ui_helpers.h": "c",
         "tab_probe.h": "c",
         "string.h": "c",
-        "lv_tileview.h": "c"
+        "lv_tileview.h": "c",
+        "queue": "c",
+        "stack": "c"
     }
 }
