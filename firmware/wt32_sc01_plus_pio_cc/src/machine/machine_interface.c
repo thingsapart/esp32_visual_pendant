@@ -7,6 +7,9 @@
 #include <assert.h>
 
 static const char *TAG = "machine_interface"; // Used for logging
+static const char axes[] = {
+        'X', 'Y', 'Z', '\0'
+    };
 
 #ifdef POSIX
 # include <unistd.h>
@@ -267,6 +270,9 @@ machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t 
     self->polli = -1;
     self->last_continuous_tick = 0;
 
+    self->current_move_axis = AXIS_OFF;
+    self->current_move_step = 1.0;
+
     return self;
 }
 
@@ -345,6 +351,19 @@ int machine_interface_axis_idx(machine_interface_t *self, char axis) {
     }
 }
 
+int machine_interface_axis_t_idx(axis_t axis) {
+    switch (axis) {
+        case AXIS_X: return 0;
+        case AXIS_Y: return 1;
+        case AXIS_Z: return 2;
+        default:  return -1; // Indicate invalid axis
+    }
+}
+
+char idx_to_axis(int i) {
+    return axes[i];
+}
+
 void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, uint32_t poll_state) {
     if (!gcode_queue_push(&self->gcode_queue, gcode))
     {
@@ -375,12 +394,48 @@ uint32_t machine_interface_next_poll_state(machine_interface_t *self)
     return poll_state;
 }
 
+axis_t machine_interface_move_current_axis(machine_interface_t *self, float feed, float value, bool relative) {
+    int axi = machine_interface_axis_t_idx(self->current_move_axis);
+    char axis = idx_to_axis(axi);
+    _default_move_to(self, axis, feed, value, relative);
+    return self->current_move_axis;
+}
+
+axis_t machine_interface_step_current_axis(machine_interface_t *self, float feed, int steps) {
+    int axi = machine_interface_axis_t_idx(self->current_move_axis);
+    char axis = idx_to_axis(axi);
+    float dist = self->current_move_step * steps;
+    _default_move_to(self, axis, feed, dist, true);
+    return self->current_move_axis;
+}
+
+axis_t machine_interface_next_move_axis(machine_interface_t *self){
+    size_t i = (size_t)self->current_move_axis;
+    i = (i + 1) % (AXIS_OFF + 1);
+    self->current_move_axis = (axis_t) i;
+
+    machine_interface_current_move_axis_updated(self);
+
+    return self->current_move_axis;
+}
+
+axis_t machine_interface_get_current_move_axis(machine_interface_t *self) {
+    return self->current_move_axis;
+}
+
+void machine_interface_set_current_move_axis(machine_interface_t *self, axis_t axis) {
+    if (self->current_move_axis != axis) {
+        self->current_move_axis = axis;
+        machine_interface_current_move_axis_updated(self);
+    }
+}
+
 void machine_interface_task_loop_iter(machine_interface_t *self) {
     machine_interface_process_gcode_q(self);
 
     self->_update_machine_state(self, self->poll_state);
 
-     _df(0, "%s", self->debug_print(self));
+    _df(0, "%s", self->debug_print(self));
 
     call_callbacks(state_change_cb);
 
@@ -447,6 +502,10 @@ void machine_interface_connected_updated(machine_interface_t *self) {
     call_callbacks(connected_changed_cb);
 }
 
+void machine_interface_current_move_axis_updated(machine_interface_t *self) {
+    call_callbacks(current_move_axis_changed_cb);
+}
+
 void machine_interface_update_position(machine_interface_t *self, float *values, float *values_wcs)
 {
     memcpy(self->position, values, sizeof(self->position));
@@ -492,3 +551,4 @@ add_callback_fn(machine_interface, sensors_changed)
 add_callback_fn(machine_interface, dialogs_changed)
 add_callback_fn(machine_interface, spindles_tools_changed)
 add_callback_fn(machine_interface, connected_changed)
+add_callback_fn(machine_interface, current_move_axis_changed)

@@ -58,27 +58,16 @@ static lv_obj_t *container_row(lv_obj_t *parent) {
 }
 
 // --- Event Handlers ---
-static void axis_float_btn_cb(lv_event_t *e)
-{
-     lv_obj_t *label = lv_event_get_target(e);
-    if(label)
-    {
-        lv_obj_t* parent = lv_obj_get_parent(label);
-        if (parent)
-        {
-              // change axis and update button:
-             tab_machine_t *tm = (tab_machine_t *)lv_event_get_user_data(e);
-             axis_t next_axis = jog_dial_next_axis(tm->interface->tab_jog->jog_dial);
-            lv_label_set_text(label, axes_options[next_axis]); // get axis string and set.
-        }
-    }
+static void axis_float_btn_cb(lv_event_t *e) {
+    // change axis and update button:
+    tab_machine_t *tm = (tab_machine_t *)lv_event_get_user_data(e);
+    axis_t next_axis = machine_interface_next_move_axis(tm->interface->machine);
 }
 
-static void axis_change_cb(axis_t axis, void *user_data)
-{
+static void axis_change_cb(machine_interface_t *mach, void *user_data) {
     lv_obj_t * float_btn_label = (lv_obj_t*) user_data;
     if (float_btn_label) {
-        lv_label_set_text(float_btn_label, axes_options[axis]); // get current axis.
+        lv_label_set_text(float_btn_label, axes_options[mach->current_move_axis]); // get current axis.
     }
 }
 
@@ -94,6 +83,7 @@ static void gcode_clicked(file_list_t *filelist, const char *file) {
     //   interface->machine->start_job(interface->machine, file);
     // }
 }
+
 // Placeholder.  Replace with your actual file list item clicked handlers.
 static void macro_clicked(file_list_t *filelist, const char *file) {
     // interface_t *interface = (interface_t *)user_data;
@@ -199,11 +189,11 @@ void tab_machine_init_axis_float_btn(tab_machine_t *tm) {
         lv_obj_del(tm->float_btn);
         return;
     }
-    lv_label_set_text(label, axes_options[tm->interface->tab_jog->jog_dial->axis]); // set initial axis.
+    lv_label_set_text(label, axes_options[tm->interface->machine->current_move_axis]); // set initial axis.
     lv_obj_center(label);
 
-    lv_obj_add_event_cb(label, axis_float_btn_cb, LV_EVENT_CLICKED, tm); // tm as user data
-    jog_dial_add_axis_change_cb(tm->interface->tab_jog->jog_dial, axis_change_cb, label);  // Pass label as user_data
+    lv_obj_add_event_cb(tm->float_btn, axis_float_btn_cb, LV_EVENT_CLICKED, tm); // tm as user data
+    machine_interface_add_current_move_axis_changed_cb(tm->interface->machine, label, axis_change_cb);
     _style_local(tm->float_btn, radius, LV_PART_MAIN, LV_RADIUS_CIRCLE);
 }
 
@@ -298,7 +288,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
         _pad_row(obj, 0);
         _pad_column(obj, 0);
 
-        msm->left_side = mk_container("msm:left", outer_obj,            
+        msm->left_side = mk_container("msm:left", outer_obj,
             _flex_grow(obj, 1);
             _size(obj, lv_pct(60), lv_pct(100));
             _bg_opa(obj, LV_OPA_TRANSP, _M);
@@ -325,7 +315,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
             );
             msm->scale_feed = mk_scale(NULL, outer_obj,
                 _maximize_client_area(obj);
-                _margins(obj, -12, 18, 0, 18); 
+                _margins(obj, -12, 18, 0, 18);
                 _pad_all(obj, 0, _M);
                 _size(obj, lv_pct(100), 20);
                 lv_scale_set_mode(obj, LV_SCALE_MODE_HORIZONTAL_BOTTOM);
@@ -352,7 +342,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
             );
             msm->scale_spindle_rpm = mk_scale(NULL, outer_obj,
                 _maximize_client_area(obj);
-                _margins(obj, -12, 18, 0, 18); 
+                _margins(obj, -12, 18, 0, 18);
                 _pad_all(obj, 0, _M);
                 _size(obj, lv_pct(100), 20);
 
@@ -402,7 +392,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
 
                     msm->scale_spindle_chipload = mk_scale("msm:scl_spnd_cl", outer_obj,
                         _maximize_client_area(obj);
-                        _margins(obj, -12, 18, 0, 18); 
+                        _margins(obj, -12, 18, 0, 18);
                         _pad_all(obj, 0, _M);
                         _size(obj, lv_pct(100), 20);
 
@@ -431,7 +421,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
                     _maximize_client_area(obj);
                     _flex_grow(obj, 1);
                     lv_obj_add_event_cb(obj, mat_dd_change, LV_EVENT_VALUE_CHANGED, msm);
-                ); 
+                );
                 msm->mill_dd = mk_dropdown("msm:mill_dd", outer_obj,
                     lv_dropdown_set_options_static(obj, mill_options);
                     _maximize_client_area(obj);

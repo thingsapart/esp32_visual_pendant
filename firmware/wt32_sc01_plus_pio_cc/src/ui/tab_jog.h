@@ -21,13 +21,6 @@ typedef struct machine_position_wcs_t machine_position_wcs_t;
 
 extern const char *axes_options[];
 
-typedef enum {
-    AXIS_X,
-    AXIS_Y,
-    AXIS_Z,
-    AXIS_OFF
-} axis_t;
-
 typedef struct {
     const char *label;
     float value;
@@ -46,14 +39,13 @@ struct jog_dial_t {
 
     machine_position_wcs_t *position;
 
-    axis_t axis;
     int axis_id;
     float feed;
     int last_rotary_pos;
     int prev;
     char **btn_map;
     axis_change_cb_t axis_change_cb;
-    void *axis_change_user_data; 
+    void *axis_change_user_data;
 };
 
 // TabJog related structures (if needed)
@@ -70,7 +62,6 @@ tab_jog_t *tab_jog_create(lv_obj_t *tabv, interface_t *interface, lv_obj_t *tab)
 jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface);
 void jog_dial_set_axis_vis(jog_dial_t *jd, axis_t ax);
 axis_t jog_dial_next_axis(jog_dial_t *jd);
-void jog_dial_add_axis_change_cb(jog_dial_t *jd, axis_change_cb_t cb, void *user_data);
 void jog_dial_set_value(jog_dial_t *jd, int v);
 bool jog_dial_axis_selected(jog_dial_t *jd);
 void jog_dial_inc(jog_dial_t *jd);

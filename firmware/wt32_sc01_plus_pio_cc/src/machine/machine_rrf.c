@@ -69,11 +69,12 @@ static bool _machine_rrf_has_response(machine_rrf_t *self) {
 }
 
 static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t buffer_size) {
+    _d(0, "Reading serial...\n");
     size_t len = serial_read_line_buf(self->uart, buffer, buffer_size, READ_TIMEOUT_MS);
     if (len > 0) {
         buffer[len] = '\0'; // Null-terminate the string
 
-        _df(0, "Received: %s", buffer);
+        _df(0, "Received: %s\n", buffer);
         return true;
     }
 
@@ -87,13 +88,12 @@ static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd
     if (_machine_rrf_read_response(self, response_buffer, sizeof(response_buffer))) {
         _machine_rrf_parse_json_response(self, response_buffer);
         if (!self->connected) {
+            self->connected = true;
+            machine_interface_connected_updated(&self->base);
+
             machine_interface_position_updated(&self->base);
             machine_interface_wcs_updated(&self->base);
             machine_interface_home_updated(&self->base);
-        }
-        if (!self->connected) {
-            self->connected = true;
-            machine_interface_connected_updated(&self->base);
         }
     } else {
         _df(1, "Timeout or Error: %s", cmd);
@@ -114,9 +114,11 @@ static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_
         snprintf(cmd1, sizeof(cmd1), "M409 K\"move.axes[]\" F\"d5,f\"");
         _machine_rrf_proc_machine_state(rrf_self, cmd1);
 
-        char cmd2[64];
-        snprintf(cmd2, sizeof(cmd2), "M409 K\"%s\"", rrf_self->input_sel ? rrf_self->input_sel : "");
-        _machine_rrf_proc_machine_state(rrf_self, cmd2);
+        if (rrf_self->input_sel) {
+          char cmd2[64];
+          snprintf(cmd2, sizeof(cmd2), "M409 K\"%s\"", rrf_self->input_sel);
+          _machine_rrf_proc_machine_state(rrf_self, cmd2);
+        }
     }
     if (poll_state & MACHINE_POSITION_EXT) {
         _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.axes[]\" F\"d5\"");
@@ -413,6 +415,22 @@ static void _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
             snprintf(input_sel_str, sizeof(input_sel_str), "inputs[%d].axesRelative", self->input_idx);
             self->input_sel = strdup(input_sel_str); // Allocate and copy
         }
+    } else if (strcmp(key, "inputs[].name") == 0) {
+        cJSON *name_json = NULL;
+        int i = 0;
+        cJSON_ArrayForEach(name_json, result_json) {
+            if (cJSON_IsString(name_json)) {
+              const char *name = name_json->valuestring;
+
+              if (strcmp(name, "Aux") == 0) {
+                self->input_idx = i;
+                char input_sel_str[64];
+                snprintf(input_sel_str, sizeof(input_sel_str), "inputs[%d].axesRelative", self->input_idx);
+                self->input_sel = strdup(input_sel_str); // Allocate and copy
+              }
+            }
+            ++i;
+        }
     } else if (self->input_sel && strcmp(key, self->input_sel) == 0) {
         if (cJSON_IsBool(result_json)) {
             bool move_relative = cJSON_IsTrue(result_json);
@@ -460,6 +478,12 @@ machine_rrf_t* machine_rrf_create(uint16_t sleep_ms, int tx_pin, int rx_pin) {
     return machine_rrf_init(self, sleep_ms, tx_pin, rx_pin);
 }
 
+void _machine_rrf_find_input(machine_rrf_t *self) {
+    char cmd1[64];
+    snprintf(cmd1, sizeof(cmd1), "M409 K\"inputs[].name\"");
+    _machine_rrf_proc_machine_state(self, cmd1);
+}
+
 machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_pin, int rx_pin) {
     // Initialize the base class part
     machine_interface_init(&self->base, sleep_ms);
@@ -468,7 +492,7 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_p
     self->connected = false;
     self->input_sel = NULL; // Initialize to NULL
     self->input_idx = 0;
-    
+
     // Initialize UART using the wrapper
     self->uart = serial_init(RRF_SERIAL_UART_NUM, 115200, CFG_SERIAL_8N1, rx_pin, tx_pin);
     if (!self->uart) {
@@ -488,6 +512,10 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_p
     self->base.move_continuous_stop = _machine_rrf_continuous_stop;
     self->base._continuous_move = _machine_rrf_continuous_move;
     self->base._continuous_stop = _machine_rrf_continuous_stop;
+
+    _d(0, "Initialized RRF machine...\n");
+
+    _machine_rrf_find_input(self);
 
     return self;
 }
@@ -919,6 +947,7 @@ void _machine_rrf_parse_move_axes_brief(machine_interface_t *machine, const char
         }
         machine->position[i] = machine_pos;
         machine->wcs_position[i] = wcs_pos;
+        _df(0, " => AXES: %d: pos %f, wcs-pos %f\n", i, machine_pos, wcs_pos);
     }
     if(updated) machine_interface_position_updated(machine);
 }

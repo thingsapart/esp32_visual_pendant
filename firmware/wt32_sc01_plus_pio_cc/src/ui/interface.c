@@ -183,7 +183,7 @@ void interface_init_main_tabs(interface_t *interface) {
         LV_LOG_ERROR("tabview get_content() failed");
         return;
      }
-     
+
     _flag(tab_content, LV_OBJ_FLAG_SCROLLABLE, false);
     _maximize_client_area(tab_content);
 

@@ -30,7 +30,6 @@ typedef enum {
     RRF_STATUS_T = MACHINE_STATUS_TOOL_CHANGING,
     RRF_STATUS_B = MACHINE_STATUS_BUSY,
 } rrf_status_t;
-
 // --- RRF Machine Structure ---
 
 typedef struct {

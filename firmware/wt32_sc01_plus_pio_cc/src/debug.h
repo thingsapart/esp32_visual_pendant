@@ -9,9 +9,11 @@
 
 #ifdef UI_DEBUG_LOG
 
+
 # if ESP32_HW
 #  include "machine/arduino_serial_wrapper.h"
 #  include <string.h>
+#  include <stdio.h>
 #  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) { serial_write(get_serial_handle(-1), (uint8_t*) s, strlen(s)); } } while (false)
 #  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { char __temp[1024]; snprintf(__temp, 1023, format, ##__VA_ARGS__); _d(lvl, __temp); } }  while (false)
 # else
@@ -20,8 +22,8 @@
 #  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { printf(format, __VA_ARGS__); fflush(stdout); } } while (0)
 # endif
 #else
-#define _d(lvl, s) 
-#define _df(lvl, format, ...) 
-#endif 
+#define _d(lvl, s)
+#define _df(lvl, format, ...)
+#endif
 
 #endif // __DEBUG_H_

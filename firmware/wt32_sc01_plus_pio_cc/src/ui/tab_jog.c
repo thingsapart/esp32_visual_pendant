@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ui_helpers.h"
+#include "interface.h"
 
 // --- Static Data ---
 
@@ -47,6 +48,10 @@ static int get_axis_id(axis_t axis) {
     return -1; // Indicate "Off"
 }
 
+void machine_curr_move_axis_changed(machine_interface_t *machine, void *user_data) {
+    tab_jog_t *tj = (tab_jog_t *) user_data;
+    if (tj) { jog_dial_set_axis_vis(tj->jog_dial, machine->current_move_axis); }
+}
 
 // --- Event Handlers ---
 static void axis_clicked_event_handler(lv_event_t *e) {
@@ -104,8 +109,7 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
     jd->parent = parent;
     jd->interface = interface;
     jd->feed = 1.0f;
-    jd->axis = AXIS_OFF;
-    jd->axis_id = get_axis_id(jd->axis);
+    jd->axis_id = get_axis_id(machine_interface_get_current_move_axis(interface->machine));
     jd->last_rotary_pos = 0;
     jd->prev = 0;
 
@@ -145,7 +149,7 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
         free(jd);
         return NULL;
     }
-    
+
     _size(jd->arc, lv_pct(100), lv_pct(100));
     lv_arc_set_rotation(jd->arc, -90);
     lv_arc_set_bg_angles(jd->arc, 0, 360);
@@ -177,7 +181,7 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
         free(jd);
         return NULL;
     }
-    
+
     lv_slider_set_range(jd->feed_slider, 0, 200);
     lv_slider_set_value(jd->feed_slider, 100, LV_ANIM_OFF);
     _size(jd->feed_slider, 20, lv_pct(90));
@@ -216,7 +220,7 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
         lv_obj_del(jd->axis_btns);
         free(jd);
     }
-    
+
     lv_obj_update_layout(jd->arc);
     _flag(jd->position->container, LV_OBJ_FLAG_IGNORE_LAYOUT, true);
     lv_obj_align_to(jd->position->container, jd->arc, LV_ALIGN_CENTER, 0, 0);
@@ -224,7 +228,9 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
     // dbg_layout(jd->arc);
 
     //Initial state.
-    jog_dial_set_axis_vis(jd, AXIS_OFF);
+    // jog_dial_set_axis_vis(jd, AXIS_OFF);
+    machine_interface_add_current_move_axis_changed_cb(interface->machine, jd, machine_curr_move_axis_changed);
+    machine_interface_set_current_move_axis(interface->machine, AXIS_OFF);
 
     return jd;
 }
@@ -232,7 +238,6 @@ jog_dial_t *jog_dial_create(lv_obj_t *parent, interface_t *interface) {
 void jog_dial_set_axis_vis(jog_dial_t *jd, axis_t ax) {
     if (!jd || !jd->axis_btns) return;
 
-    jd->axis = ax;
     jd->axis_id = get_axis_id(ax);
     size_t i = (size_t)ax;
 
@@ -240,28 +245,15 @@ void jog_dial_set_axis_vis(jog_dial_t *jd, axis_t ax) {
     if (i < num_axes_options) {
         lv_btnmatrix_set_btn_ctrl(jd->axis_btns, i, LV_BTNMATRIX_CTRL_CHECKED);
     }
-
-
-    // Call the callback if registered
-    if (jd->axis_change_cb) {
-        jd->axis_change_cb(jd->axis, jd->axis_change_user_data);
-    }
 }
+
 axis_t jog_dial_next_axis(jog_dial_t *jd) {
-    if (!jd) return AXIS_OFF;
-
-    size_t i = (size_t)jd->axis;
-    i = (i + 1) % num_axes_options;
-    lv_btnmatrix_set_btn_ctrl(jd->axis_btns, i, LV_BTNMATRIX_CTRL_CHECKED);
-    jog_dial_set_axis_vis(jd, (axis_t)i);
-    return jd->axis;
+    axis_t next = machine_interface_next_move_axis(jd->interface->machine);
+    // lv_btnmatrix_set_btn_ctrl(interface->machine->axis_btns, i, LV_BTNMATRIX_CTRL_CHECKED);
+    // jog_dial_set_axis_vis(jd, (axis_t)i);
+    return next;
 }
 
-void jog_dial_add_axis_change_cb(jog_dial_t *jd, axis_change_cb_t cb, void *user_data) {
-    if (!jd) return;
-    jd->axis_change_cb = cb;
-    jd->axis_change_user_data = user_data;
-}
 void jog_dial_set_value(jog_dial_t *jd, int v) {
     if (!jd) return;
     lv_arc_set_value(jd->arc, v);

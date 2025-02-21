@@ -8,6 +8,8 @@
 #include "ui_helpers.h"
 #include "ui/interface.h"
 
+#include "debug.h"
+
 #define FONT_WIDTH 11
 #define FONT_HEIGHT 22
 
@@ -36,14 +38,12 @@ static void label_home_clicked_event_handler(lv_event_t *e) {
 }
 
 static void wcs_label_clicked_event_handler(lv_event_t *e) {
-    // machine_position_wcs_t *mp = (machine_position_wcs_t *)lv_event_get_user_data(e); // not used.
-     lv_obj_t *label = lv_event_get_target(e);
-     if (label) // avoid calling interface method if no interface defined yet.
-     {
-          // go to next wcs:
-          machine_interface_t * iface = (machine_interface_t*) lv_event_get_user_data(e); // get interface from the event.
-          iface->next_wcs(iface);
-     }
+    machine_interface_t * iface = (machine_interface_t*) lv_event_get_user_data(e); // get interface from the event.
+    _df(0, "NEXT WCS: %p\n", iface);
+
+    if (iface) {
+        iface->next_wcs(iface);
+    }
 }
 
 // --- Callback Functions ---
@@ -304,7 +304,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
 
          // Special case: Second entry (index 1) is used to switch WCS.
         if (i == 1) {
-            lv_obj_add_event_cb(mp->coord_sys_labels[i], wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface); // note, pass *interface* as userdata.
+            lv_obj_add_event_cb(mp->coord_sys_labels[i], wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface);
             _flag(mp->coord_sys_labels[i], LV_OBJ_FLAG_CLICKABLE, true);
         }
     }

@@ -1,10 +1,12 @@
 #include "encoder.hpp"
 
-#include <assert.h> 
+#include <assert.h>
+
+#include "debug.h"
 
 Encoder encoder(ENCODER_PIN_X, ENCODER_PIN_Y, 4);
 
-Encoder::Encoder(uint8_t pin_x, uint8_t pin_y, int divisor) 
+Encoder::Encoder(uint8_t pin_x, uint8_t pin_y, int divisor)
     : enc(pin_x, pin_y), uiMode(false), uiModeCount(0), encModeCount(0), divisor(divisor),
       encModePosition(0) {}
 
@@ -16,6 +18,7 @@ int ::Encoder::readAndReset() {
     if (rem > 0) { res += 1; rem -= divisor; }
     enc.zero();
     if (uiMode) {
+        if (res != 0) _df(0, "\n\n>> ENC: val %d, rem %d, res %d\n\n", val, rem, res);
         uiModeCount = rem;
     } else {
         encModePosition += res;
@@ -44,5 +47,15 @@ void Encoder::setEncoderMode() {
         uiModeCount += enc.position();
         enc.zero();
         uiMode = false;
+    }
+}
+
+extern "C" {
+    void encoder_set_ui_mode() {
+        encoder.setUiMode();
+    }
+
+    void encoder_set_encoder_mode() {
+        encoder.setEncoderMode();
     }
 }

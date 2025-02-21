@@ -46,6 +46,13 @@ typedef enum {
 // Forward declarations to avoid circular dependencies
 typedef struct machine_interface_t machine_interface_t;
 
+typedef enum {
+    AXIS_X,
+    AXIS_Y,
+    AXIS_Z,
+    AXIS_OFF        // AXIS_OFF has to be last.
+} axis_t;
+
 typedef struct {
     const char* id;
     float value;
@@ -65,15 +72,7 @@ typedef struct {
 
 typedef void (*machine_callback_t)(machine_interface_t *, void *);
 
-typedef struct state_change_callback_t { void *user_data; machine_callback_t cb_fn; } state_change_callback_t;
-typedef struct pos_changed_callback_t { void *user_data; machine_callback_t cb_fn; } pos_changed_callback_t;
-typedef struct home_changed_callback_t { void *user_data; machine_callback_t cb_fn; } home_changed_callback_t;
-typedef struct wcs_changed_callback_t { void *user_data; machine_callback_t cb_fn; } wcs_changed_callback_t;
-typedef struct feed_changed_callback_t { void *user_data; machine_callback_t cb_fn; } feed_changed_callback_t;
-typedef struct sensors_changed_callback_t { void *user_data; machine_callback_t cb_fn; } sensors_changed_callback_t;
-typedef struct dialogs_changed_callback_t { void *user_data; machine_callback_t cb_fn; } dialogs_changed_callback_t;
-typedef struct spindles_tools_changed_callback_t { void *user_data; machine_callback_t cb_fn; } spindles_tools_changed_callback_t;
-typedef struct connected_callback_t { void *user_data; machine_callback_t cb_fn; } connected_callback_t;
+typedef struct machine_change_callback_t { void *user_data; machine_callback_t cb_fn; } machine_change_callback_t;
 
 typedef void (* files_changed_callback_cb_t)(machine_interface_t *mach, void *self, const char *path, const char **files);
 typedef struct files_changed_callback_t {
@@ -107,6 +106,8 @@ typedef struct machine_interface_t {
     float wcs_position[3];
     float target_position[3];
     float moving_target_position[3];
+    axis_t current_move_axis;
+    float current_move_step;
     int wcs;
     const char* tool;  // Pointer to a string literal or dynamically allocated string
     float z_offs;
@@ -136,15 +137,16 @@ typedef struct machine_interface_t {
     // --- Callbacks ---
 #define MAX_CALLBACKS 5
 
-    state_change_callback_t state_change_cb[MAX_CALLBACKS];
-    pos_changed_callback_t pos_changed_cb[MAX_CALLBACKS];
-    home_changed_callback_t home_changed_cb[MAX_CALLBACKS];
-    wcs_changed_callback_t wcs_changed_cb[MAX_CALLBACKS];
-    feed_changed_callback_t feed_changed_cb[MAX_CALLBACKS];
-    sensors_changed_callback_t sensors_changed_cb[MAX_CALLBACKS];
-    dialogs_changed_callback_t dialogs_changed_cb[MAX_CALLBACKS];
-    spindles_tools_changed_callback_t spindles_tools_changed_cb[MAX_CALLBACKS];
-    connected_callback_t connected_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t state_change_cb[MAX_CALLBACKS];
+    machine_change_callback_t pos_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t home_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t wcs_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t feed_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t sensors_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t dialogs_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t spindles_tools_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t connected_changed_cb[MAX_CALLBACKS];
+    machine_change_callback_t current_move_axis_changed_cb[MAX_CALLBACKS];
     files_changed_callback_t files_changed_cb[MAX_CALLBACKS];
 
     // --- Internal State ---
@@ -198,9 +200,15 @@ void machine_interface_dialogs_updated(machine_interface_t *self);
 void machine_interface_spindles_tools_updated(machine_interface_t *self);
 void machine_interface_files_updated(machine_interface_t *self, const char *fdir);
 void machine_interface_connected_updated(machine_interface_t *self);
+void machine_interface_current_move_axis_updated(machine_interface_t *self);
 void machine_interface_update_position(machine_interface_t *self, float *values, float *values_wcs);
 bool machine_interface_is_continuous_move(machine_interface_t *self);
 uint32_t machine_interface_next_poll_state(machine_interface_t *self);
+void machine_interface_set_current_move_axis(machine_interface_t *self, axis_t axis);
+axis_t machine_interface_get_current_move_axis(machine_interface_t *self);
+axis_t machine_interface_next_move_axis(machine_interface_t *self);
+axis_t machine_interface_move_current_axis(machine_interface_t *self, float feed, float value, bool relative);
+axis_t machine_interface_step_current_axis(machine_interface_t *self, float feed, int steps);
 
 bool machine_interface_add_files_changed_cb(machine_interface_t *self, const char *path, void *user_data, files_changed_callback_cb_t cb);
 
@@ -218,6 +226,7 @@ add_callback_proto(machine_interface, sensors_changed)
 add_callback_proto(machine_interface, dialogs_changed)
 add_callback_proto(machine_interface, spindles_tools_changed)
 add_callback_proto(machine_interface, connected_changed)
+add_callback_proto(machine_interface, current_move_axis_changed)
 
 // G-code queue functions
 void gcode_queue_init(gcode_queue_t *queue);
@@ -230,4 +239,4 @@ size_t gcode_queue_count(const gcode_queue_t *queue);
 }
 #endif
 
-#endif // MACHINE_INTERFACE_H   
+#endif // MACHINE_INTERFACE_H

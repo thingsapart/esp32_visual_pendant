@@ -166,13 +166,16 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) 
 /* Initialize the input device driver */
 lv_indev_t * indev = NULL;
 lv_display_t * display1 = NULL;
+lv_group_t *default_group = NULL;
 
 /* Initialize a second indev for the encoder wheel */
 lv_indev_t * indev_encoder = NULL;        /* Create input device connected to Default Display. */
 
 /*Read the touchpad*/
 #define DEBUG_TOUCH 0
-#define DEBUG_ENCODER 0
+#define DEBUG_ENCODER 1
+
+#include "debug.h"
 
 void touch_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
     uint16_t touchX, touchY;
@@ -192,19 +195,34 @@ void touch_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
 
 #include "machine/encoder.hpp"
 
+static bool uiMode = false;
 void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
-  if (!encoder.isUiMode()) {
+  /*
+  //if (uiMode == false && encoder.isUiMode() == true) {
+  if (uiMode) {
+    data->state = LV_INDEV_STATE_PRESSED;
+  } else {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
+  */
+
+  uiMode = encoder.isUiMode();
+  data->state = LV_INDEV_STATE_RELEASED;
+
+  if (!uiMode) {
     data->enc_diff = 0;
   } else {
     data->enc_diff = encoder.readAndReset();
-    
-    if (data->enc_diff > 0) {
+
+    if (data->enc_diff != 0) {
+      data->state = LV_INDEV_STATE_PRESSED;
       #if DEBUG_ENCODER != 0
-        Serial.print( "Data ENC delta: " ); Serial.println( data->enc_diff );
+        _df(0, "Data ENC delta: %d.", data->enc_diff);
       #endif
+    } else {
+      //data->state = LV_INDEV_STATE_RELEASED;
     }
   }
-  data->state = LV_INDEV_STATE_RELEASED;
 }
 
 //************************************************************************************
@@ -215,10 +233,10 @@ void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
 #include "machine/machine_rrf.h"
 #include "ui/tab_jog.h"
 #include "ui/interface.h"
-#include "debug.h"
 
 static machine_rrf_t machine;
 static interface_t interface;
+TaskHandle_t machine_task_handle = NULL;
 
 void test_screen() {
     lv_obj_t * label1 = lv_label_create(lv_screen_active());
@@ -241,7 +259,7 @@ void print_reset_reason() {
     Serial.println("");
     esp_reset_reason_t reason = esp_reset_reason();
     Serial.print("Reset Reason was: "); Serial.println(reason);
- 
+
     switch (reason) {
         case ESP_RST_POWERON:
           Serial.println("Power ON");
@@ -254,7 +272,7 @@ void print_reset_reason() {
         case ESP_RST_EXT:Serial.println("Reset by external pin (not applicable for ESP32)");break;
         case ESP_RST_INT_WDT:Serial.println("Reset (software or hardware) por interrupção WATCHDOG");break;
         case ESP_RST_TASK_WDT:Serial.println("Reset WATCHDOG");break;
-        case ESP_RST_WDT:Serial.println("Reset others WATCHDOG´s");break;                                
+        case ESP_RST_WDT:Serial.println("Reset others WATCHDOG´s");break;
         case ESP_RST_DEEPSLEEP:Serial.println("Reset DEEP SLEEP MODE");break;
         case ESP_RST_BROWNOUT:Serial.println("Brownout reset (software or hardware)");break;
         case ESP_RST_SDIO:Serial.println("Reset over SDIO");break;
@@ -324,6 +342,26 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "machine/arduino_serial_wrapper.h"
 
+#define MACHINE_POLL_INTERVAL 5000
+
+// Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
+void machine_task(void *pvParameters) {
+    // Create and initialize the machine interface (RRF in this case)
+    if (!machine_rrf_init(&machine, MACHINE_POLL_INTERVAL, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
+        _d(2, "Failed to create machine interface");
+        vTaskDelete(NULL); // Delete the task if creation fails
+        return;
+    }
+
+    // Call the setup loop function (this will run indefinitely)
+    machine_interface_setup_loop(&machine.base);
+
+    // Should never reach here, but good practice to include
+    _d(2, "Machine task exiting (should not happen)");
+    machine_rrf_destroy(&machine); // Clean up if the loop somehow exits
+    vTaskDelete(NULL);
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
@@ -359,18 +397,36 @@ void setup() {
   lv_indev_set_type(indev_encoder, LV_INDEV_TYPE_ENCODER);
   lv_indev_set_read_cb(indev_encoder, encoder_indev_read);
 
-  _d(0, "Machine loaded..\n");
-  print_reset_reason(); 
-
-  // start the UI
-  machine_rrf_init(&machine, 200, MACH_UART_PIN_TX, MACH_UART_PIN_RX);
-
-  interface_init(&interface, &machine.base);
+  print_reset_reason();
 
   // test_ui(lv_screen_active());
   //test_screen();
 
-  _d(0, "Interface loaded..\n");
+  _d(2, "Creating Machine Task..\n");
+
+  // Create the FreeRTOS machine loop task.
+  xTaskCreate(
+      machine_task,       // Function that implements the task
+      "machine_task",     // Task name (for debugging)
+      3 * 8192,           // Stack size in words (adjust as needed)
+      NULL,               // Task input parameter (not used here)
+      5,                  // Task priority (adjust as needed)
+      &machine_task_handle // Task handle (optional, can be used to control the task)
+  );
+
+  // start the UI
+  _d(0, "Machine loaded..\n");
+
+  _d(0, "Creating Interface...\n");
+  interface_init(&interface, &machine.base);
+
+  _d(0, "Setting up encoder scroll/value change...\n");
+  default_group = lv_group_create();
+  lv_indev_set_group(indev_encoder, default_group);
+  lv_group_set_editing(default_group, true);
+  lv_group_set_default(default_group);
+
+  _d(0, "Interface loaded...\n");
 
   _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
 }
@@ -387,12 +443,14 @@ void loop() {
 
   if (!encoder.isUiMode()) {
     int diff = encoder.readAndReset();
-    if (diff != 0) { 
+    if (diff != 0) {
       // interface->tab_jog->jog_dial->setValue(encoder.position());
       auto dial = interface.tab_jog->jog_dial;
       if (jog_dial_axis_selected(dial)) { jog_dial_apply_diff(dial, diff); }
 
-      _df(0, "ENCODER DIFF %d", diff); 
+      machine_interface_step_current_axis(&machine.base, 1000, diff);
+
+      _df(0, "ENCODER DIFF %d", diff);
     }
   }
 

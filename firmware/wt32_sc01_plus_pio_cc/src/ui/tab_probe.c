@@ -12,6 +12,7 @@
 #include "ui/interface.h"
 #include "ui/tab_jog.h"
 #include "ui/modals.h"
+#include "ui/encoder_slider.h"
 
 #include "debug.h"
 
@@ -172,7 +173,7 @@ static const probe_action_t probe_modes_2d_out[][3] = {
         {"G6509.1", probe_modes_2d_out_params_bl, img_arr_nw_o_data, "outside back-left corner"},       // Back-Left
         {"G6520.1", surface_probe_front_params, img_arr_n_o_data, "outside back face"},  // Outside back = inside front
         {"G6509.1", probe_modes_2d_out_params_br, img_arr_ne_o_data, "outside back-right corner"},     // Back-Right
-    }, 
+    },
     {
         {"G6520.1", surface_probe_right_params, img_arr_w_o_data, "outside left face"},  // Outside left = Inside right
         {"G6501.1", probe_modes_2d_out_params_boss, img_ctr1_boss_data, "center boss (outside)"},    // Outside Boss
@@ -332,7 +333,7 @@ char *replace_vars(const char *param_desc, tab_probe_t *tp) {
         }
         param_desc = &param_desc[next + 2];
     }
-    size_t nlen = strlen(param_desc); 
+    size_t nlen = strlen(param_desc);
     strncpy(buf + offs, param_desc, nlen);
     offs += nlen;
     buf[offs] = '\0';
@@ -435,7 +436,7 @@ static void probe_btn_matrix_click_handler(lv_event_t *e) {
                     char *v = float_to_str(setting_from_param(p[0], pbm->tab_probe));
                     buf += snprintf(buf,
                                     sizeof(modal_text) - (buf - modal_text) - 1,
-                                    "%s: %s\n", 
+                                    "%s: %s\n",
                                     probe_settings[j].label,
                                     v);
                     free(v);
@@ -446,7 +447,7 @@ static void probe_btn_matrix_click_handler(lv_event_t *e) {
     }
     buf += snprintf(buf,
                     sizeof(modal_text) - (buf - modal_text) - 1,
-                    "\n\nG-Code: %s\n\n", 
+                    "\n\nG-Code: %s\n\n",
                     probe_gcode);
     *(buf + 1) = '\0';
 
@@ -471,8 +472,8 @@ static void quick_mode_cb(lv_event_t *e)
 // --- ProbeBtnMatrix Implementation ---
 
 void style_probe_obj(lv_obj_t *obj, float w_percent, float h_percent) {
-    _style_gradient(obj, lv_color_hex(0xCCCCCC55), lv_color_hex(0x77777755), 
-                LV_GRAD_DIR_VER, 200, 2, lv_palette_lighten(LV_PALETTE_AMBER, 3), 5, 
+    _style_gradient(obj, lv_color_hex(0xCCCCCC55), lv_color_hex(0x77777755),
+                LV_GRAD_DIR_VER, 200, 2, lv_palette_lighten(LV_PALETTE_AMBER, 3), 5,
                 lv_color_hex(0x77777755), lv_palette_lighten(LV_PALETTE_BLUE, 3), 5);
 
     lv_coord_t cw = width_(obj), ch = height_(obj);
@@ -483,8 +484,11 @@ void style_probe_obj(lv_obj_t *obj, float w_percent, float h_percent) {
     _size(obj, w, h);
 }
 
-#define PROBE_BTN_WIDTH 70
-#define PROBE_BTN_HEIGHT 76
+#define PROBE_IMG_WIDTH 68
+#define PROBE_IMG_HEIGHT 68
+#define PROBE_BTN_WIDTH (PROBE_IMG_WIDTH + 2)
+#define PROBE_BTN_HEIGHT (PROBE_IMG_HEIGHT + 8)
+
 probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                                              tab_probe_t *tab_probe,
                                              const probe_action_t (*actions_)[],
@@ -523,11 +527,10 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
     }
 
     _scrollable(pbm->container, false);
-    _width(pbm->container, lv_pct(100));
-    _height(pbm->container, LV_SIZE_CONTENT);
+    _maximize_client_area(pbm->container);
+    _size(pbm->container, lv_pct(100), LV_SIZE_CONTENT);
     _bg_opa(pbm->container, LV_OPA_0, _M);
     _flex_flow(pbm->container, LV_FLEX_FLOW_COLUMN);
-    _maximize_client_area(pbm->container);
     _margin_top(pbm->container, 15, LV_STATE_DEFAULT);
     _pad_column(pbm->container, 1);
     _pad_row(pbm->container, 1);
@@ -589,8 +592,9 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
                 _pad(img, 0);
                 lv_obj_center(img);
                 _style_local(btn, border_width, LV_PART_MAIN, 1);
-                //_style_local(btn, border_color, LV_PART_MAIN, lv_color_hex(0x008080)); // Teal
+                _style_local(btn, border_color, LV_PART_MAIN, lv_color_hex(0x008080)); // Teal
                 _style_local(btn, bg_opa, LV_PART_MAIN, LV_OPA_0);
+                _size(img, PROBE_IMG_WIDTH, PROBE_IMG_HEIGHT);
             }
 
             lv_obj_set_flex_grow(btn, 1); // Use lv_obj_set_flex_grow
@@ -625,7 +629,7 @@ probe_btn_matrix_t *probe_btn_matrix_create(lv_obj_t *parent,
 #ifdef PROBE_BOX_BG
     mk_container(NULL, pbm->container,
         lv_coord_t w = width_(pbm->container), h = height_(pbm->container);
-        
+
         _size(obj, w, h);
         _maximize_client_area(obj);
         _use_layout(obj, false);
@@ -875,7 +879,7 @@ void tab_probe_init_sets_tab(tab_probe_t *tp, lv_obj_t *tab) {
             lv_textarea_set_text(textbox, buf);
              lv_obj_set_grid_cell(textbox, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_CENTER, i, 1);
 
-            lv_obj_t *slider = lv_slider_create(grid);
+            lv_obj_t *slider = encoder_slider_create(grid);
             if (!slider) {
                  LV_LOG_ERROR("Failed to create setting slider");
                 return;
@@ -916,7 +920,7 @@ static void cb_set_wcs(lv_event_t *e)
 static const char *wcs_map[] = {
         "G54", "G55", "G56", "\n",
         "G57", "G58", "G59", "\n",
-        "G59.1", "G59.2", "G59.3", 
+        "G59.1", "G59.2", "G59.3",
         NULL
     };
 
@@ -1062,28 +1066,17 @@ void tab_probe_init_probe_tab_3d(tab_probe_t *tp, lv_obj_t *tab3d) {
     tp->btns_3d = probe_btn_matrix_create(container, tp, probe_modes_3d, probe_modes_3d_rows, probe_modes_3d_cols, 0.5, 0.5, true);
 }
 
-static void axis_float_btn_cb(lv_event_t *e)
-{
-    // tab_probe_t *tp = (tab_probe_t *)lv_event_get_user_data(e); // not used here
-     lv_obj_t *label = lv_event_get_target(e);
-    if(label)
-    {
-        lv_obj_t* parent = lv_obj_get_parent(label);
-        if (parent)
-        {
-            // change axis and update button:
-            tab_probe_t *tp = (tab_probe_t *)lv_event_get_user_data(e);
-            axis_t next_axis = jog_dial_next_axis(tp->interface->tab_jog->jog_dial);
-            lv_label_set_text(label, axes_options[next_axis]); // get axis string and set.
-        }
-    }
+static void axis_float_btn_cb(lv_event_t *e) {
+    // change axis and update button:
+    tab_probe_t *tp = (tab_probe_t *)lv_event_get_user_data(e);
+    axis_t next_axis = machine_interface_next_move_axis(tp->interface->machine);
 }
 
-static void axis_change_cb(axis_t axis, void *user_data)
+static void axis_change_cb(machine_interface_t *mach, void *user_data)
 {
    lv_obj_t * float_btn_label = (lv_obj_t*) user_data;
    if (float_btn_label) {
-    lv_label_set_text(float_btn_label, axes_options[axis]); // get current axis.
+    lv_label_set_text(float_btn_label, axes_options[mach->current_move_axis]); // get current axis.
    }
 }
 
@@ -1111,11 +1104,11 @@ void tab_probe_init_axis_float_btn(tab_probe_t *tp) {
         lv_obj_del(tp->float_btn);
         return;
     }
-    lv_label_set_text(label, axes_options[tp->interface->tab_jog->jog_dial->axis]); // set initial axis.
+    lv_label_set_text(label, axes_options[tp->interface->machine->current_move_axis]); // set initial axis.
     lv_obj_center(label);
 
-    lv_obj_add_event_cb(label, axis_float_btn_cb, LV_EVENT_CLICKED, tp); // tp as user data
-    jog_dial_add_axis_change_cb(tp->interface->tab_jog->jog_dial, axis_change_cb, label);  // Pass label as user_data
+    lv_obj_add_event_cb(tp->float_btn, axis_float_btn_cb, LV_EVENT_CLICKED, tp); // tp as user data
+    machine_interface_add_current_move_axis_changed_cb(tp->interface->machine, label, axis_change_cb);
     _style_local(tp->float_btn, radius, LV_PART_MAIN, LV_RADIUS_CIRCLE);
 }
 

@@ -2,7 +2,10 @@
 
 #include "Arduino.h"
 #include "HardwareSerial.h" // Include the Arduino HardwareSerial header
+
 #include <map>
+
+#include "rrf_machine_sim_stream.h"
 
 // Use a static std::map to store the HardwareSerial instances.
 // This is necessary because HardwareSerial is a C++ class, and we
@@ -11,6 +14,11 @@ static std::map<int, Stream*> serial_instances;
 
 void add_standard_serial() {
     serial_instances[-1] = &Serial;
+}
+
+void add_rrf_sim_serial() {
+    // Use UART number 99 for the mock RRF serial (avoid conflicts with real UARTs)
+    serial_instances[99] = new RRFMachineSimStream(99);
 }
 
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
