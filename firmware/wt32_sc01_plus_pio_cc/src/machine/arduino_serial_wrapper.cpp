@@ -1,11 +1,16 @@
 #include "arduino_serial_wrapper.h"
 
+#include <map>
+
+#include "debug.h"
+
+#include "rrf_machine_sim_stream.h"
+
+#if defined(ESP32_HW)
+
 #include "Arduino.h"
 #include "HardwareSerial.h" // Include the Arduino HardwareSerial header
 
-#include <map>
-
-#include "rrf_machine_sim_stream.h"
 
 // Use a static std::map to store the HardwareSerial instances.
 // This is necessary because HardwareSerial is a C++ class, and we
@@ -16,9 +21,10 @@ void add_standard_serial() {
     serial_instances[-1] = &Serial;
 }
 
-void add_rrf_sim_serial() {
+extern "C" int add_rrf_sim_serial() {
     // Use UART number 99 for the mock RRF serial (avoid conflicts with real UARTs)
     serial_instances[99] = new RRFMachineSimStream(99);
+    return 99;
 }
 
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
@@ -30,6 +36,8 @@ serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_
     // Create a new HardwareSerial instance.  Note: We're using 'new' here,
     // which means we rely on serial_end() to be called to avoid a memory leak.
     HardwareSerial* serial = new HardwareSerial(uart_num);
+    serial->setRxBufferSize(2048);
+    serial->setTxBufferSize(1024);
 
     // Begin the serial communication
     serial->begin(baud, config, rx_pin, tx_pin);
@@ -129,3 +137,108 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
 serial_handle_t get_serial_handle(int uart_num) {
     return serial_instances[uart_num];
 }
+
+#else
+
+typedef RRFMachineSimStream Stream;
+
+static std::map<int, Stream*> serial_instances;
+
+void add_standard_serial() {
+    _d(0, "NOT SUPPORTED!");
+}
+
+extern "C" int add_rrf_sim_serial() {
+    // Use UART number 99 for the mock RRF serial (avoid conflicts with real UARTs)
+    serial_instances[99] = new RRFMachineSimStream(99);
+    return 99;
+}
+
+serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
+    return NULL;
+}
+
+void serial_end(serial_handle_t handle) {
+}
+
+size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size) {
+    if (!handle) {
+        char buf[size+1];
+        strncpy(buf, (char *) buffer, size);
+        buf[size] = '\0';
+        printf("%s", buf);
+        return size;
+    }
+
+    Stream* serial = (Stream*)handle;
+    return serial->write(buffer, size);
+}
+
+int serial_read(serial_handle_t handle) {
+    if (!handle) return -1;
+    Stream* serial = (Stream*)handle;
+    return serial->read();
+}
+
+size_t serial_available(serial_handle_t handle) {
+    if (!handle) return 0;
+    Stream* serial = (Stream*)handle;
+    return serial->available();
+}
+
+size_t serial_available_for_write(serial_handle_t handle) {
+    if (!handle) return 0;
+    Stream* serial = (Stream*)handle;
+    return serial->availableForWrite();
+}
+
+int serial_peek(serial_handle_t handle) {
+    if (!handle) return -1;
+    Stream* serial = (Stream*)handle;
+    return serial->peek();
+}
+
+void serial_flush(serial_handle_t handle) {
+    if (!handle) return;
+    Stream* serial = (Stream*)handle;
+    serial->flush();
+}
+
+size_t serial_read_bytes(serial_handle_t handle, uint8_t *buffer, size_t length) {
+    if (!handle) return 0;
+    Stream* serial = (Stream*)handle;
+    return serial->readBytes((char *) buffer, length);
+}
+
+char *serial_read_line(serial_handle_t handle) {
+    if (!handle) return NULL;
+    Stream* serial = (Stream*)handle;
+    std::string sres = serial->readStringUntil('\n');
+    size_t len = sres.length();
+    const char *read = sres.c_str();
+    char *ret = (char *) malloc(len + 1);
+    strncpy(ret, read, len + 1);
+    return ret;
+}
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) a > b ? a : b
+
+size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long timeout_ms) {
+    if (!handle) return 0;
+    Stream* serial = (Stream*)handle;
+    //serial->setTimeout(timeout_ms);
+    std::string sres = serial->readStringUntil('\n');
+    size_t slen = sres.length();
+    const char *read = sres.c_str();
+    strncpy(buf, read, min(slen + 1, len - 1));
+    buf[slen] = '\0';
+    // serial->setTimeout(0);
+    return slen;
+}
+
+serial_handle_t get_serial_handle(int uart_num) {
+    return serial_instances[uart_num];
+}
+
+#endif

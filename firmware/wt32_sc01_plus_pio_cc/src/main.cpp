@@ -24,7 +24,9 @@
 
 #include "Arduino.h"
 
-SET_LOOP_TASK_STACK_SIZE(1024 * 32);
+#include "config.h"
+
+SET_LOOP_TASK_STACK_SIZE(1024 * 48);
 
 static const char *TAG = "ESP32_CNC_HMI";
 
@@ -170,10 +172,6 @@ lv_group_t *default_group = NULL;
 
 /* Initialize a second indev for the encoder wheel */
 lv_indev_t * indev_encoder = NULL;        /* Create input device connected to Default Display. */
-
-/*Read the touchpad*/
-#define DEBUG_TOUCH 0
-#define DEBUG_ENCODER 1
 
 #include "debug.h"
 
@@ -327,17 +325,19 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "machine/arduino_serial_wrapper.h"
 
-#define MACHINE_POLL_INTERVAL 200
-
 // Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
 void machine_task(void *pvParameters) {
+#ifndef RRF_SIM
+    int rrf_uart_num = RRF_SERIAL_UART_NUM;
+#else
+    int rrf_uart_num = add_rrf_sim_serial();
+#endif
     // Create and initialize the machine interface (RRF in this case)
-    if (!machine_rrf_init(&machine, MACHINE_POLL_INTERVAL, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
+    if (!machine_rrf_init(&machine, rrf_uart_num, MACHINE_POLL_INTERVAL, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
         _d(2, "Failed to create machine interface");
         vTaskDelete(NULL); // Delete the task if creation fails
         return;
     }
-
     // Call the setup loop function (this will run indefinitely)
     machine_interface_setup_loop(&machine.base);
 
@@ -421,9 +421,11 @@ void loop() {
   uint32_t sleep_time = lv_task_handler();
   delay(sleep_time);
   auto time_end = millis();
-  if ((ctr++ % 10) == 0) {
+  if ((ctr++ % 1000) == 0) {
     _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
   }
+
+  interface_update_machine_state(&interface, &machine.base);
 
   if (!encoder.isUiMode()) {
     int diff = encoder.readAndReset();
@@ -432,7 +434,7 @@ void loop() {
       auto dial = interface.tab_jog->jog_dial;
       if (jog_dial_axis_selected(dial)) { jog_dial_apply_diff(dial, diff); }
 
-      machine_interface_step_current_axis(&machine.base, 1000, diff);
+      machine_interface_step_current_axis(&machine.base, 3000, diff);
 
       _df(0, "ENCODER DIFF %d", diff);
     }

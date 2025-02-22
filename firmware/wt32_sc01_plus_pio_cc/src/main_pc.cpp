@@ -1,5 +1,8 @@
 #ifdef POSIX
 
+#define MACHINE_POLL_INTERVAL 500
+#define RRF_SIM 1
+
 #include <stdio.h>
 #include <signal.h>
 
@@ -29,12 +32,18 @@ extern "C" {
     }
 }
 
+#define RRF_SIM 1
+
 #include "machine/machine_interface.h"
+#include "machine/machine_rrf.h"
 #include "machine/machine_sim.h"
 #include "ui/interface.h"
 #include "debug.h"
 
-static duet_simulator_t *machine;
+#include "machine/arduino_serial_wrapper.h"
+
+//static duet_simulator_t *machine;
+static machine_rrf_t *machine;
 static interface_t interface;
 
 #include <map>
@@ -43,6 +52,7 @@ extern "C" {
 
 #include "machine/arduino_serial_wrapper.h"
 
+#if 0
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
     return NULL;
 }
@@ -90,6 +100,8 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
     return 0;
 }
 
+#endif
+
 }
 
 void lvgl_test()
@@ -115,8 +127,12 @@ void lvgl_test()
 
     signal(SIGINT, signal_handler);
 
+    int rrf_uart_num = add_rrf_sim_serial();
+    machine =  machine_rrf_create(rrf_uart_num, MACHINE_POLL_INTERVAL, 0, 0);
+
     // start the UI
-    machine = duet_simulator_create(50);
+    // machine = duet_simulator_create(50);
+
     interface_init(&interface, &machine->base);
     
     // test_screen();

@@ -25,6 +25,8 @@ struct machine_position_wcs_t {
     size_t *axis_label_ids;             // store axis index
     lv_coord_t *row_dsc;                // row dims for button grid.
     lv_coord_t *col_dsc;                // col dims for button grid.
+
+    bool display_needs_update;
 };
 
 machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,

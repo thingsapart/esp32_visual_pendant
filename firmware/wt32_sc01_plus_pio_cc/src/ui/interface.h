@@ -27,6 +27,12 @@ struct tab_machine_t;
 
 typedef void (*machine_state_change_cb_t)(machine_interface_t *machine, void *user_data);
 
+typedef struct machine_state_callback_t { 
+    void *user_data;
+    machine_state_change_cb_t cb;    
+} machine_state_callback_t;
+
+#define MAX_MACHINE_STATE_CBS 32
 struct interface_t {
     lv_obj_t *scr;
     machine_interface_t *machine;  // Pointer to your machine control object
@@ -41,7 +47,7 @@ struct interface_t {
     lv_obj_t *tab_job_gcode;
     lv_obj_t *tab_tool;
     lv_obj_t *tab_cam;
-    machine_state_change_cb_t machine_change_cb;
+    machine_state_callback_t machine_change_cbs[MAX_MACHINE_STATE_CBS];
     void *machine_change_user_data;
 };
 

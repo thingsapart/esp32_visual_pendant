@@ -83,10 +83,10 @@ typedef struct files_changed_callback_t {
 
 // --- G-code Queue ---
 
-#define MAX_GCODE_Q_LEN 10
+#define MAX_GCODE_Q_LEN 50
 
 typedef struct {
-    char buffer[MAX_GCODE_Q_LEN][64]; // Fixed-size buffer for G-code commands.  Adjust size as needed.
+    char buffer[MAX_GCODE_Q_LEN][128]; // Fixed-size buffer for G-code commands.  Adjust size as needed.
     size_t head;
     size_t tail;
     size_t count;

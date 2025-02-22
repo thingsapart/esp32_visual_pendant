@@ -445,7 +445,7 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
 
     self->_update_machine_state(self, self->poll_state);
 
-    _df(0, "%s", self->debug_print(self));
+    // _df(0, "%s", self->debug_print(self));
 
     call_callbacks(state_change_cb);
 

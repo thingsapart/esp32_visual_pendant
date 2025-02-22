@@ -6,8 +6,13 @@
 
 #include "cJSON.h"
 
-#define RRF_SERIAL_UART_NUM 0
-#define READ_TIMEOUT_MS 20
+#include "config.h"
+
+#ifdef MACHINE_POLL_INTERVAL
+# define READ_TIMEOUT_MS (MACHINE_POLL_INTERVAL * 5 / 4) 
+#else
+# define READ_TIMEOUT_MS 100
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,7 +26,7 @@ typedef enum {
     RRF_STATUS_C = MACHINE_STATUS_INITIALIZING,
     RRF_STATUS_F = MACHINE_STATUS_FLASHING_FIRMWARE,
     RRF_STATUS_H = MACHINE_STATUS_EMERGENCY_HALTED,
-    RRF_STATUS_O = MACHINE_STATUS_OFF,
+RRF_STATUS_O = MACHINE_STATUS_OFF,
     RRF_STATUS_D = MACHINE_STATUS_PAUSED_DEC,
     RRF_STATUS_R = MACHINE_STATUS_PAUSED_RESUME,
     RRF_STATUS_S = MACHINE_STATUS_PAUSED,
@@ -45,8 +50,8 @@ typedef struct {
 
 // --- Function Prototypes ---
 
-machine_rrf_t* machine_rrf_create(uint16_t sleep_ms, int tx_pin, int rx_pin);
-machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_pin, int rx_pin);
+machine_rrf_t* machine_rrf_create(int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin);
+machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin);
 
 void machine_rrf_destroy(machine_rrf_t *self);
 void machine_rrf_task_loop_iter(machine_rrf_t *self); // Override the base class version

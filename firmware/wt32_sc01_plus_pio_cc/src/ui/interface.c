@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include "ui/tab_jog.h"
 #include "ui/tab_probe.h"
@@ -250,17 +251,25 @@ void interface_init_main_tabs(interface_t *interface) {
 
 void interface_register_state_change_cb(interface_t *interface, machine_state_change_cb_t cb, void* user_data) {
     if (!interface) return;
-    interface->machine_change_cb = cb;
-    interface->machine_change_user_data = user_data;
+
+    for (size_t i = 0; i < sizeof(interface->machine_change_cbs) / sizeof(interface->machine_change_cbs[0]); i++) {
+        if (!interface->machine_change_cbs[i].cb) {
+            interface->machine_change_cbs[i].cb = cb;
+            interface->machine_change_cbs[i].user_data = user_data;
+            return;
+        }
+    }
+    assert(false && "Too many machine state update callbacks - update MAX_MACHINE_STATE_CBS");
 }
 
 void interface_update_machine_state(interface_t *interface, machine_interface_t *machine) {
     if (!interface) return;
 
-    // TODO: Update global displays, if any.
-
     // Call the registered callback
-    if (interface->machine_change_cb) {
-        interface->machine_change_cb(machine, interface->machine_change_user_data);
+    for (size_t i = 0; i < sizeof(interface->machine_change_cbs) / sizeof(interface->machine_change_cbs[0]); i++) {
+        if (interface->machine_change_cbs[i].cb) {
+            interface->machine_change_cbs[i].cb(interface->machine, interface->machine_change_cbs[i].user_data);
+            return;
+        }
     }
 }

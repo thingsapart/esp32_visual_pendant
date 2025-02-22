@@ -49,12 +49,18 @@ static void wcs_label_clicked_event_handler(lv_event_t *e) {
 // --- Callback Functions ---
 
 static void pos_updated_callback(machine_interface_t *mach, void *ud) {
-    // Find the machine_position_wcs_t associated with this interface.
-    // This is more complex; you might need a lookup table if you have multiple
-    // instances.  For this example, I'll assume a single global instance.
-     machine_position_wcs_t *mp = (machine_position_wcs_t *) ud;
+    machine_position_wcs_t *mp = (machine_position_wcs_t *) ud;
+    if (!mp) return;
 
-    if (!mp) return; // Early exit if no valid machine pointer
+    mp->display_needs_update = true;
+}
+
+static void interface_machine_state_updated_cb(machine_interface_t *mach, void *ud) {
+    machine_position_wcs_t *mp = (machine_position_wcs_t *) ud;
+
+    if (!mp || !mp->display_needs_update) { return; }
+
+    mp->display_needs_update = false;
 
     for (size_t i = 0; i < mp->num_coords; i++) {
         machine_position_wcs_set_coord(mp, i, mach->position[i], mp->coord_systems[0]); // "Mach"
@@ -131,7 +137,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->coords = coords;
     mp->num_coords = num_coords;
     mp->digits = digits;
-    snprintf(mp->fmt_str, sizeof(mp->fmt_str), "%%.%df", (digits - 2 > 0) ? digits -2 : 0);
+    snprintf(mp->fmt_str, sizeof(mp->fmt_str), "%%.%df", (digits - 2 > 0) ? 2 : 0);
     mp->coord_systems = coord_systems;
     mp->num_coord_systems = num_coord_systems;
     mp->coord_sys_width = coord_sys_width;
@@ -337,7 +343,8 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
 
     machine_interface_t *mach = interface->machine;
     machine_interface_add_pos_changed_cb(mach, mp, pos_updated_callback);
-    machine_interface_add_pos_changed_cb(mach, mp, pos_updated_callback);
+    //machine_interface_add_pos_changed_cb(mach, mp, interface_machine_state_updated_cb);
+    interface_register_state_change_cb(interface, interface_machine_state_updated_cb, mp);
     machine_interface_add_wcs_changed_cb(mach, mp, wcs_updated_callback);
 
     // Initial update
@@ -437,7 +444,9 @@ void machine_position_wcs_set_coord(machine_position_wcs_t *mp, size_t ax, float
              mp->coord_vals[cs_index][ax] = v;
             char buf[32];
             snprintf(buf, sizeof(buf), mp->fmt_str, v);
+            _df(0, "LABEL TEXT: cs_idx %d, ax %d, => %s", cs_index, ax, buf);
             _label_text(mp->coord_val_labels[cs_index][ax], buf);
+            _d(0, "<< LABEL TEXT");
         }
     }
 }

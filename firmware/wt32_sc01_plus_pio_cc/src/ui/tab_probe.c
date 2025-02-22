@@ -385,6 +385,7 @@ void probe_msg_box_probe(lv_event_t *e) {
     probe_btn_matrix_t *pbm = (probe_btn_matrix_t *) lv_obj_get_user_data(mbox);
     machine_interface_t *machine = pbm->tab_probe->interface->machine;
     if (machine) {
+        machine->send_gcode(machine, "M5000 P0", MACHINE_POSITION);
         machine->send_gcode(machine, probe_gcode, MACHINE_POSITION);
     }
     probe_msg_box_close(e);
@@ -402,11 +403,12 @@ static void probe_btn_matrix_click_handler(lv_event_t *e) {
         return;
     }
 
-    // Check if the machine is homed before proceeding
-    // if (!pbm->tab_probe->interface->machine->is_connected(pbm->tab_probe->interface->machine)) {
-    //   Abort?
-    // }
-    if (!machine_interface_is_homed(pbm->tab_probe->interface->machine, "XYZ")) {
+    if (!pbm->tab_probe->interface->machine->is_connected(pbm->tab_probe->interface->machine)) {
+        message_modal("Machine not connedted", "Could not establish connection to machine.\n\nCheck wiring and make sure machine is in valid state.");
+        return;
+    }
+
+    if (!machine_interface_is_homed(pbm->tab_probe->interface->machine, NULL)) {
         // ui.modals.home_modal(pbm->tab_probe->interface); // You'll need a C version of this
         LV_LOG_WARN("Machine is not homed or not connected."); // Placeholder: Show a modal
         machine_interface_t *mach = pbm->tab_probe->interface->machine;

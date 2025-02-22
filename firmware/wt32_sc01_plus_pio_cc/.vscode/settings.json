@@ -83,6 +83,7 @@
         "string.h": "c",
         "lv_tileview.h": "c",
         "queue": "c",
-        "stack": "c"
+        "stack": "c",
+        "debug.h": "c"
     }
 }

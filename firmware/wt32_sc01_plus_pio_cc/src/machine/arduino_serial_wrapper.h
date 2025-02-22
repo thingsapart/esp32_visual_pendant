@@ -52,7 +52,7 @@ size_t serial_read_bytes(serial_handle_t handle, uint8_t *buffer, size_t length)
 
 void add_standard_serial();
 #ifdef RRF_SIM
-void add_rrf_sim_serial();
+int add_rrf_sim_serial();
 #endif
 
 serial_handle_t get_serial_handle(int uart_num);

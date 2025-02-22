@@ -66,3 +66,16 @@ lv_obj_t *home_modal(machine_interface_t *mach) {
 
     return mbox;
 }
+
+lv_obj_t *message_modal(const char *title, const char *text) {
+    const char *buttons[] = { "Ok", NULL };
+    void (*btn_cbs[])(lv_event_t *e) = { modal_close_handler, NULL };
+    lv_obj_t *mbox = button_modal(title,
+        text,
+        buttons,
+        btn_cbs,
+        NULL
+    );
+
+    return mbox;
+}

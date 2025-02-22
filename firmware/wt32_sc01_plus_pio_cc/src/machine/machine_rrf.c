@@ -70,12 +70,12 @@ static bool _machine_rrf_has_response(machine_rrf_t *self) {
 }
 
 static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t buffer_size) {
-    _d(0, "Reading serial...\n");
+    //_d(0, "Reading serial...\n");
     size_t len = serial_read_line_buf(self->uart, buffer, buffer_size, READ_TIMEOUT_MS);
     if (len > 0) {
         buffer[len] = '\0'; // Null-terminate the string
 
-        _df(0, "Received: %s\n", buffer);
+        _df(0, "Received: (%lu) %s (%d)\n", buffer_size, buffer, strlen(buffer));
         return true;
     }
 
@@ -85,7 +85,7 @@ static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t
 static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd)
 {
     _machine_rrf_send_gcode((machine_interface_t*)self, cmd);
-    char response_buffer[1024]; // Adjust size as needed
+    char response_buffer[4096]; // Adjust size as needed
     if (_machine_rrf_read_response(self, response_buffer, sizeof(response_buffer))) {
         _machine_rrf_parse_json_response(self, response_buffer);
         if (!self->connected) {
@@ -122,7 +122,7 @@ static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_
         }
     }
     if (poll_state & MACHINE_POSITION_EXT) {
-        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.axes[]\" F\"d5\"");
+        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.axes[]\" F\"d5,v\"");
     }
     if (poll_state & NETWORK) {
         // _machine_rrf_update_network_info_async(rrf_self);
@@ -469,14 +469,14 @@ static void _machine_rrf_parse_json_response(machine_rrf_t *self, const char *js
 
 // --- Constructor ---
 
-machine_rrf_t* machine_rrf_create(uint16_t sleep_ms, int tx_pin, int rx_pin) {
+machine_rrf_t* machine_rrf_create(int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin) {
     machine_rrf_t *self = (machine_rrf_t *)malloc(sizeof(machine_rrf_t));
     if (!self) {
         _d(2,  "Failed to allocate memory for machine_rrf");
         return NULL;
     }
 
-    return machine_rrf_init(self, sleep_ms, tx_pin, rx_pin);
+    return machine_rrf_init(self, rrf_serial_num, sleep_ms, tx_pin, rx_pin);
 }
 
 void _machine_rrf_find_input(machine_rrf_t *self) {
@@ -485,7 +485,7 @@ void _machine_rrf_find_input(machine_rrf_t *self) {
     _machine_rrf_proc_machine_state(self, cmd1);
 }
 
-machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_pin, int rx_pin) {
+machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin) {
     // Initialize the base class part
     machine_interface_init(&self->base, sleep_ms);
 
@@ -495,7 +495,7 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, uint16_t sleep_ms, int tx_p
     self->input_idx = 0;
 
     // Initialize UART using the wrapper
-    self->uart = serial_init(RRF_SERIAL_UART_NUM, 115200, CFG_SERIAL_8N1, rx_pin, tx_pin);
+    self->uart = serial_init(rrf_serial_num, 115200, CFG_SERIAL_8N1, rx_pin, tx_pin);
     if (!self->uart) {
         _d(2,  "Failed to initialize serial port");
         return NULL;
@@ -549,457 +549,3 @@ void machine_rrf_task_loop_iter(machine_rrf_t *self) {
     // Delegate to the base class implementation, which will call our overridden methods
     machine_interface_task_loop_iter(&self->base);
 }
-
-
-
-
-
-
-
-
-
-#if 0
-// machine_rrf.c
-#include "machine_rrf.h"
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "ArduinoJson.h" //  ArduinoJson library
-
-static const char *TAG = "machine_rrf";
-
-// --- Initialization ---
-void machine_rrf_init(machine_rrf_t *machine, uint16_t sleep_ms) {
-    if (!machine) return;
-
-    machine_interface_init(&machine->base, sleep_ms); // Initialize base class
-    machine->uart = &Serial2; //  HardwareSerial (ESP32-S3 has Serial2)
-    machine->uart->begin(UART_BAUD_RATE, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    machine->connected = false;
-    machine->input_sel = ""; // Initialize
-    machine->input_idx = -1;
-    machine_interface_connected_updated(&machine->base); //  initial state
-}
-
-// --- Overridden Machine Interface Functions ---
-
-void _machine_rrf_send_gcode(machine_interface_t *machine, const char *gcode) {
-    machine_rrf_t *rrf_machine = (machine_rrf_t *)machine; // Cast to derived class
-    if (!rrf_machine || !rrf_machine->uart || !gcode) return;
-
-    rrf_machine->uart->print(gcode);
-    rrf_machine->uart->print('\n');
-    //_df(0, "Sent G-code: %s", gcode); //  debug logging
-}
-
-bool _machine_rrf_has_response(machine_interface_t *machine) {
-    machine_rrf_t *rrf_machine = (machine_rrf_t *)machine;
-    if (!rrf_machine || !rrf_machine->uart) return false;
-    return rrf_machine->uart->available() > 0;
-}
-
-const char *_machine_rrf_read_response(machine_interface_t *machine) {
-    machine_rrf_t *rrf_machine = (machine_rrf_t *)machine;
-    if (!rrf_machine || !rrf_machine->uart) return "";
-
-    static char response_buffer[512]; //  static buffer for response
-    memset(response_buffer, 0, sizeof(response_buffer)); // Clear buffer
-
-    size_t len = 0;
-    while (rrf_machine->uart->available() > 0 && len < sizeof(response_buffer) - 1) {
-        char c = rrf_machine->uart->read();
-        response_buffer[len++] = c;
-        if (c == '\n') break; //  end of line
-    }
-    response_buffer[len] = '\0'; // Null-terminate
-    //_df(0, "Received: %s", response_buffer); //  debug logging
-    return response_buffer;
-}
-
-void _machine_rrf_update_machine_state(machine_interface_t *machine, poll_state_t poll_state)
-{
-    if(!machine) return;
-    //  async processing, using FreeRTOS tasks instead of uasyncio
-    if (poll_state & MACHINE_POSITION) {
-        _machine_rrf_send_gcode(machine, "M409 K\"move.axes[]\" F\"d5,f\"");
-        _machine_rrf_send_gcode(machine, "M409 K\"move.speedFactor\"");
-        _machine_rrf_send_gcode(machine, "M409 K\"move.workplaceNumber\"");
-        if(strlen(((machine_rrf_t*)machine)->input_sel) > 0)
-        {
-            char input_sel_cmd[128];
-            snprintf(input_sel_cmd, sizeof(input_sel_cmd), "M409 K\"%s\"", ((machine_rrf_t*)machine)->input_sel);
-            _machine_rrf_send_gcode(machine, input_sel_cmd);
-        }
-    }
-    if (poll_state & MACHINE_POSITION_EXT)    _machine_rrf_send_gcode(machine, "M409 K\"move.axes[]\" F\"d5\"");
-    if (poll_state & NETWORK)                 _machine_rrf_send_gcode(machine, "M409 K\"network\"");
-    if (poll_state & JOB_STATUS)              _machine_rrf_send_gcode(machine, "M409 K\"job\" F\"d3\"");
-    if (poll_state & MESSAGES_AND_DIALOGS)    _machine_rrf_send_gcode(machine, "M409 K\"state.messageBox\"");
-    if (poll_state & END_STOPS)               _machine_rrf_send_gcode(machine, "M409 K\"sensors.endstops[]\"");
-    if (poll_state & PROBES)                  _machine_rrf_send_gcode(machine, "M409 K\"sensors.probes[].value[]\"");
-    if (poll_state & SPINDLE)                 {
-        machine_interface_spindles_tools_updated(machine);
-        _d(0,  "Spindle update: TODO");
-    } //  placeholders
-    if (poll_state & TOOLS)                   {
-        machine_interface_spindles_tools_updated(machine);
-        _d(0,  "Tools update: TODO");
-    } //  placeholders
-
-    //  process responses
-    while(_machine_rrf_has_response(machine))
-    {
-        const char *response = _machine_rrf_read_response(machine);
-        if(strlen(response) > 0)
-        {
-            _machine_rrf_parse_json_response(machine, response);
-            if(!((machine_rrf_t*)machine)->connected)
-            {
-                machine_interface_position_updated(machine);
-                machine_interface_wcs_updated(machine);
-                machine_interface_home_updated(machine);
-                //  find input -  placeholder for now
-            }
-            if(((machine_rrf_t*)machine)->connected == false)
-            {
-                ((machine_rrf_t*)machine)->connected = true;
-                machine_interface_connected_updated(machine);
-            }
-        }
-    }
-}
-
-void machine_rrf_list_files(machine_interface_t *machine, const char *path)
-{
-    if(!machine || !path) return;
-    char gcode[128];
-    snprintf(gcode, sizeof(gcode), "M20 S2 P\"/%s/\"", path);
-    machine_interface_send_gcode(machine, gcode, 0); //  poll_state not used here
-}
-
-void machine_rrf_run_macro(machine_interface_t *machine, const char *macro_name)
-{
-    if(!machine || !macro_name) return;
-    char gcode[128];
-    snprintf(gcode, sizeof(gcode), "M98 P\"%s\"", macro_name);
-    _machine_rrf_send_gcode(machine, gcode); // Use internal send
-}
-
-void machine_rrf_start_job(machine_interface_t *machine, const char *job_name)
-{
-    if(!machine || !job_name) return;
-    char gcode[128];
-    snprintf(gcode, sizeof(gcode), "M23 %s", job_name);
-    _machine_rrf_send_gcode(machine, gcode); // Use internal send
-    _machine_rrf_send_gcode(machine, "M24"); // Use internal send
-}
-
-bool machine_rrf_is_connected(machine_interface_t *machine)
-{
-    if(!machine) return false;
-    return ((machine_rrf_t*)machine)->connected;
-}
-
-void _machine_rrf_continuous_stop(machine_interface_t *machine)
-{
-    if(!machine) return;
-    _machine_rrf_send_gcode(machine, "M98 P\"pendant-continuous-stop.g\"");
-}
-
-void _machine_rrf_continuous_move(machine_interface_t *machine, char axis, float feed, float direction)
-{
-    if(!machine) return;
-    char gcode[128];
-    snprintf(gcode, sizeof(gcode), "M98 P\"pendant-continuous-run.g\" A\"%c\" F%.3f D%.3f", axis, feed, direction);
-    _machine_rrf_send_gcode(machine, gcode);
-}
-
-// --- JSON Parsing Helpers ---
-void _machine_rrf_parse_json_response(machine_interface_t *machine, const char *json_resp) {
-    if (!machine || !json_resp) return;
-
-    //  use ArduinoJson for parsing
-    StaticJsonDocument<2048> doc; //  adjust size as needed
-    DeserializationError error = deserializeJson(doc, json_resp);
-
-    if (error) {
-        _df(2, "JSON parsing failed: %s, Response: %s", error.c_str(), json_resp);
-        return;
-    }
-
-    if (doc.containsKey("dir")) {
-        _machine_rrf_parse_m20_response(machine, json_resp);
-    } else if (doc.containsKey("key")) {
-        _machine_rrf_parse_m409_response(machine, json_resp);
-    } else {
-        _df(1, "Unrecognized JSON response: %s", json_resp);
-    }
-}
-
-void _machine_rrf_parse_m20_response(machine_interface_t *machine, const char *json_resp)
-{
-    if(!machine || !json_resp) return;
-
-    StaticJsonDocument<1024> doc; //  adjust size
-    DeserializationError error = deserializeJson(doc, json_resp);
-    if(error) { _d(2,  "m20 parsing error"); return; }
-
-    const char* jdir = doc["dir"];
-    if(!jdir) return;
-
-    //  remove leading slash if present
-    if (jdir[0] == '/') {
-        jdir++; //  move pointer past the slash
-    }
-
-    JsonArray files = doc["files"];
-    if(files.isNull()) return;
-
-    //  simplified file handling -  void* for now
-    //  allocate memory to store filenames
-    char** file_list = (char**)malloc(files.size() * sizeof(char*));
-    if(!file_list) { _d(2,  "malloc failed"); return; }
-
-    for(size_t i = 0; i < files.size(); i++)
-    {
-        const char* filename = files[i];
-        if(filename)
-        {
-            file_list[i] = (char*)malloc(strlen(filename) + 1); // +1 for null terminator
-            if(file_list[i])
-            {
-                strcpy(file_list[i], filename);
-            } else {
-                _d(2,  "malloc failed for filename");
-                //  clean up previously allocated memory
-                for(size_t j = 0; j < i; j++) {
-                    free(file_list[j]);
-                }
-                free(file_list);
-                return;
-            }
-        }
-    }
-
-    //  store file list in machine->files (as void*)
-    machine->files = (void*)file_list;
-    machine_interface_files_updated(machine, jdir);
-}
-
-void _machine_rrf_parse_m409_response(machine_interface_t *machine, const char *json_resp) {
-    if (!machine || !json_resp) return;
-
-    StaticJsonDocument<1536> doc; //  adjust size
-    DeserializationError error = deserializeJson(doc, json_resp);
-    if(error) { _d(2,  "m409 parsing error"); return; }
-
-    const char *key = doc["key"];
-    if (!key) return;
-
-    if (strcmp(key, "move.axes") == 0 || strcmp(key, "move.axes[]") == 0) {
-        _machine_rrf_parse_move_axes(machine, json_resp);
-    } else if (strcmp(key, "global") == 0) {
-        _machine_rrf_parse_globals(machine, json_resp);
-    } else if(strcmp(key, "job") == 0) {
-        //  job parsing -  simplified for now
-        JsonObject result = doc["result"];
-        if(!result.isNull())
-        {
-            //  example of accessing a nested value
-            if(result.containsKey("file") && result["file"].containsKey("fileName"))
-            {
-                const char* filename = result["file"]["fileName"];
-                //  store filename (allocate memory)
-                if(filename)
-                {
-                    char* job_filename = (char*)malloc(strlen(filename) + 1);
-                    if(job_filename)
-                    {
-                        strcpy(job_filename, filename);
-                        machine->job = (void*)job_filename; //  store as void*
-                    } else {
-                        _d(2,  "malloc failed for job filename");
-                    }
-                }
-            }
-        }
-    } else if(strcmp(key, "move.workplaceNumber") == 0) {
-        int wcs = doc["result"];
-        if(wcs != machine->wcs)
-        {
-            machine->wcs = wcs;
-            machine_interface_wcs_updated(machine);
-        }
-    } else if(strcmp(key, "move.current_move") == 0) {
-        //  feed parsing
-        machine->feed = doc["result"]["topSpeed"];
-        machine->feed_req = doc["result"]["requestedSpeed"];
-    } else if(strcmp(key, "move.speedFactor") == 0) {
-        float feed_multiplier = doc["result"];
-        if(machine->feed_multiplier != feed_multiplier)
-        {
-            machine->feed_multiplier = feed_multiplier;
-            machine_interface_feed_updated(machine);
-        }
-    } else if (strcmp(key, "network") == 0) {
-        //  network parsing -  simplified for now
-        //  allocate memory for network info (example)
-        char* network_info = (char*)malloc(256); //  adjust size
-        if(network_info)
-        {
-            //  example: store hostname
-            snprintf(network_info, 256, "Hostname: %s", doc["result"]["hostname"].as<const char*>());
-            machine->network = (void*)network_info;
-        } else {
-            _d(2,  "malloc failed for network info");
-        }
-    } else if (strcmp(key, "state.messageBox") == 0) {
-        //  message box parsing
-        if (!doc["result"].isNull()) {
-            //  store message box (allocate memory)
-            const char* message = doc["result"]["msg"];
-            if(message)
-            {
-                char* msg_box = (char*)malloc(strlen(message) + 1);
-                if(msg_box)
-                {
-                    strcpy(msg_box, message);
-                    machine->message_box = (void*)msg_box; //  store as void*
-                } else {
-                    _d(2,  "malloc failed for message box");
-                }
-            }
-        } else {
-            machine->message_box = NULL; //  clear message box
-        }
-        machine_interface_dialogs_updated(machine);
-    } else if (strcmp(key, "sensors.probes[].value[]") == 0) {
-        //  probe value parsing
-        JsonArray probes = doc["result"];
-        if(!probes.isNull() && probes.size() >= 2)
-        {
-            machine->probes[0] = probes[0];
-            machine->probes[1] = probes[1];
-            machine_interface_sensors_updated(machine);
-        }
-    } else if (strcmp(key, "state.thisInput") == 0) {
-        //  input parsing
-        ((machine_rrf_t*)machine)->input_idx = doc["result"];
-        char input_sel[64];
-        snprintf(input_sel, sizeof(input_sel), "inputs[%d].axesRelative", ((machine_rrf_t*)machine)->input_idx);
-        ((machine_rrf_t*)machine)->input_sel = strdup(input_sel); //  strdup allocates memory
-    } else if (strcmp(key, ((machine_rrf_t*)machine)->input_sel) == 0) {
-        //  move relative parsing
-        bool move_relative = doc["result"];
-        if(machine->move_relative != move_relative)
-        {
-            machine->move_relative = move_relative;
-            machine_interface_position_updated(machine);
-        }
-    } else {
-        _df(1, "Unknown M409 key: %s", key);
-    }
-}
-
-void _machine_rrf_parse_move_axes(machine_interface_t *machine, const char *json_resp)
-{
-    if(!machine || !json_resp) return;
-
-    StaticJsonDocument<1024> doc;
-    DeserializationError error = deserializeJson(doc, json_resp);
-    if(error) { _d(2,  "move_axes parsing error"); return; }
-
-    JsonArray axes = doc["result"];
-    if(axes.isNull() || axes.size() == 0) return;
-
-    if(axes[0].containsKey("letter"))
-    {
-        _machine_rrf_parse_move_axes_ext(machine, json_resp);
-    }
-    else
-    {
-        _machine_rrf_parse_move_axes_brief(machine, json_resp);
-    }
-}
-
-void _machine_rrf_parse_move_axes_brief(machine_interface_t *machine, const char *json_resp)
-{
-    if(!machine || !json_resp) return;
-
-    StaticJsonDocument<512> doc; //  adjust size
-    DeserializationError error = deserializeJson(doc, json_resp);
-    if(error) { _d(2,  "move_axes_brief parsing error"); return; }
-
-    JsonArray axes = doc["result"];
-    if(axes.isNull()) return;
-
-    bool updated = false;
-    for(size_t i = 0; i < axes.size() && i < 3; i++)
-    {
-        float machine_pos = axes[i]["machinePosition"];
-        float wcs_pos = axes[i]["userPosition"];
-
-        if(machine->position[i] != machine_pos || machine->wcs_position[i] != wcs_pos)
-        {
-            updated = true;
-        }
-        machine->position[i] = machine_pos;
-        machine->wcs_position[i] = wcs_pos;
-        _df(0, " => AXES: %d: pos %f, wcs-pos %f\n", i, machine_pos, wcs_pos);
-    }
-    if(updated) machine_interface_position_updated(machine);
-}
-
-void _machine_rrf_parse_move_axes_ext(machine_interface_t *machine, const char *json_resp)
-{
-    if(!machine || !json_resp) return;
-
-    StaticJsonDocument<1024> doc; //  adjust size
-    DeserializationError error = deserializeJson(doc, json_resp);
-    if(error) { _d(2,  "move_axes_ext parsing error"); return; }
-
-    JsonArray axes = doc["result"];
-    if(axes.isNull()) return;
-
-    bool updated = false;
-    bool home_updated = false;
-
-    for(size_t i = 0; i < axes.size() && i < 3; i++)
-    {
-        const char* name = axes[i]["letter"];
-        if(!name) continue;
-        int axi = _machine_interface_axis_idx(machine, name[0]);
-        if(axi == -1) continue; //  invalid axis
-
-        bool homed = axes[i]["homed"];
-        float machine_pos = axes[i]["machinePosition"];
-        float wcs_pos = axes[i]["userPosition"];
-
-        if(machine->axes_homed[axi] != homed)
-        {
-            home_updated = true;
-        }
-        machine->axes_homed[axi] = homed;
-
-        if(machine->position[axi] != machine_pos || machine->wcs_position[axi] != wcs_pos)
-        {
-            updated = true;
-        }
-        machine->position[axi] = machine_pos;
-        machine->wcs_position[axi] = wcs_pos;
-    }
-    if(updated) machine_interface_position_updated(machine);
-    if(home_updated) machine_interface_home_updated(machine);
-}
-
-void _machine_rrf_parse_globals(machine_interface_t *machine, const char *json_resp)
-{
-    //  globals parsing - not used in this example
-    (void)machine; //  prevent unused variable warning
-    (void)json_resp;
-}
-
-#endif
