@@ -1,12 +1,13 @@
 #ifndef MACHINE_RRF_H
 #define MACHINE_RRF_H
 
-#include "machine_interface.h"
-#include "arduino_serial_wrapper.h"
-
 #include "cJSON.h"
 
 #include "config.h"
+
+#include "machine_interface.h"
+#include "driver/arduino_serial_wrapper.h"
+
 
 #ifdef MACHINE_POLL_INTERVAL
 # define READ_TIMEOUT_MS (MACHINE_POLL_INTERVAL * 5 / 4) 
@@ -45,6 +46,7 @@ typedef struct {
     bool connected;
     const char* input_sel;
     int input_idx;
+    int message_box_last_dismissed_seq;
     // Add other RRF-specific data here (e.g., network info, job details)
 } machine_rrf_t;
 

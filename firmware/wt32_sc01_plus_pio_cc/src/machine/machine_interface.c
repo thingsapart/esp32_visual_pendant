@@ -1,10 +1,13 @@
 #include "machine_interface.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
+
+#include "config.h"
 #include "debug.h"
 
-#include <assert.h>
 
 static const char *TAG = "machine_interface"; // Used for logging
 static const char axes[] = {
@@ -88,7 +91,9 @@ size_t gcode_queue_count(const gcode_queue_t *queue) {
 }
 
 static void machinte_interface_send_gcode(machine_interface_t *self, const char *gcode, poll_state_t poll_state) {
-
+    gcode_queue_push(&self->gcode_queue, gcode);
+    self->poll_state = (uint32_t) self->poll_state | poll_state;
+    _df(-1, "gcode queued: %s", gcode);
 }
 
 // --- Default "Virtual" Method Implementations ---
@@ -96,13 +101,13 @@ static void machinte_interface_send_gcode(machine_interface_t *self, const char 
 
 static void _default_send_gcode(machine_interface_t *self, const char *gcode) {
     // Default implementation:  Just log the G-code.  Replace with actual sending logic.
-    _df(0, "Sending G-code (default): %s\n", gcode);
+    _df(-1, "Sending G-code (default): %s\n", gcode);
     //  _childclass_override(); // This is how you'd call a "virtual" method
 }
 
 static void _default_update_machine_state(machine_interface_t *self, uint32_t poll_state) {
     // Default implementation:  Simulate some state changes.
-    _df(0, "Updating machine state (default), poll_state: %d", (int) poll_state);
+    _df(-1, "Updating machine state (default), poll_state: %d", (int) poll_state);
 }
 
 static bool _default_is_connected(machine_interface_t *self) {
@@ -204,12 +209,12 @@ static char* _default_debug_print(machine_interface_t *self) {
 
 // --- Constructor ---
 
-machine_interface_t* machine_interface_create(uint16_t sleep_ms) {
+machine_interface_t* machine_interface_create(uint16_t procrate_ms) {
     machine_interface_t *self = (machine_interface_t *)malloc(sizeof(machine_interface_t));
-    return machine_interface_init(self, sleep_ms);
+    return machine_interface_init(self, procrate_ms);
 }
 
-machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t sleep_ms) {
+machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t procrate_ms) {
     if (!self) {
          _d(2, "Failed to allocate memory for machine_interface");
         return NULL; // Indicate failure
@@ -217,7 +222,7 @@ machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t 
     memset(self, 0, sizeof(*self));
 
     // Initialize members
-    self->sleep_ms = sleep_ms;
+    self->procrate_ms = procrate_ms;
     self->poll_state = (uint32_t) MACHINE_POSITION | SPINDLE | PROBES | TOOLS | MESSAGES_AND_DIALOGS | END_STOPS;
     self->machine_status = MACHINE_STATUS_UNKNOWN;
     memset(self->axes_homed, 0, sizeof(self->axes_homed)); // Initialize all axes to not homed
@@ -266,6 +271,12 @@ machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t 
     self->set_wcs_zero = _default_set_wcs_zero;
     self->next_wcs = _default_next_wcs;
     self->debug_print = _default_debug_print;
+    self->modal_cancel = NULL;
+    self->modal_ok = NULL;
+    self->modal_choice = NULL;
+    self->modal_int = NULL;
+    self->modal_float = NULL;
+    self->modal_str = NULL;
 
     self->polli = -1;
     self->last_continuous_tick = 0;
@@ -284,6 +295,7 @@ void machine_interface_deinit(machine_interface_t *self) {
         free(self->probes);
         free(self->end_stops);
         free(self->spindles);
+        free(self->message_box);
 
         // Free the tool string if it was dynamically allocated
         if (self->tool) {
@@ -370,11 +382,11 @@ void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, 
          _d(2, "Failed to add gcode to the queue");
     }
     self->poll_state = (uint32_t) self->poll_state | poll_state;
-     _df(0, "gcode queued: %s", gcode);
+    _df(-1, "gcode queued: %s", gcode);
 }
 
 void machine_interface_process_gcode_q(machine_interface_t *self) {
-    char gcode[64]; // Buffer to hold the popped G-code command
+    char gcode[MAX_GCODE_STR_LEN]; // Buffer to hold the popped G-code command
     while (gcode_queue_pop(&self->gcode_queue, gcode)) {
         self->_send_gcode(self, gcode);
         // Add response handling here if needed
@@ -441,11 +453,11 @@ void machine_interface_set_current_move_axis(machine_interface_t *self, axis_t a
 }
 
 void machine_interface_task_loop_iter(machine_interface_t *self) {
-    machine_interface_process_gcode_q(self);
+    // Moved to main machine interface loop, but ensure this is called before
+    // _update_machine_state().
+    // machine_interface_process_gcode_q(self);
 
     self->_update_machine_state(self, self->poll_state);
-
-    // _df(0, "%s", self->debug_print(self));
 
     call_callbacks(state_change_cb);
 
@@ -454,10 +466,14 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
 }
 
 void machine_interface_setup_loop(machine_interface_t *self) {
-     _d(0, "Machine event loop starting...");
-    while (1) {
-        machine_interface_task_loop_iter(self);
-        vTaskDelay(pdMS_TO_TICKS(self->sleep_ms));
+    _d(0, "Machine event loop starting...");
+    size_t i = 0;
+    while (1) { 
+        machine_interface_process_gcode_q(self);
+        if (i++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
+            machine_interface_task_loop_iter(self);
+        }
+        vTaskDelay(pdMS_TO_TICKS(self->procrate_ms));
     }
 }
 
@@ -539,17 +555,32 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self, const cha
     return false;
 }
 
-#define add_callback_fn(type, cbs_name) \
-bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data, machine_callback_t cb) { \
-    for (int i = 0; i < MAX_CALLBACKS; i++) { \
-        if (!self->cbs_name##_cb[i].cb_fn) { \
-            self->cbs_name##_cb[i].cb_fn = cb; \
-            self->cbs_name##_cb[i].user_data = user_data; \
-            return true; \
-        } \
-    } \
-    assert(0 && "Maximum number of callbacks reached"); \
-    return false; \
+void machine_interface_modal_ok(machine_interface_t *self, int modal_id) {
+    if (self->modal_ok) { self->modal_ok(self, modal_id); }
+}
+
+void machine_interface_modal_cancel(machine_interface_t *self, int modal_id) {
+    if (self->modal_cancel) { self->modal_cancel(self, modal_id); }
+}
+
+void machine_interface_modal_choice(machine_interface_t *self, int choice, int modal_id) {
+    if (self->modal_choice) { self->modal_choice(self, choice, modal_id); }
+}
+
+void machine_interface_modal_int(machine_interface_t *self, int val, int modal_id) {
+    if (self->modal_int) { self->modal_int(self, val, modal_id); }
+}
+
+void machine_interface_modal_float(machine_interface_t *self, float val, int modal_id) {
+    if (self->modal_float) { self->modal_float(self, val, modal_id); }
+}
+
+void machine_interface_modal_str(machine_interface_t *self, const char *val, int modal_id) {
+    if (self->modal_str) { self->modal_str(self, val, modal_id); }
+}
+
+void machine_interface_probe(machine_interface_t *self, const char *probe_gcode) {
+    if (self->probe) { self->probe(self, probe_gcode); }
 }
 
 add_callback_fn(machine_interface, state_change)

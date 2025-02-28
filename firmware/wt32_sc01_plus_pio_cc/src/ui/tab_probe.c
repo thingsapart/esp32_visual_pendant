@@ -385,8 +385,7 @@ void probe_msg_box_probe(lv_event_t *e) {
     probe_btn_matrix_t *pbm = (probe_btn_matrix_t *) lv_obj_get_user_data(mbox);
     machine_interface_t *machine = pbm->tab_probe->interface->machine;
     if (machine) {
-        machine->send_gcode(machine, "M5000 P0", MACHINE_POSITION);
-        machine->send_gcode(machine, probe_gcode, MACHINE_POSITION);
+        machine_interface_probe(machine, probe_gcode);
     }
     probe_msg_box_close(e);
 }

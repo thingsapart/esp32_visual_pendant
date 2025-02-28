@@ -1,0 +1,3 @@
+[submodule "firmware/esp32_s3_uvc_camera/lib/esp32_usb_stream"]
+	path = firmware/esp32_s3_uvc_camera/lib/esp32_usb_stream
+	url = https://github.com/esp-arduino-libs/ESP32_USB_Stream.git

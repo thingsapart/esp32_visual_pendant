@@ -4,7 +4,7 @@
 
 #include "debug.h"
 
-#include "rrf_machine_sim_stream.h"
+#include "machine/rrf_machine_sim_stream.h"
 
 #if defined(ESP32_HW)
 
@@ -36,8 +36,8 @@ serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_
     // Create a new HardwareSerial instance.  Note: We're using 'new' here,
     // which means we rely on serial_end() to be called to avoid a memory leak.
     HardwareSerial* serial = new HardwareSerial(uart_num);
-    serial->setRxBufferSize(2048);
-    serial->setTxBufferSize(1024);
+    serial->setRxBufferSize(4096);
+    serial->setTxBufferSize(256);
 
     // Begin the serial communication
     serial->begin(baud, config, rx_pin, tx_pin);

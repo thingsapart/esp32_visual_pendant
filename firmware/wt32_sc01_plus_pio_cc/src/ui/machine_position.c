@@ -39,7 +39,7 @@ static void label_home_clicked_event_handler(lv_event_t *e) {
 
 static void wcs_label_clicked_event_handler(lv_event_t *e) {
     machine_interface_t * iface = (machine_interface_t*) lv_event_get_user_data(e); // get interface from the event.
-    _df(0, "NEXT WCS: %p\n", iface);
+    _df(-1, "NEXT WCS: %p\n", iface);
 
     if (iface) {
         iface->next_wcs(iface);
@@ -221,7 +221,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     _style_local(mp->container, pad_all, LV_PART_MAIN, 0);
     _style_local(mp->container, border_width, LV_PART_MAIN, 0);
 
-    const lv_font_t *font = interface->font_lcd_24 ? interface->font_lcd_24 : lv_font_default(); // Assuming you have this font
+    const lv_font_t *font = interface->font_lcd_24 ? interface->font_lcd_24 : LV_FONT_DEFAULT; // Assuming you have this font
 
     int lblc_width = (digits + 1) * FONT_WIDTH;
 
@@ -341,15 +341,22 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         }
     }
 
-    machine_interface_t *mach = interface->machine;
-    machine_interface_add_pos_changed_cb(mach, mp, pos_updated_callback);
+    // Callbacks moved to interface_t to avoid calling concurrently from different threads.
+
+    // machine_interface_t *mach = interface->machine;
+    //machine_interface_add_pos_changed_cb(mach, mp, pos_updated_callback);
     //machine_interface_add_pos_changed_cb(mach, mp, interface_machine_state_updated_cb);
-    interface_register_state_change_cb(interface, interface_machine_state_updated_cb, mp);
-    machine_interface_add_wcs_changed_cb(mach, mp, wcs_updated_callback);
+    // machine_interface_add_wcs_changed_cb(mach, mp, wcs_updated_callback);
+    //interface_register_state_change_cb(interface, interface_machine_state_updated_cb, mp);
 
     // Initial update
     wcs_updated_callback(interface->machine, mp);
     machine_position_wcs_coords_undefined(mp); // all undefined to begin with.
+
+    interface_add_state_changed_cb(interface, mp, interface_machine_state_updated_cb);
+    interface_add_pos_changed_cb(interface, mp, pos_updated_callback);
+    interface_add_wcs_changed_cb(interface, mp, wcs_updated_callback);
+    interface_add_home_changed_cb(interface, mp, home_updated_callback);
 
     return mp;
 }
@@ -444,9 +451,9 @@ void machine_position_wcs_set_coord(machine_position_wcs_t *mp, size_t ax, float
              mp->coord_vals[cs_index][ax] = v;
             char buf[32];
             snprintf(buf, sizeof(buf), mp->fmt_str, v);
-            _df(0, "LABEL TEXT: cs_idx %d, ax %d, => %s", cs_index, ax, buf);
+            _df(-1, "LABEL TEXT: cs_idx %d, ax %d, => %s", cs_index, ax, buf);
             _label_text(mp->coord_val_labels[cs_index][ax], buf);
-            _d(0, "<< LABEL TEXT");
+            _d(-1, "<< LABEL TEXT");
         }
     }
 }

@@ -66,7 +66,31 @@ typedef struct {
 typedef struct {
     const char* name;
     int rpm;
+    int min_rpm;
+    int max_rpm;
 } spindle_t;
+
+typedef enum {
+    MESSAGE_INFO = 0,         // Non-blocking info.
+    MESSAGE = 1,              // Non-blocking message with close button.
+    MESSAGE_OK = 2,           // Blocking, "OK".
+    MESSAGE_OK_CANCEL = 3,    // Blocking, "OK", "CANCEL".
+    MESSAGE_CHOICE = 4,       // Blocking, multiple buttons.
+    MESSAGE_INPUT_INT = 5,    // Blocking, integer input.
+    MESSAGE_INPUT_FLOAT = 6,  // Blocking, float input.
+    MESSAGE_INPUT_STR = 7,    // Blocking, string input.
+} message_box_mode_t;
+
+typedef struct {
+    char *title;
+    char *text;
+    char **choices;
+    size_t num_choices;
+    message_box_mode_t mode;
+    int seq;
+    void *user_data;
+    machine_interface_t *machine;
+} message_box_t;
 
 // --- Callback Function Types ---
 
@@ -83,10 +107,11 @@ typedef struct files_changed_callback_t {
 
 // --- G-code Queue ---
 
-#define MAX_GCODE_Q_LEN 50
+#define MAX_GCODE_Q_LEN 20
+#define MAX_GCODE_STR_LEN 128
 
 typedef struct {
-    char buffer[MAX_GCODE_Q_LEN][128]; // Fixed-size buffer for G-code commands.  Adjust size as needed.
+    char buffer[MAX_GCODE_Q_LEN][MAX_GCODE_STR_LEN]; // Fixed-size buffer for G-code commands.  Adjust size as needed.
     size_t head;
     size_t tail;
     size_t count;
@@ -96,7 +121,7 @@ typedef struct {
 
 typedef struct machine_interface_t {
     // --- Configuration ---
-    uint16_t sleep_ms;
+    uint16_t procrate_ms;
     uint32_t poll_state;
 
     // --- Machine State ---
@@ -129,7 +154,7 @@ typedef struct machine_interface_t {
     size_t num_end_stops;
     spindle_t* spindles;
     size_t num_spindles;
-    //dialogs_t* dialogs; // Example, adjust as needed
+    message_box_t *message_box;
 
     // --- G-code Queue ---
     gcode_queue_t gcode_queue;
@@ -173,11 +198,18 @@ typedef struct machine_interface_t {
     void (*set_wcs_zero)(machine_interface_t *self, int wcs, const char *axes);
     void (*next_wcs)(machine_interface_t *self);
     char* (*debug_print)(machine_interface_t *self);
+    void (*modal_cancel)(machine_interface_t *self, int modal_id);
+    void (*modal_ok)(machine_interface_t *self, int modal_id);
+    void (*modal_choice)(machine_interface_t *self, int choice, int modal_id);
+    void (*modal_int)(machine_interface_t *self, int val, int modal_id);
+    void (*modal_float)(machine_interface_t *self, float val, int modal_id);
+    void (*modal_str)(machine_interface_t *self, const char *val, int modal_id);
+    void (*probe)(machine_interface_t *self, const char *probe_gcode);
     // Add other "virtual" methods here
 } machine_interface_t;
 
-machine_interface_t* machine_interface_create(uint16_t sleep_ms);
-machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t sleep_ms);
+machine_interface_t* machine_interface_create(uint16_t procrate_ms);
+machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t procrate_ms);
 
 void machine_interface_destroy(machine_interface_t *self);
 void machine_interface_deinit(machine_interface_t *self);
@@ -186,8 +218,7 @@ void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, 
 
 bool machine_interface_is_homed(machine_interface_t *self, const char *axes);
 const char* machine_interface_get_wcs_str(machine_interface_t *self, int wcs_offs);
-int machine_interface_axis_idx(machine_interface_t *self, char axis);
-void machine_interface_process_gcode_q(machine_interface_t *self);
+int machine_interface_axis_idx(machine_interface_t *self, char axis);void machine_interface_process_gcode_q(machine_interface_t *self);
 void machine_interface_task_loop_iter(machine_interface_t *self);
 void machine_interface_setup_loop(machine_interface_t *self);
 void machine_interface_maybe_execute_continuous_move(machine_interface_t *self);
@@ -209,8 +240,29 @@ axis_t machine_interface_get_current_move_axis(machine_interface_t *self);
 axis_t machine_interface_next_move_axis(machine_interface_t *self);
 axis_t machine_interface_move_current_axis(machine_interface_t *self, float feed, float value, bool relative);
 axis_t machine_interface_step_current_axis(machine_interface_t *self, float feed, int steps);
+void machine_interface_modal_cancel(machine_interface_t *self, int modal_id);
+void machine_interface_modal_ok(machine_interface_t *self, int modal_id);
+void machine_interface_modal_choice(machine_interface_t *self, int choice, int modal_id);
+void machine_interface_modal_int(machine_interface_t *self, int val, int modal_id);
+void machine_interface_modal_float(machine_interface_t *self, float val, int modal_id);
+void machine_interface_modal_str(machine_interface_t *self, const char *val, int modal_id);
+void machine_interface_probe(machine_interface_t *self, const char *probe_gcode);
 
 bool machine_interface_add_files_changed_cb(machine_interface_t *self, const char *path, void *user_data, files_changed_callback_cb_t cb);
+
+#define add_callback_fn(type, cbs_name) \
+bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data, machine_callback_t cb) { \
+    for (int i = 0; i < MAX_CALLBACKS; i++) { \
+        if (!self->cbs_name##_cb[i].cb_fn) { \
+            _df(0, #type"_add_" #cbs_name "_cb adding: %d (%p)", i, cb); \
+            self->cbs_name##_cb[i].cb_fn = cb; \
+            self->cbs_name##_cb[i].user_data = user_data; \
+            return true; \
+        } \
+    } \
+    assert(0 && "Maximum number of callbacks reached"); \
+    return false; \
+}
 
 // <type>_add_<callback_name>_cb(<tye> *self, void *user_data, <callback_t> callback);
 // => eg machine_interface_add_state_changed_cb(...), machine_interface_add_pos_changed_cb(...).

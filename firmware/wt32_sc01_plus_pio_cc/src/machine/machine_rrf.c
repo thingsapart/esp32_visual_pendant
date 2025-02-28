@@ -1,12 +1,17 @@
 #include "machine_rrf.h"
+
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-#include "machine/arduino_serial_wrapper.h"
+#include "driver/arduino_serial_wrapper.h"
 #include "debug.h"
 
 static const char *TAG = "machine_rrf";
+
+// Fowrad decls.
+void _machine_rrf_modal_cancel(machine_interface_t *self, int modal_id);
 
 // --- Helper Functions ---
 
@@ -23,14 +28,50 @@ static void _machine_rrf_continuous_stop(machine_interface_t *self);
 static void _machine_rrf_continuous_move(machine_interface_t *self, const char axis, float feed, int direction);
 
 // JSON parsing helpers (private)
-static void _machine_rrf_parse_json_response(machine_rrf_t *self, const char *json_response);
-static void _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj);
-static void _machine_rrf_parse_move_axes_brief(machine_rrf_t *self, cJSON *axes_array);
-static void _machine_rrf_parse_move_axes_ext(machine_rrf_t *self, cJSON *axes_array);
-static void _machine_rrf_parse_move_axes(machine_rrf_t *self, cJSON *axes_array);
-static void _machine_rrf_parse_globals(machine_rrf_t *self, cJSON *globals_obj);
-static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj);
+static bool _machine_rrf_parse_json_response(machine_rrf_t *self, const char *json_response);
+static bool _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj);
+static bool _machine_rrf_parse_move_axes_brief(machine_rrf_t *self, cJSON *axes_array);
+static bool _machine_rrf_parse_move_axes_ext(machine_rrf_t *self, cJSON *axes_array);
+static bool _machine_rrf_parse_move_axes(machine_rrf_t *self, cJSON *axes_array);
+static bool _machine_rrf_parse_globals(machine_rrf_t *self, cJSON *globals_obj);
+static bool _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj);
 
+// JSON helpers
+int _json_key_int(cJSON *parent, const char *key) {
+    cJSON *val = cJSON_GetObjectItemCaseSensitive(parent, key);
+    if (cJSON_IsNumber(val)) {
+        return val->valueint;
+    }
+    _df(1, "Integer JSON key \"%s\" not found.", key);
+    return 0;
+}
+
+int _json_key_float(cJSON *parent, const char *key) {
+    cJSON *val = cJSON_GetObjectItemCaseSensitive(parent, key);
+    if (cJSON_IsNumber(val)) {
+        return val->valuedouble;
+    }
+    _df(1, "Float JSON key \"%s\" not found.", key);
+    return 0;
+}
+
+int _json_key_arr_size(cJSON *parent, const char *key) {
+    cJSON *val = cJSON_GetObjectItemCaseSensitive(parent, key);
+    if (cJSON_IsArray(val)) {
+        return cJSON_GetArraySize(val);
+    }
+    _df(1, "Array JSON key \"%s\" not found.", key);
+    return 0;
+}
+
+const char *_json_key_str(cJSON *parent, const char *key) {
+    cJSON *val = cJSON_GetObjectItemCaseSensitive(parent, key);
+    if (cJSON_IsString(val)) {
+        return val->valuestring;
+    }
+    _df(1, "String JSON key \"%s\" not found.", key);
+    return 0;
+}
 
 static int machine_rrf_axis_idx(char axis) {
     switch (axis) {
@@ -56,7 +97,7 @@ static void _machine_rrf_send_gcode(machine_interface_t *self, const char *gcode
     char *saveptr;
     char *line = strtok_r(gcode_copy, "\n", &saveptr);
     while (line != NULL) {
-        _df(0, "Sending: %s", line);
+        _df(-1, "Sending: %s", line);
         // Use the wrapper function here:
         serial_write(rrf_self->uart, (const uint8_t *)line, strlen(line));
         serial_write(rrf_self->uart, (const uint8_t *)"\n", 1);
@@ -75,7 +116,7 @@ static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t
     if (len > 0) {
         buffer[len] = '\0'; // Null-terminate the string
 
-        _df(0, "Received: (%lu) %s (%d)\n", buffer_size, buffer, strlen(buffer));
+        _df(-1, "Received: (%lu) %s (%d)\n", buffer_size, buffer, strlen(buffer));
         return true;
     }
 
@@ -90,6 +131,7 @@ static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd
         _machine_rrf_parse_json_response(self, response_buffer);
         if (!self->connected) {
             self->connected = true;
+            self->message_box_last_dismissed_seq = -99999;
             machine_interface_connected_updated(&self->base);
 
             machine_interface_position_updated(&self->base);
@@ -115,11 +157,13 @@ static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_
         snprintf(cmd1, sizeof(cmd1), "M409 K\"move.axes[]\" F\"d5,f\"");
         _machine_rrf_proc_machine_state(rrf_self, cmd1);
 
-        if (rrf_self->input_sel) {
+        if (rrf_self->input_sel && *rrf_self->input_sel != '\0') {
           char cmd2[64];
-          snprintf(cmd2, sizeof(cmd2), "M409 K\"%s\"", rrf_self->input_sel);
+          snprintf(cmd2, sizeof(cmd2), "M409 K\"%s\" F\"d6,f\"", rrf_self->input_sel);
           _machine_rrf_proc_machine_state(rrf_self, cmd2);
         }
+        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.currentMove\" F\"f\"");
+        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.speedFactor\" F\"f\"");
     }
     if (poll_state & MACHINE_POSITION_EXT) {
         _machine_rrf_proc_machine_state(rrf_self, "M409 K\"move.axes[]\" F\"d5,v\"");
@@ -131,7 +175,7 @@ static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_
         //_machine_rrf_update_current_job_async(rrf_self);
     }
     if (poll_state & MESSAGES_AND_DIALOGS) {
-        //_machine_rrf_update_message_box_async(rrf_self);
+        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"state.messageBox\" F\"v\"");
     }
     if (poll_state & END_STOPS) {
         //_machine_rrf_update_endstops_async(rrf_self);
@@ -140,7 +184,7 @@ static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_
         //_machine_rrf_update_probe_vals_async(rrf_self);
     }
     if (poll_state & SPINDLE) {
-        //_machine_rrf_update_spindles_async(rrf_self);
+        _machine_rrf_proc_machine_state(rrf_self, "M409 K\"spindles[]\" F\"d2,v\"");
     }
     if (poll_state & TOOLS) {
         //_machine_rrf_update_tools_async(rrf_self);
@@ -160,7 +204,9 @@ static void _machine_rrf_list_files(machine_interface_t *self, const char *path)
 static void _machine_rrf_run_macro(machine_interface_t *self, const char *macro_name) {
     char cmd[128];
     snprintf(cmd, sizeof(cmd), "M98 P\"%s\"", macro_name);
-    _machine_rrf_send_gcode(self, cmd); // Use RRF-specific _send_gcode
+
+    //_machine_rrf_send_gcode(self, cmd); // Use RRF-specific _send_gcode
+    machine_interface_send_gcode(self, cmd, MACHINE_POSITION_EXT);
 }
 
 static void _machine_rrf_start_job(machine_interface_t *self, const char *job_name) {
@@ -168,8 +214,12 @@ static void _machine_rrf_start_job(machine_interface_t *self, const char *job_na
     char cmd2[64];
     snprintf(cmd1, sizeof(cmd1), "M23 %s", job_name);
     snprintf(cmd2, sizeof(cmd2), "M24");
-    _machine_rrf_send_gcode(self, cmd1);
-    _machine_rrf_send_gcode(self, cmd2);
+
+    machine_interface_send_gcode(self, cmd1, MACHINE_POSITION);
+    machine_interface_send_gcode(self, cmd2, JOB_STATUS);
+
+    //_machine_rrf_send_gcode(self, cmd1);
+    //_machine_rrf_send_gcode(self, cmd2);
 }
 
 static void _machine_rrf_continuous_stop(machine_interface_t *self) {
@@ -183,10 +233,10 @@ static void _machine_rrf_continuous_move(machine_interface_t *self, const char a
 }
 
 // --- JSON Parsing ---
-static void _machine_rrf_parse_move_axes_brief(machine_rrf_t *self, cJSON *axes_array) {
+static bool _machine_rrf_parse_move_axes_brief(machine_rrf_t *self, cJSON *axes_array) {
     bool updated = false;
     if (!cJSON_IsArray(axes_array)) {
-        return;
+        return false;
     }
 
     cJSON *axis = NULL;
@@ -210,14 +260,15 @@ static void _machine_rrf_parse_move_axes_brief(machine_rrf_t *self, cJSON *axes_
     if (updated) {
         machine_interface_position_updated(&self->base);
     }
+    return true;
 }
 
-static void _machine_rrf_parse_move_axes_ext(machine_rrf_t *self, cJSON *axes_array) {
+static bool _machine_rrf_parse_move_axes_ext(machine_rrf_t *self, cJSON *axes_array) {
     bool updated = false;
     bool home_updated = false;
 
     if (!cJSON_IsArray(axes_array)) {
-        return;
+        return false;
     }
 
     cJSON *axis = NULL;
@@ -256,31 +307,47 @@ static void _machine_rrf_parse_move_axes_ext(machine_rrf_t *self, cJSON *axes_ar
     if (home_updated) {
         machine_interface_home_updated(&self->base);
     }
+    return true;
 }
 
-static void _machine_rrf_parse_move_axes(machine_rrf_t *self, cJSON *axes_array) {
-    if (!cJSON_IsArray(axes_array)) return;
+static bool _machine_rrf_parse_move_axes(machine_rrf_t *self, cJSON *axes_array) {
+    if (!cJSON_IsArray(axes_array)) return false;
 
     cJSON *first_axis = cJSON_GetArrayItem(axes_array, 0);
     if (first_axis && cJSON_GetObjectItemCaseSensitive(first_axis, "letter")) {
-        _machine_rrf_parse_move_axes_ext(self, axes_array);
+        return _machine_rrf_parse_move_axes_ext(self, axes_array);
     } else {
-        _machine_rrf_parse_move_axes_brief(self, axes_array);
+        return _machine_rrf_parse_move_axes_brief(self, axes_array);
     }
 }
 
-static void _machine_rrf_parse_globals(machine_rrf_t *self, cJSON *globals_obj) {
+static bool _machine_rrf_parse_globals(machine_rrf_t *self, cJSON *globals_obj) {
     // Handle global variables if needed
+    return true;
 }
 
-static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj)
+void _free_modal(machine_interface_t *self, int modal_id) {
+    if (self->message_box && (self->message_box->seq == modal_id)) {
+        if (self->message_box->user_data) { lv_msgbox_close((lv_obj_t *) self->message_box->user_data); }
+
+        if (self->message_box->title) { free(self->message_box->title); }
+        if (self->message_box->text) { free(self->message_box->text); }
+        if (self->message_box->choices) { free(self->message_box->choices); }
+        free(self->message_box);
+
+        self->message_box = NULL;
+        ((machine_rrf_t *) self)->message_box_last_dismissed_seq = modal_id;
+    }
+}
+
+static bool _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj)
 {
     cJSON *jdir = cJSON_GetObjectItemCaseSensitive(json_obj, "dir");
     cJSON *files = cJSON_GetObjectItemCaseSensitive(json_obj, "files");
 
     if (!cJSON_IsString(jdir) || !cJSON_IsArray(files)) {
         _d(2,  "Invalid M20 response format");
-        return;
+        return false;
     }
 
     const char *dir_str = jdir->valuestring;
@@ -295,7 +362,7 @@ static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj
     char clean_dir[64]; // Adjust size as needed
     if (dir_len >= sizeof(clean_dir)) {
         _df(2, "Directory name too long: %.*s", (int)dir_len, dir_str);
-        return;
+        return false;
     }
     strncpy(clean_dir, dir_str, dir_len);
     clean_dir[dir_len] = '\0';
@@ -307,7 +374,7 @@ static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj
     const char **filenames = (const char **)malloc(num_files * sizeof(char *));
     if (!filenames) {
         _d(2,  "Failed to allocate memory for filenames");
-        return;
+        return false;
     }
 
     // Extract filenames and store them
@@ -324,7 +391,7 @@ static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj
                     free((void *)filenames[j]);
                 }
                 free(filenames);
-                return;
+                return false;
             }
             i++;
         }
@@ -367,45 +434,132 @@ static void _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj
         }
         free(filenames);
     }
+    return true;
 }
 
-static void _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
+static bool _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
     cJSON *key_json = cJSON_GetObjectItemCaseSensitive(json_obj, "key");
     cJSON *result_json = cJSON_GetObjectItemCaseSensitive(json_obj, "result");
 
     if (!cJSON_IsString(key_json) || !result_json) {
         _d(2,  "Invalid M409 response format");
-        return;
+        return false;
     }
 
     const char *key = key_json->valuestring;
 
     if (strcmp(key, "move.axes") == 0 || strcmp(key, "move.axes[]") == 0) {
-        _machine_rrf_parse_move_axes(self, result_json);
+        return _machine_rrf_parse_move_axes(self, result_json);
     } else if (strcmp(key, "global") == 0) {
-        _machine_rrf_parse_globals(self, result_json);
+        return _machine_rrf_parse_globals(self, result_json);
     } else if (strcmp(key, "job") == 0) {
         // self.job = { ... } // Parse job information
     } else if (strcmp(key, "move.workplaceNumber") == 0) {
-        if (cJSON_IsNumber(result_json) && result_json->valueint != self->base.wcs) {
-            self->base.wcs = result_json->valueint;
-            machine_interface_wcs_updated(&self->base);
+        if (cJSON_IsNumber(result_json)) {
+            if (result_json->valueint != self->base.wcs) {
+                self->base.wcs = result_json->valueint;
+                machine_interface_wcs_updated(&self->base);
+            }
+            return true;
         }
+    } else if (strcmp(key, "spindles[]") == 0) {
+        cJSON *spindle_json = NULL;
+        int i = 0;
+        size_t len = cJSON_GetArraySize(result_json);
+        if (len > self->base.num_spindles) {
+            self->base.spindles = realloc(self->base.spindles, len * sizeof(spindle_t));
+            self->base.num_spindles = len;
+        }
+        bool spindle_updated = false;
+        cJSON_ArrayForEach(spindle_json, result_json) {
+            if (cJSON_HasObjectItem(result_json, "current")) {
+                self->base.spindles[i].name = NULL;
+                self->base.spindles[i].rpm = _json_key_int(spindle_json, "current");
+                self->base.spindles[i].max_rpm = _json_key_int(spindle_json, "max");
+                self->base.spindles[i].min_rpm = _json_key_int(spindle_json, "min");
+                spindle_updated = true;
+            }
+            ++i;
+        }
+        if (spindle_updated) { machine_interface_spindles_tools_updated(&self->base); }
+        return true;
     } else if (strcmp(key, "move.currentMove") == 0) {
-        // self.feed = ...; self.feed_req = ...; // Parse feed information
+        if (cJSON_IsNull(result_json)) { return true; }
+
+        float old_feed = self->base.feed, old_feed_req = self->base.feed_req;
+
+        self->base.feed = _json_key_int(result_json, "topSpeed");
+        self->base.feed_req = _json_key_int(result_json, "requestedSpeed");
+        if (fabsf(self->base.feed - old_feed) > 0.0001 || fabsf(self->base.feed_req - old_feed_req) > 0.0001) {
+            machine_interface_feed_updated(&self->base);
+        }
+        return true;
     } else if (strcmp(key, "move.speedFactor") == 0) {
+        if (cJSON_IsNull(result_json)) { return true; } // ? But suppresses errors when not moving.
+
         if (cJSON_IsNumber(result_json)) {
             float speed_factor = result_json->valuedouble;
             if (self->base.feed_multiplier != speed_factor) {
                 self->base.feed_multiplier = speed_factor;
                 machine_interface_feed_updated(&self->base);
             }
+            return true;
         }
     } else if (strcmp(key, "network") == 0) {
         // self.network = [ ... ]; // Parse network information
     } else if (strcmp(key, "state.messageBox") == 0) {
-        // self.message_box = result_json; // Parse message box
-        // machine_interface_dialogs_updated(&self->base);
+        if (cJSON_IsNull(result_json)) { 
+            // Message box dismissed somewhere else?
+            if (self->base.message_box) { _free_modal(&self->base, self->base.message_box->seq); }
+
+            self->base.message_box = NULL;
+            machine_interface_dialogs_updated(&self->base);
+
+            return true; 
+        }
+
+        if (cJSON_HasObjectItem(result_json, "seq") && (cJSON_HasObjectItem(result_json, "title") || cJSON_HasObjectItem(result_json, "message") || cJSON_HasObjectItem)) {
+            int seq = _json_key_int(result_json, "seq");
+            // If we're seeing an old messageBox somehow, cancel it?
+            if (seq < self->message_box_last_dismissed_seq) {
+                _machine_rrf_modal_cancel(&self->base, seq);
+            }
+            if (!self->base.message_box || (self->base.message_box->seq != seq && seq > self->message_box_last_dismissed_seq)) {
+                const char *title = _json_key_str(result_json, "title");
+                const char *message = _json_key_str(result_json, "message");
+                int mode = _json_key_int(result_json, "mode");
+                size_t num_choices = _json_key_arr_size(result_json, "choices");
+                char **choices = malloc(sizeof(char *) * num_choices);
+                cJSON *choice_json;
+                if (title || message || num_choices > 0) {
+                    size_t i = 0;
+                    cJSON *ch = cJSON_GetObjectItemCaseSensitive(result_json, "choices");
+                    if (cJSON_IsArray(ch)) {
+                        cJSON_ArrayForEach(choice_json, ch) {
+                            if (cJSON_IsString(choice_json)) {
+                                choices[i++] = strdup(choice_json->valuestring);
+                            }
+                        }
+                    } else {
+                        num_choices = 0;
+                    }
+                    message_box_t *msg = malloc(sizeof(message_box_t));
+                    msg->choices = choices;
+                    msg->mode = mode;
+                    msg->num_choices = num_choices;
+                    msg->seq = seq;
+                    msg->title = title ? strdup(title) : NULL;
+                    msg->text = message ? strdup(message) : NULL;
+                    msg->machine = &self->base;
+                    msg->user_data = NULL;
+                    if (self->base.message_box) { _free_modal(&self->base, self->base.message_box->seq); }
+                    self->base.message_box = msg;
+
+                    machine_interface_dialogs_updated(&self->base);
+                }
+                return true;
+            }
+        }
     } else if (strcmp(key, "sensors.probes[].value[]") == 0) {
         // self.probes = result_json; // Parse probe values
         // machine_interface_sensors_updated(&self->base);
@@ -415,6 +569,7 @@ static void _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
             char input_sel_str[64];
             snprintf(input_sel_str, sizeof(input_sel_str), "inputs[%d].axesRelative", self->input_idx);
             self->input_sel = strdup(input_sel_str); // Allocate and copy
+            return true;
         }
     } else if (strcmp(key, "inputs[].name") == 0) {
         cJSON *name_json = NULL;
@@ -432,20 +587,26 @@ static void _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
             }
             ++i;
         }
+        return true;
     } else if (self->input_sel && strcmp(key, self->input_sel) == 0) {
+        if (cJSON_IsNull(result_json)) { return true; } // ? Suppresses errors for now.
+
         if (cJSON_IsBool(result_json)) {
             bool move_relative = cJSON_IsTrue(result_json);
             if (self->base.move_relative != move_relative) {
                 self->base.move_relative = move_relative;
                 machine_interface_position_updated(&self->base);
             }
+            return true;
         }
     } else {
         _df(1, "Unhandled M409 key: %s", key);
+        return false;
     }
+    return false;
 }
 
-static void _machine_rrf_parse_json_response(machine_rrf_t *self, const char *json_response) {
+static bool _machine_rrf_parse_json_response(machine_rrf_t *self, const char *json_response) {
     cJSON *root = cJSON_Parse(json_response);
     if (!root) {
         _df(2, "Failed to parse JSON: %s", cJSON_GetErrorPtr());
@@ -453,18 +614,23 @@ static void _machine_rrf_parse_json_response(machine_rrf_t *self, const char *js
         if (error_ptr != NULL) {
             _df(2, "Error before: %s", error_ptr);
         }
-        return;
+        _df(2, ">>>> RESPONSE: %s", json_response);
+        return false;
     }
 
+    bool succ = false;
     if (cJSON_GetObjectItemCaseSensitive(root, "dir")) {
-        _machine_rrf_parse_m20_response(self, root);
+        succ = _machine_rrf_parse_m20_response(self, root);
     } else if (cJSON_GetObjectItemCaseSensitive(root, "key") || !cJSON_GetObjectItemCaseSensitive(root, "result")) {
-        _machine_rrf_parse_m409_response(self, root);
+        succ = _machine_rrf_parse_m409_response(self, root);
     } else {
         _df(2, "Unrecognized JSON response: %s", json_response);
     }
+    if (!succ) { _df(2, "Failed to parse JSON response: %s", json_response); }
 
     cJSON_Delete(root);
+
+    return succ;
 }
 
 // --- Constructor ---
@@ -485,6 +651,69 @@ void _machine_rrf_find_input(machine_rrf_t *self) {
     _machine_rrf_proc_machine_state(self, cmd1);
 }
 
+void _update_last_msbbox_seq(machine_interface_t *self, int modal_id) {
+    ((machine_rrf_t *) self)->message_box_last_dismissed_seq = modal_id;
+}
+
+void _machine_rrf_modal_cancel(machine_interface_t *self, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "M292 S%d P1", modal_id);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_modal_ok(machine_interface_t *self, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "M292 S%d P0", modal_id);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_modal_choice(machine_interface_t *self, int choice, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "M292 S%d P0 R{%d}", modal_id, choice);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_modal_int(machine_interface_t *self, int val, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "M292 S%d P0 R{%d}", modal_id, val);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_modal_float(machine_interface_t *self, float val, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "M292 S%d P0 R{%f}", modal_id, val);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_modal_str(machine_interface_t *self, const char *val, int modal_id) {
+    _update_last_msbbox_seq(self, modal_id);
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "M292 S%d P1 R{\"%s\"}", modal_id, val);
+    machine_interface_send_gcode(self, buf, MESSAGES_AND_DIALOGS);
+    _free_modal(self, modal_id);
+}
+
+void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
+    machine_interface_send_gcode(self, "M98 P\"/macros/pre-probe.g\"", MACHINE_POSITION);
+    machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
+}
+
 machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin) {
     // Initialize the base class part
     machine_interface_init(&self->base, sleep_ms);
@@ -493,6 +722,7 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_
     self->connected = false;
     self->input_sel = NULL; // Initialize to NULL
     self->input_idx = 0;
+    self->message_box_last_dismissed_seq = -99999;
 
     // Initialize UART using the wrapper
     self->uart = serial_init(rrf_serial_num, 115200, CFG_SERIAL_8N1, rx_pin, tx_pin);
@@ -513,6 +743,13 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_
     self->base.move_continuous_stop = _machine_rrf_continuous_stop;
     self->base._continuous_move = _machine_rrf_continuous_move;
     self->base._continuous_stop = _machine_rrf_continuous_stop;
+    self->base.modal_cancel = _machine_rrf_modal_cancel;
+    self->base.modal_ok = _machine_rrf_modal_ok;
+    self->base.modal_choice = _machine_rrf_modal_choice;
+    self->base.modal_int = _machine_rrf_modal_int;
+    self->base.modal_float = _machine_rrf_modal_float;
+    self->base.modal_str = _machine_rrf_modal_str;
+    self->base.probe = _machine_rrf_probe;
 
     _d(0, "Initialized RRF machine...\n");
 

@@ -84,6 +84,7 @@
         "lv_tileview.h": "c",
         "queue": "c",
         "stack": "c",
-        "debug.h": "c"
+        "debug.h": "c",
+        "machine_interface.h": "c"
     }
 }

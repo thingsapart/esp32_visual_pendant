@@ -1,4 +1,3 @@
-# TASMOTA__4b95b81a2bf2d72a
 #
 # Automatically generated file. DO NOT EDIT.
 # Espressif IoT Development Framework (ESP-IDF) 5.3.2 Project Configuration
@@ -508,14 +507,10 @@ CONFIG_ESPTOOLPY_FLASHFREQ="80m"
 # CONFIG_ESPTOOLPY_FLASHSIZE_2MB is not set
 # CONFIG_ESPTOOLPY_FLASHSIZE_4MB is not set
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 # CONFIG_ESPTOOLPY_FLASHSIZE_16MB is not set
 # CONFIG_ESPTOOLPY_FLASHSIZE_32MB is not set
 # CONFIG_ESPTOOLPY_FLASHSIZE_64MB is not set
 # CONFIG_ESPTOOLPY_FLASHSIZE_128MB is not set
-CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
-CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y
 CONFIG_ESPTOOLPY_BEFORE_RESET=y
@@ -535,14 +530,10 @@ CONFIG_PARTITION_TABLE_SINGLE_APP=y
 # CONFIG_PARTITION_TABLE_TWO_OTA is not set
 # CONFIG_PARTITION_TABLE_CUSTOM is not set
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp_coredump.csv"
 CONFIG_PARTITION_TABLE_OFFSET=0x8000
 CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
-
-CONFIG_LIB_BUILDER_FLASHMODE="qio"
-CONFIG_LIB_BUILDER_FLASHFREQ="80m"
-CONFIG_LIB_BUILDER_COMPILE=y
 
 #
 # Arduino Configuration
@@ -554,8 +545,6 @@ CONFIG_AUTOSTART_ARDUINO=y
 CONFIG_ARDUINO_RUN_CORE1=y
 # CONFIG_ARDUINO_RUN_NO_AFFINITY is not set
 CONFIG_ARDUINO_RUNNING_CORE=1
-CONFIG_ARDUINO_LOOP_STACK_SIZE=32768
-CONFIG_ARDUINO_LOOP_STACK_SIZE=32768
 CONFIG_ARDUINO_LOOP_STACK_SIZE=32768
 # CONFIG_ARDUINO_EVENT_RUN_CORE0 is not set
 CONFIG_ARDUINO_EVENT_RUN_CORE1=y
@@ -598,87 +587,6 @@ CONFIG_ARDUHAL_PARTITION_SCHEME="default"
 # CONFIG_AUTOCONNECT_WIFI is not set
 # CONFIG_ARDUINO_SELECTIVE_COMPILATION is not set
 # end of Arduino Configuration
-
-#
-# Arduino TinyUSB
-#
-CONFIG_TINYUSB_ENABLED=y
-
-#
-# Serial (CDC) driver
-#
-CONFIG_TINYUSB_CDC_ENABLED=y
-CONFIG_TINYUSB_DESC_CDC_STRING="Espressif CDC Device"
-CONFIG_TINYUSB_CDC_RX_BUFSIZE=64
-CONFIG_TINYUSB_CDC_TX_BUFSIZE=64
-# end of Serial (CDC) driver
-
-#
-# Mass Storage (MSC) driver
-#
-CONFIG_TINYUSB_MSC_ENABLED=y
-CONFIG_TINYUSB_DESC_MSC_STRING="Espressif MSC Device"
-CONFIG_TINYUSB_MSC_BUFSIZE=4096
-# end of Mass Storage (MSC) driver
-
-#
-# Human Interface (HID) driver
-#
-CONFIG_TINYUSB_HID_ENABLED=y
-CONFIG_TINYUSB_DESC_HID_STRING="Espressif HID Device"
-CONFIG_TINYUSB_HID_BUFSIZE=64
-# end of Human Interface (HID) driver
-
-#
-# MIDI driver
-#
-CONFIG_TINYUSB_MIDI_ENABLED=y
-CONFIG_TINYUSB_DESC_MIDI_STRING="Espressif MIDI Device"
-CONFIG_TINYUSB_MIDI_RX_BUFSIZE=64
-CONFIG_TINYUSB_MIDI_TX_BUFSIZE=64
-# end of MIDI driver
-
-#
-# VIDEO driver
-#
-CONFIG_TINYUSB_VIDEO_ENABLED=y
-CONFIG_TINYUSB_DESC_VIDEO_STRING="Espressif VIDEO Device"
-CONFIG_TINYUSB_VIDEO_STREAMING_BUFSIZE=64
-CONFIG_TINYUSB_VIDEO_STREAMING_IFS=1
-# end of VIDEO driver
-
-#
-# DFU Runtime driver
-#
-CONFIG_TINYUSB_DFU_RT_ENABLED=y
-CONFIG_TINYUSB_DESC_DFU_RT_STRING="Espressif DFU_RT Device"
-# end of DFU Runtime driver
-
-#
-# DFU driver
-#
-CONFIG_TINYUSB_DFU_ENABLED=y
-CONFIG_TINYUSB_DESC_DFU_STRING="Espressif DFU Device"
-CONFIG_TINYUSB_DFU_BUFSIZE=4096
-# end of DFU driver
-
-#
-# VENDOR driver
-#
-CONFIG_TINYUSB_VENDOR_ENABLED=y
-CONFIG_TINYUSB_DESC_VENDOR_STRING="Espressif VENDOR Device"
-CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=64
-CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=64
-# end of VENDOR driver
-
-#
-# NCM driver
-#
-CONFIG_TINYUSB_NCM_ENABLED=y
-# end of NCM driver
-
-CONFIG_TINYUSB_DEBUG_LEVEL=0
-# end of Arduino TinyUSB
 
 #
 # Compiler options
@@ -1665,15 +1573,20 @@ CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM=0
 # Core dump
 #
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
-CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# CONFIG_ESP_COREDUMP_ENABLE_TO_UART is not set
+# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set
+# CONFIG_ESP_COREDUMP_DATA_FORMAT_BIN is not set
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+# CONFIG_ESP_COREDUMP_CHECKSUM_SHA256 is not set
+# CONFIG_ESP_COREDUMP_CAPTURE_DRAM is not set
 CONFIG_ESP_COREDUMP_CHECK_BOOT=y
 CONFIG_ESP_COREDUMP_ENABLE=y
+CONFIG_ESP_COREDUMP_LOGS=y
 CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
-CONFIG_ESP_COREDUMP_STACK_SIZE=0
-CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y
-CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+# CONFIG_ESP_COREDUMP_FLASH_NO_OVERWRITE is not set
+CONFIG_ESP_COREDUMP_USE_STACK_SIZE=y
+CONFIG_ESP_COREDUMP_STACK_SIZE=1792
 # end of Core dump
 
 #
@@ -1732,8 +1645,6 @@ CONFIG_FATFS_LINK_LOCK=y
 # CONFIG_FREERTOS_SMP is not set
 # CONFIG_FREERTOS_UNICORE is not set
 CONFIG_FREERTOS_HZ=1000
-CONFIG_FREERTOS_HZ=1000
-CONFIG_FREERTOS_HZ=1000
 # CONFIG_FREERTOS_CHECK_STACKOVERFLOW_NONE is not set
 # CONFIG_FREERTOS_CHECK_STACKOVERFLOW_PTRVAL is not set
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
@@ -1762,12 +1673,13 @@ CONFIG_FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES=1
 #
 # Port
 #
+CONFIG_FREERTOS_TASK_FUNCTION_WRAPPER=y
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_FREERTOS_TLSP_DELETION_CALLBACKS=y
 # CONFIG_FREERTOS_TASK_PRE_DELETION_HOOK is not set
 # CONFIG_FREERTOS_ENABLE_STATIC_TASK_CLEAN_UP is not set
 CONFIG_FREERTOS_CHECK_MUTEX_GIVEN_BY_OWNER=y
-CONFIG_FREERTOS_ISR_STACKSIZE=1536
+CONFIG_FREERTOS_ISR_STACKSIZE=2096
 CONFIG_FREERTOS_INTERRUPT_BACKTRACE=y
 CONFIG_FREERTOS_TICK_SUPPORT_SYSTIMER=y
 CONFIG_FREERTOS_CORETIMER_SYSTIMER_LVL1=y
@@ -2392,6 +2304,17 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
+# CMake Utilities
+#
+# CONFIG_CU_RELINKER_ENABLE is not set
+# CONFIG_CU_DIAGNOSTICS_COLOR_NEVER is not set
+CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
+# CONFIG_CU_DIAGNOSTICS_COLOR_AUTO is not set
+# CONFIG_CU_GCC_LTO_ENABLE is not set
+# CONFIG_CU_GCC_STRING_1BYTE_ALIGN is not set
+# end of CMake Utilities
+
+#
 # DSP Library
 #
 CONFIG_DSP_OPTIMIZATIONS_SUPPORTED=y
@@ -2466,6 +2389,8 @@ CONFIG_MDNS_TASK_STACK_SIZE=4096
 CONFIG_MDNS_TASK_AFFINITY_CPU0=y
 # CONFIG_MDNS_TASK_AFFINITY_CPU1 is not set
 CONFIG_MDNS_TASK_AFFINITY=0x0
+# CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM is not set
+CONFIG_MDNS_TASK_CREATE_FROM_INTERNAL=y
 CONFIG_MDNS_SERVICE_ADD_TIMEOUT_MS=2000
 CONFIG_MDNS_TIMER_PERIOD_MS=100
 # CONFIG_MDNS_NETWORKING_SOCKET is not set
@@ -2618,14 +2543,10 @@ CONFIG_ESP32_REDUCE_PHY_TX_POWER=y
 CONFIG_ESP_SYSTEM_PM_POWER_DOWN_CPU=y
 CONFIG_PM_POWER_DOWN_TAGMEM_IN_LIGHT_SLEEP=y
 CONFIG_ESP32S3_SPIRAM_SUPPORT=y
-CONFIG_ESP32S3_SPIRAM_SUPPORT=y
-CONFIG_ESP32S3_SPIRAM_SUPPORT=y
 CONFIG_DEFAULT_PSRAM_CLK_IO=30
 CONFIG_DEFAULT_PSRAM_CS_IO=26
 # CONFIG_ESP32S3_DEFAULT_CPU_FREQ_80 is not set
 # CONFIG_ESP32S3_DEFAULT_CPU_FREQ_160 is not set
-CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
-CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
 CONFIG_SYSTEM_EVENT_QUEUE_SIZE=32
@@ -2705,9 +2626,16 @@ CONFIG_ESP32_WIFI_MGMT_SBUF_NUM=32
 # CONFIG_WPA_WPS_STRICT is not set
 # CONFIG_WPA_DEBUG_PRINT is not set
 # CONFIG_WPA_TESTING_OPTIONS is not set
-# CONFIG_ESP32_ENABLE_COREDUMP_TO_FLASH is not set
+CONFIG_ESP32_ENABLE_COREDUMP_TO_FLASH=y
 # CONFIG_ESP32_ENABLE_COREDUMP_TO_UART is not set
-CONFIG_ESP32_ENABLE_COREDUMP_TO_NONE=y
+# CONFIG_ESP32_ENABLE_COREDUMP_TO_NONE is not set
+# CONFIG_ESP32_COREDUMP_DATA_FORMAT_BIN is not set
+CONFIG_ESP32_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP32_COREDUMP_CHECKSUM_CRC32=y
+# CONFIG_ESP32_COREDUMP_CHECKSUM_SHA256 is not set
+CONFIG_ESP32_ENABLE_COREDUMP=y
+CONFIG_ESP32_CORE_DUMP_MAX_TASKS_NUM=64
+CONFIG_ESP32_CORE_DUMP_STACK_SIZE=1792
 CONFIG_TIMER_TASK_PRIORITY=1
 CONFIG_TIMER_TASK_STACK_DEPTH=3120
 CONFIG_TIMER_QUEUE_LENGTH=10
@@ -2760,824 +2688,3 @@ CONFIG_SPI_FLASH_WRITING_DANGEROUS_REGIONS_ALLOWED=y
 # CONFIG_SUPPORT_TERMIOS is not set
 CONFIG_SEMIHOSTFS_MAX_MOUNT_POINTS=1
 # End of deprecated options
-#
-# Automatically generated file. DO NOT EDIT.
-# Espressif IoT Development Framework (ESP-IDF) 5.3.2 Project Configuration
-#
-
-#
-# Build type
-#
-# end of Build type
-
-#
-# Bootloader config
-#
-
-#
-# Bootloader manager
-#
-# end of Bootloader manager
-
-
-#
-# Serial Flash Configurations
-#
-# end of Serial Flash Configurations
-
-# end of Bootloader config
-
-#
-# Security features
-#
-# end of Security features
-
-#
-# Application manager
-#
-# end of Application manager
-
-
-#
-# Boot ROM Behavior
-#
-# end of Boot ROM Behavior
-
-#
-# Serial flasher config
-#
-# end of Serial flasher config
-
-#
-# Partition Table
-#
-# end of Partition Table
-
-#
-# Arduino Configuration
-#
-
-#
-# Debug Log Configuration
-#
-# end of Debug Log Configuration
-
-# end of Arduino Configuration
-
-#
-# Compiler options
-#
-# end of Compiler options
-
-#
-# Component config
-#
-
-#
-# Application Level Tracing
-#
-# end of Application Level Tracing
-
-#
-# Bluetooth
-#
-
-#
-# NimBLE Options
-#
-
-#
-# Memory Settings
-#
-# end of Memory Settings
-
-
-#
-# GAP Service
-#
-
-#
-# GAP Appearance write permissions
-#
-# end of GAP Appearance write permissions
-
-
-#
-# GAP device name write permissions
-#
-# end of GAP device name write permissions
-
-# end of GAP Service
-
-#
-# BLE Services
-#
-
-#
-# Device Information Service
-#
-# end of Device Information Service
-# end of BLE Services
-
-
-#
-# Host-controller Transport
-#
-# end of Host-controller Transport
-
-# end of NimBLE Options
-
-#
-# Controller Options
-#
-
-#
-# MODEM SLEEP Options
-#
-# end of MODEM SLEEP Options
-
-
-#
-# BLE disconnect when instant passed
-#
-# end of BLE disconnect when instant passed
-
-# end of Controller Options
-
-#
-# Common Options
-#
-# end of Common Options
-
-# end of Bluetooth
-
-
-#
-# Console Library
-#
-# end of Console Library
-
-#
-# Driver Configurations
-#
-
-#
-# TWAI Configuration
-#
-# end of TWAI Configuration
-
-#
-# Legacy ADC Driver Configuration
-#
-
-#
-# Legacy ADC Calibration Configuration
-#
-# end of Legacy ADC Calibration Configuration
-# end of Legacy ADC Driver Configuration
-
-#
-# Legacy MCPWM Driver Configurations
-#
-# end of Legacy MCPWM Driver Configurations
-
-#
-# Legacy Timer Group Driver Configurations
-#
-# end of Legacy Timer Group Driver Configurations
-
-#
-# Legacy RMT Driver Configurations
-#
-# end of Legacy RMT Driver Configurations
-
-#
-# Legacy I2S Driver Configurations
-#
-# end of Legacy I2S Driver Configurations
-
-#
-# Legacy PCNT Driver Configurations
-#
-# end of Legacy PCNT Driver Configurations
-
-#
-# Legacy SDM Driver Configurations
-#
-# end of Legacy SDM Driver Configurations
-
-#
-# Legacy Temperature Sensor Driver Configurations
-#
-# end of Legacy Temperature Sensor Driver Configurations
-# end of Driver Configurations
-
-#
-# eFuse Bit Manager
-#
-# end of eFuse Bit Manager
-
-#
-# ESP-TLS
-#
-# end of ESP-TLS
-
-#
-# ADC and ADC Calibration
-#
-# end of ADC and ADC Calibration
-
-#
-# Wireless Coexistence
-#
-# end of Wireless Coexistence
-
-#
-# Common ESP-related
-#
-# end of Common ESP-related
-
-#
-# ESP-Driver:GPIO Configurations
-#
-# end of ESP-Driver:GPIO Configurations
-
-#
-# ESP-Driver:GPTimer Configurations
-#
-# end of ESP-Driver:GPTimer Configurations
-
-#
-# ESP-Driver:I2C Configurations
-#
-# end of ESP-Driver:I2C Configurations
-
-#
-# ESP-Driver:I2S Configurations
-#
-# end of ESP-Driver:I2S Configurations
-
-#
-# ESP-Driver:LEDC Configurations
-#
-# end of ESP-Driver:LEDC Configurations
-
-#
-# ESP-Driver:MCPWM Configurations
-#
-# end of ESP-Driver:MCPWM Configurations
-
-#
-# ESP-Driver:PCNT Configurations
-#
-# end of ESP-Driver:PCNT Configurations
-
-#
-# ESP-Driver:RMT Configurations
-#
-# end of ESP-Driver:RMT Configurations
-
-#
-# ESP-Driver:Sigma Delta Modulator Configurations
-#
-# end of ESP-Driver:Sigma Delta Modulator Configurations
-
-#
-# ESP-Driver:SPI Configurations
-#
-# end of ESP-Driver:SPI Configurations
-
-#
-# ESP-Driver:Touch Sensor Configurations
-#
-# end of ESP-Driver:Touch Sensor Configurations
-
-#
-# ESP-Driver:Temperature Sensor Configurations
-#
-# end of ESP-Driver:Temperature Sensor Configurations
-
-#
-# ESP-Driver:UART Configurations
-#
-# end of ESP-Driver:UART Configurations
-
-#
-# ESP-Driver:USB Serial/JTAG Configuration
-#
-# end of ESP-Driver:USB Serial/JTAG Configuration
-
-#
-# Ethernet
-#
-# end of Ethernet
-
-#
-# Event Loop Library
-#
-# end of Event Loop Library
-
-#
-# GDB Stub
-#
-# end of GDB Stub
-
-#
-# ESP HTTP client
-#
-# end of ESP HTTP client
-
-#
-# HTTP Server
-#
-# end of HTTP Server
-
-#
-# ESP HTTPS OTA
-#
-# end of ESP HTTPS OTA
-
-#
-# ESP HTTPS server
-#
-# end of ESP HTTPS server
-
-#
-# Hardware Settings
-#
-
-#
-# Chip revision
-#
-
-#
-# Maximum Supported ESP32-S3 Revision (Rev v0.99)
-#
-
-#
-# Maximum Supported ESP32-S3 eFuse Block Revision (eFuse Block Rev v1.99)
-#
-# end of Chip revision
-
-#
-# MAC Config
-#
-# end of MAC Config
-
-#
-# Sleep Config
-#
-# end of Sleep Config
-
-#
-# RTC Clock Config
-#
-# end of RTC Clock Config
-
-#
-# Peripheral Control
-#
-# end of Peripheral Control
-
-#
-# GDMA Configurations
-#
-# end of GDMA Configurations
-
-#
-# Main XTAL Config
-#
-# end of Main XTAL Config
-# end of Hardware Settings
-
-#
-# LCD and Touch Panel
-#
-
-#
-# LCD Touch Drivers are maintained in the IDF Component Registry
-#
-
-#
-# LCD Peripheral Configuration
-#
-# end of LCD Peripheral Configuration
-# end of LCD and Touch Panel
-
-#
-# ESP NETIF Adapter
-#
-# end of ESP NETIF Adapter
-
-#
-# Partition API Configuration
-#
-# end of Partition API Configuration
-
-#
-# PHY
-#
-# end of PHY
-
-#
-# Power Management
-#
-# end of Power Management
-
-#
-# ESP PSRAM
-#
-
-#
-# SPI RAM config
-#
-# end of SPI RAM config
-# end of ESP PSRAM
-
-#
-# ESP Ringbuf
-#
-# end of ESP Ringbuf
-
-#
-# ESP System Settings
-#
-
-#
-# Cache config
-#
-# end of Cache config
-
-#
-# Memory
-#
-# end of Memory
-
-#
-# Trace memory
-#
-# end of Trace memory
-
-
-#
-# Memory protection
-#
-# end of Memory protection
-
-
-#
-# Brownout Detector
-#
-# end of Brownout Detector
-
-# end of ESP System Settings
-
-#
-# IPC (Inter-Processor Call)
-#
-# end of IPC (Inter-Processor Call)
-
-#
-# ESP Timer (High Resolution Timer)
-#
-# end of ESP Timer (High Resolution Timer)
-
-#
-# Wi-Fi
-#
-
-#
-# WPS Configuration Options
-#
-# end of WPS Configuration Options
-
-# end of Wi-Fi
-
-#
-# Core dump
-#
-CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
-CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
-CONFIG_ESP_COREDUMP_CHECK_BOOT=y
-CONFIG_ESP_COREDUMP_ENABLE=y
-CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
-CONFIG_ESP_COREDUMP_STACK_SIZE=0
-# end of Core dump
-
-#
-# FAT Filesystem support
-#
-# end of FAT Filesystem support
-
-#
-# FreeRTOS
-#
-
-#
-# Kernel
-#
-# end of Kernel
-
-#
-# Port
-#
-# end of Port
-
-# end of FreeRTOS
-
-#
-# Hardware Abstraction Layer (HAL) and Low Level (LL)
-#
-# end of Hardware Abstraction Layer (HAL) and Low Level (LL)
-
-#
-# Heap memory debugging
-#
-# end of Heap memory debugging
-
-#
-# Log output
-#
-# end of Log output
-
-#
-# LWIP
-#
-
-#
-# DHCP server
-#
-# end of DHCP server
-
-
-#
-# TCP
-#
-# end of TCP
-
-#
-# UDP
-#
-# end of UDP
-
-#
-# Checksums
-#
-# end of Checksums
-
-
-#
-# ICMP
-#
-# end of ICMP
-
-#
-# LWIP RAW API
-#
-# end of LWIP RAW API
-
-#
-# SNTP
-#
-# end of SNTP
-
-#
-# DNS
-#
-# end of DNS
-
-
-#
-# Hooks
-#
-# end of Hooks
-
-# end of LWIP
-
-#
-# mbedTLS
-#
-
-#
-# mbedTLS v3.x related
-#
-# end of mbedTLS v3.x related
-
-#
-# Certificate Bundle
-#
-# end of Certificate Bundle
-
-
-#
-# Symmetric Ciphers
-#
-# end of Symmetric Ciphers
-
-
-#
-# Certificates
-#
-# end of Certificates
-
-# end of mbedTLS
-
-#
-# ESP-MQTT Configurations
-#
-# end of ESP-MQTT Configurations
-
-#
-# Newlib
-#
-# end of Newlib
-
-
-#
-# NVS
-#
-# end of NVS
-
-#
-# OpenThread
-#
-
-#
-# OpenThread Spinel
-#
-# end of OpenThread Spinel
-# end of OpenThread
-
-#
-# Protocomm
-#
-# end of Protocomm
-
-#
-# PThreads
-#
-# end of PThreads
-
-#
-# MMU Config
-#
-# end of MMU Config
-
-#
-# Main Flash configuration
-#
-
-#
-# SPI Flash behavior when brownout
-#
-# end of SPI Flash behavior when brownout
-
-#
-# Optional and Experimental Features (READ DOCS FIRST)
-#
-
-#
-# Features here require specific hardware (READ DOCS FIRST!)
-#
-# end of Optional and Experimental Features (READ DOCS FIRST)
-# end of Main Flash configuration
-
-#
-# SPI Flash driver
-#
-
-#
-# Auto-detect flash chips
-#
-# end of Auto-detect flash chips
-
-# end of SPI Flash driver
-
-#
-# TCP Transport
-#
-
-#
-# Websocket
-#
-# end of Websocket
-# end of TCP Transport
-
-#
-# Ultra Low Power (ULP) Co-processor
-#
-
-#
-# ULP RISC-V Settings
-#
-# end of ULP RISC-V Settings
-
-#
-# ULP Debugging Options
-#
-# end of ULP Debugging Options
-# end of Ultra Low Power (ULP) Co-processor
-
-#
-# Unity unit testing library
-#
-# end of Unity unit testing library
-
-#
-# USB-OTG
-#
-
-#
-# Hub Driver Configuration
-#
-
-#
-# Root Port configuration
-#
-# end of Root Port configuration
-
-# end of Hub Driver Configuration
-
-# end of USB-OTG
-
-#
-# Virtual file system
-#
-
-#
-# Host File System I/O (Semihosting)
-#
-# end of Host File System I/O (Semihosting)
-# end of Virtual file system
-
-#
-# Wear Levelling
-#
-# end of Wear Levelling
-
-#
-# CMake Utilities
-#
-# CONFIG_CU_RELINKER_ENABLE is not set
-# CONFIG_CU_DIAGNOSTICS_COLOR_NEVER is not set
-CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
-# CONFIG_CU_DIAGNOSTICS_COLOR_AUTO is not set
-# CONFIG_CU_GCC_LTO_ENABLE is not set
-# CONFIG_CU_GCC_STRING_1BYTE_ALIGN is not set
-# end of CMake Utilities
-
-#
-# DSP Library
-#
-# end of DSP Library
-
-#
-# Camera configuration
-#
-# end of Camera configuration
-
-#
-# esp-modem
-#
-# end of esp-modem
-
-#
-# mDNS
-#
-# CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM is not set
-CONFIG_MDNS_TASK_CREATE_FROM_INTERNAL=y
-
-#
-# MDNS Predefined interfaces
-#
-# end of MDNS Predefined interfaces
-# end of mDNS
-
-#
-# LittleFS
-#
-# end of LittleFS
-# end of Component config
-
-
-# Deprecated options for backward compatibility
-# End of deprecated options
-
-ARDUINO_USB_CDC_ON_BOOT=1
-USE_USB_CDC_CONSOLE=1
-CONFIG_ARDUINO_USB_CDC_ON_BOOT=y
-CONFIG_USE_USB_CDC_CONSOLE=y
-CONFIG_USB_CDC_ENABLED=y
-file://./sdkconfig.esp32s3
-CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
-CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
-CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
-CONFIG_ESP_COREDUMP_CHECK_BOOT=y
-CONFIG_ESP_COREDUMP_ENABLE=y
-CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
-CONFIG_ESP_COREDUMP_STACK_SIZE=0
-ARDUINO_USB_CDC_ON_BOOT=1
-USE_USB_CDC_CONSOLE=1
-CONFIG_ARDUINO_USB_CDC_ON_BOOT=y
-CONFIG_USE_USB_CDC_CONSOLE=y
-CONFIG_USB_CDC_ENABLED=y
