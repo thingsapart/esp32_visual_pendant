@@ -32,6 +32,16 @@ public:
       cfg.offset_x = 0;
       cfg.offset_y = 0;
 
+      // >>
+      cfg.dummy_read_pixel = 8;
+      cfg.dummy_read_bits = 1;
+      cfg.readable = true;     // was false
+      cfg.invert = false;
+      //cfg.rgb_order = false;
+      cfg.dlen_16bit = false;
+      cfg.bus_shared = true; // was false something to do with SD?
+      // <<
+
       _panel_instance.config(cfg);
     }
 
@@ -69,7 +79,9 @@ public:
       cfg.pin_vsync   = GPIO_NUM_17;
       cfg.pin_hsync   = GPIO_NUM_16;
       cfg.pin_pclk    = GPIO_NUM_21;
-      cfg.freq_write  = 14000000;
+      cfg.freq_write  = 12000000;
+      //cfg.freq_write = 20000000;
+      //cfg.freq_write  = 2000000;
 
       cfg.hsync_polarity    = 0;
       cfg.hsync_front_porch = 10;
@@ -108,7 +120,7 @@ public:
       cfg.pin_scl    = GPIO_NUM_45;
       cfg.pin_rst    = GPIO_NUM_NC;
 
-      cfg.freq       = 400000;
+      cfg.freq       = 100000;
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance);
     }
@@ -139,9 +151,14 @@ void lvgl_log(const char * buf)
 
 /* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
-static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL];
+#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL)
+static uint8_t buf1[DRAW_BUF_SIZE];// IRAM_ATTR;
+static uint8_t buf2[DRAW_BUF_SIZE];// IRAM_ATTR;
 
 /* Display flushing */
+#define DISPLAY_DMA
+
+#ifndef DISPLAY_DMA
 void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
@@ -151,6 +168,19 @@ void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) 
   tft.endWrite();
   lv_disp_flush_ready(disp);
 }
+#else
+void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t * px_map) {
+    if (tft.getStartCount() == 0) {   
+        tft.startWrite();
+    }
+    tft.pushImageDMA( area->x1
+                    , area->y1
+                    , area->x2 - area->x1 + 1
+                    , area->y2 - area->y1 + 1
+                    , ( lgfx::rgb565_t* )px_map);
+    lv_disp_flush_ready( disp );
+}
+#endif
 
 #include "debug.h"
 
@@ -181,7 +211,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   #endif
 
   /* Set display buffer for display. */
-  lv_display_set_buffers(disp, buf1, NULL, sizeof(buf1), LV_DISPLAY_RENDER_MODE_PARTIAL);
+  lv_display_set_buffers(disp, buf1, buf2, sizeof(buf1), LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_flush_cb(disp, display_flush);
 
   /*Initialize the input device driver*/
