@@ -56,6 +56,7 @@ machine_rrf_t* machine_rrf_create(int rrf_serial_num, uint16_t sleep_ms, int tx_
 machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin);
 
 void machine_rrf_destroy(machine_rrf_t *self);
+void machine_rrf_deinit(machine_rrf_t *self);
 void machine_rrf_task_loop_iter(machine_rrf_t *self); // Override the base class version
 
 #ifdef __cplusplus

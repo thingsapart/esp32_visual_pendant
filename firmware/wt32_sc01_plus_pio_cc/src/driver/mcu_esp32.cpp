@@ -1,9 +1,11 @@
 #ifdef ESP32_HW
 
 #include "Arduino.h"
+#include "WiFi.h"
 
 #include "sdkconfig.h"
 #include <esp_task_wdt.h>
+#include <esp_wifi.h>
 
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
@@ -15,7 +17,7 @@
 # warning "CORE DUMP DISABLED" 
 #endif
 
-#ifdef HAS_CORE_DUMO
+#ifdef HAS_CORE_DUMP
 
 void print_reset_reason() {
     Serial.println("");
@@ -100,19 +102,51 @@ void read_core_dump() {
 }
 #endif
 
+void print_mac_address() {
+  uint8_t baseMac[6];
+  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
+  if (ret == ESP_OK) {
+    Serial.printf("MAC ADDRESS: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                  baseMac[0], baseMac[1], baseMac[2],
+                  baseMac[3], baseMac[4], baseMac[5]);
+  } else {
+    Serial.println("MAC ADDRESS: Failed to read MAC address");
+  }
+}
+
 void mcu_setup() {
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
 
+#ifndef USB_UART_PIN_TX
   add_standard_serial();
+#else
+  init_standard_serial(115200, CFG_SERIAL_8N1, USB_UART_PIN_RX, USB_UART_PIN_TX);
+#endif
+  Serial.setDebugOutput(true);
+  _d(0, "PRE-INIT");
 
+  #ifndef PENDANT_RELEASE
+  delay(5000);
+
+  Serial.write("!!!!!! \n");
+
+  _d(0, "PRE-INIT DONE");
+  #else
   delay(200);
+  #endif
 }
 
 void mcu_startup() {
   #ifdef HAS_CORE_DUMP
   print_reset_reason();
   #endif
+
+  _d(0, "POST-INIT");
+  WiFi.mode(WIFI_STA);
+  WiFi.STA.begin();
+  print_mac_address();
+  WiFi.STA.end();
+  _d(0, "POST-INIT DONE");
 }
 
 #endif

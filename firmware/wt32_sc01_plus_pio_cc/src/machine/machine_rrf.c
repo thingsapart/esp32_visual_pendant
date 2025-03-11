@@ -10,6 +10,10 @@
 
 static const char *TAG = "machine_rrf";
 
+#ifdef TFT_WIDTH
+#include "lvgl.h"
+#endif
+
 // Fowrad decls.
 void _machine_rrf_modal_cancel(machine_interface_t *self, int modal_id);
 
@@ -328,7 +332,9 @@ static bool _machine_rrf_parse_globals(machine_rrf_t *self, cJSON *globals_obj) 
 
 void _free_modal(machine_interface_t *self, int modal_id) {
     if (self->message_box && (self->message_box->seq == modal_id)) {
+#       ifdef TFT_WIDTH
         if (self->message_box->user_data) { lv_msgbox_close((lv_obj_t *) self->message_box->user_data); }
+#       endif
 
         if (self->message_box->title) { free(self->message_box->title); }
         if (self->message_box->text) { free(self->message_box->text); }

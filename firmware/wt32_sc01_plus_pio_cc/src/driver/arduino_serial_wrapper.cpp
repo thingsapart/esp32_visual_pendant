@@ -2,20 +2,21 @@
 
 #include <map>
 
-#include "debug.h"
-
 #include "machine/rrf_machine_sim_stream.h"
+
+#include "debug.h"
 
 #if defined(ESP32_HW)
 
 #include "Arduino.h"
 #include "HardwareSerial.h" // Include the Arduino HardwareSerial header
 
-
 // Use a static std::map to store the HardwareSerial instances.
 // This is necessary because HardwareSerial is a C++ class, and we
 // need a way to manage instances from C.  The key is the UART number.
 static std::map<int, Stream*> serial_instances;
+
+extern "C" {
 
 void add_standard_serial() {
     serial_instances[-1] = &Serial;
@@ -49,6 +50,26 @@ serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_
     return (serial_handle_t)serial;
 }
 
+void init_standard_serial(unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
+    const uint8_t uart_num = -1;
+    // Check if an instance already exists for this UART number
+    if (serial_instances.count(uart_num) > 0) {
+        return;
+    }
+
+    // Create a new HardwareSerial instance.  Note: We're using 'new' here,
+    // which means we rely on serial_end() to be called to avoid a memory leak.
+    HardwareSerial* serial = new HardwareSerial(0);
+    serial->setRxBufferSize(4096);
+    serial->setTxBufferSize(256);
+
+    // Begin the serial communication
+    serial->begin(baud, config, rx_pin, tx_pin);
+
+    // Store the instance in the map
+    serial_instances[uart_num] = serial;
+}
+
 void serial_end(serial_handle_t handle) {
     if (!handle) return;
 
@@ -66,8 +87,8 @@ void serial_end(serial_handle_t handle) {
 }
 
 size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size) {
-    if (!handle) return 0;
     Stream* serial = (Stream*)handle;
+    if (!serial) { return 0; }
     return serial->write(buffer, size);
 }
 
@@ -136,6 +157,12 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
 
 serial_handle_t get_serial_handle(int uart_num) {
     return serial_instances[uart_num];
+}
+
+void default_serial_write(uint8_t *buf, size_t len) {
+    serial_write(get_serial_handle(-1), buf, len);
+}
+
 }
 
 #else

@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>  // For size_t
-#include "lvgl.h"    // Assuming you have LVGL configured in your PlatformIO project
 
 #ifdef __cplusplus
 extern "C" {

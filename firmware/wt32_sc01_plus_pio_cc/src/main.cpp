@@ -27,7 +27,7 @@
 #include "config.h"
 #include "debug.h"
 
-SET_LOOP_TASK_STACK_SIZE(1024 * 48);
+//SET_LOOP_TASK_STACK_SIZE(1024 * 48);
 
 static const char *TAG = "ESP32_CNC_HMI";
 
@@ -71,12 +71,19 @@ void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
 
 #include "machine/machine_interface.h"
 #include "machine/machine_rrf.h"
+#include "machine/machine_remote.h"
+#include "machine/multi_machine_interface.h"
 #include "ui/tab_jog.h"
 #include "ui/interface.h"
 
-static machine_rrf_t machine;
+static machine_rrf_t machine_rrf;
+static machine_interface_remote_t machine_remote;
+static multi_machine_interface_t machine;
+
 static interface_t interface;
+
 TaskHandle_t machine_task_handle = NULL;
+TaskHandle_t lvgl_task_handle = NULL;
 
 /* Initialize the input device driver */
 lv_indev_t * indev = NULL;
@@ -90,32 +97,73 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "driver/arduino_serial_wrapper.h"
 
-// Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
-void machine_task(void *pvParameters) {
+bool machine_remote_init() {
+    // Create and initialize the machine interface (RRF in this case)
+    if (!machine_interface_remote_init(&machine_remote, (const uint8_t *) "\0\0\0\0\0\0")) {
+        _d(2, "Failed to create remote machine interface");
+        machine_rrf_deinit(&machine_rrf); // Clean up if the loop somehow exits
+        vTaskDelete(NULL); // Delete the task if creation fails
+        return false;
+    }
+
+    if (!multi_machine_add_impl(&machine, &machine_remote.base)) {
+        _d(2, "Failed to register remote machine interface");
+      machine_interface_remote_deinit(&machine_remote); // Clean up if the loop somehow exits
+      return false;
+    }
+
+    return true;
+}
+
+bool machine_init() {
 #ifndef RRF_SIM
     int rrf_uart_num = RRF_SERIAL_UART_NUM;
 #else
     int rrf_uart_num = add_rrf_sim_serial();
 #endif
     // Create and initialize the machine interface (RRF in this case)
-    if (!machine_rrf_init(&machine, rrf_uart_num, MACHINE_SEND_GCODE_INTERVAL_MS, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
+    if (!machine_rrf_init(&machine_rrf, rrf_uart_num, MACHINE_SEND_GCODE_INTERVAL_MS, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
         _d(2, "Failed to create machine interface");
-        vTaskDelete(NULL); // Delete the task if creation fails
-        return;
+         //vTaskDelete(NULL); // Delete the task if creation fails
+        return false;
     }
-    // Call the setup loop function (this will run indefinitely)
-    machine_interface_setup_loop(&machine.base);
+    
+    if (!multi_machine_interface_init(&machine)) {
+        _d(2, "Failed to create remote machine interface");
+        machine_rrf_deinit(&machine_rrf); // Clean up if the loop somehow exits
+        machine_interface_remote_deinit(&machine_remote); // Clean up if the loop somehow exits
+        // vTaskDelete(NULL); // Delete the task if creation fails
+        return false;
+    } else {
+      if (!multi_machine_add_impl(&machine, &machine_rrf.base)) {
+        _d(2, "Failed to initialize local/remote distribution interface");
+        multi_machine_interface_deinit(&machine);
+        machine_rrf_deinit(&machine_rrf); // Clean up if the loop somehow exits
+        // vTaskDelete(NULL); // Delete the task if creation fails
+        return false;
+      }
+    }
+
+    return true;
+}
+
+// Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
+void machine_task(void *pvParameters) {
+    if (machine_remote_init()) {
+      // Call the setup loop function (this will run indefinitely)
+      machine_interface_setup_loop(&machine.base);
+    }
 
     // Should never reach here, but good practice to include
     _d(2, "Machine task exiting (should not happen)");
-    machine_rrf_destroy(&machine); // Clean up if the loop somehow exits
+    multi_machine_interface_deinit(&machine);
+    machine_rrf_deinit(&machine_rrf); // Clean up if the loop somehow exits
+    machine_interface_remote_deinit(&machine_remote); // Clean up if the loop somehow exits
     vTaskDelete(NULL);
 }
 
-void setup() {
-  mcu_setup();
-  mcu_startup();
-
+static unsigned int ctr = 0;
+void lvgl_task(void *pv_params) {
   _d(0, "LV_INIT");
   lv_init();
 
@@ -128,21 +176,6 @@ void setup() {
   lv_indev_set_type(indev_encoder, LV_INDEV_TYPE_ENCODER);
   lv_indev_set_read_cb(indev_encoder, encoder_indev_read);
 
-  _d(0, "Creating Machine Task..\n");
-
-  // Create the FreeRTOS machine loop task.
-  xTaskCreate(
-      machine_task,       // Function that implements the task
-      "machine_task",     // Task name (for debugging)
-      3 * 8192,           // Stack size in words (adjust as needed)
-      NULL,               // Task input parameter (not used here)
-      5,                  // Task priority (adjust as needed)
-      &machine_task_handle // Task handle (optional, can be used to control the task)
-  );
-
-  // start the UI
-  _d(0, "Machine loaded..\n");
-
   _d(0, "Setting up encoder scroll/value change...\n");
   default_group = lv_group_create();
   lv_indev_set_group(indev_encoder, default_group);
@@ -153,38 +186,79 @@ void setup() {
   interface_init(&interface, &machine.base);
   _d(0, "Interface loaded...\n");
 
-  _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
+  while (true) {
+    auto time_start = millis();
+    uint32_t sleep_time = lv_task_handler();
+    vTaskDelay(sleep_time / portTICK_PERIOD_MS);
+
+    auto time_end = millis();
+    if ((ctr++ % 1000) == 0) {
+      _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
+    }
+
+    // Update all components that rely on data from machine_interface.
+    // Run from main UI thread due to data races/crashes if directly called from
+    // machine_interface_t callbacks.
+    interface_tick(&interface);
+
+    // interface_update_machine_state(&interface, &machine.base);
+
+    if (!encoder.isUiMode()) {
+      int diff = encoder.readAndReset();
+      if (diff != 0) {
+        // interface->tab_jog->jog_dial->setValue(encoder.position());
+        auto dial = interface.tab_jog->jog_dial;
+        if (jog_dial_axis_selected(dial)) { jog_dial_apply_diff(dial, diff); }
+
+        machine_interface_step_current_axis(&machine.base, 3000, diff);
+
+        _df(0, "ENCODER DIFF %d", diff);
+      }
+    }
+
+    lv_tick_inc(time_end - time_start);
+  }
 }
 
-static unsigned int ctr = 0;
+void setup() {
+  mcu_setup();
+  mcu_startup();
+
+  machine_init();
+
+  //_df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
+
+  _d(0, "Creating LVGL Task..\n");
+  // Create the FreeRTOS machine loop task.
+  xTaskCreatePinnedToCore(
+      lvgl_task,           // Function that implements the task
+      "lvgl_task",         // Task name (for debugging)
+      1024 * 48,           // Stack size in words (adjust as needed)
+      NULL,                // Task input parameter (not used here)
+      10,                  // Task priority (adjust as needed) - higher than machine task
+      &lvgl_task_handle,   // Task handle (optional, can be used to control the task)
+      0
+  );
+  _d(0, "Creating LVGL Task..\n");
+
+  _d(0, "Creating Machine Task..\n");
+  // Create the FreeRTOS machine loop task.
+  xTaskCreatePinnedToCore(
+      machine_task,         // Function that implements the task
+      "machine_task",       // Task name (for debugging)
+      1024 * 24,            // Stack size in words (adjust as needed)
+      NULL,                 // Task input parameter (not used here)
+      5,                    // Task priority (adjust as needed)
+      &machine_task_handle, // Task handle (optional, can be used to control the task)
+      1
+  );
+
+  // start the UI
+  _d(0, "Machine loaded..\n");
+}
+
 void loop() {
-  auto time_start = millis();
-  uint32_t sleep_time = lv_task_handler();
-  delay(sleep_time);
-  auto time_end = millis();
-  if ((ctr++ % 1000) == 0) {
-    _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
-  }
-
-  // Update all components that rely on data from machine_interface.
-  // Run from main UI thread due to data races/crashes if directly called from
-  // machine_interface_t callbacks.
-  interface_tick(&interface);
-
-  // interface_update_machine_state(&interface, &machine.base);
-
-  if (!encoder.isUiMode()) {
-    int diff = encoder.readAndReset();
-    if (diff != 0) {
-      // interface->tab_jog->jog_dial->setValue(encoder.position());
-      auto dial = interface.tab_jog->jog_dial;
-      if (jog_dial_axis_selected(dial)) { jog_dial_apply_diff(dial, diff); }
-
-      machine_interface_step_current_axis(&machine.base, 3000, diff);
-
-      _df(0, "ENCODER DIFF %d", diff);
-    }
-  }
-
-  lv_tick_inc(time_end - time_start);
+  // Don't need to loop here.
+  // Let FreeRTOS tasks handle their own loops.
+  vTaskDelete(NULL);
 }

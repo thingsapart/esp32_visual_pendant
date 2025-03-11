@@ -51,6 +51,8 @@ void serial_flush(serial_handle_t handle);
 size_t serial_read_bytes(serial_handle_t handle, uint8_t *buffer, size_t length);
 
 void add_standard_serial();
+void init_standard_serial(unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin);
+
 #ifdef RRF_SIM
 int add_rrf_sim_serial();
 #endif
@@ -60,6 +62,8 @@ serial_handle_t get_serial_handle(int uart_num);
 // Alloc's a string, caller is responsible for freeing it.
 char *serial_read_line(serial_handle_t handle);
 size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long timeout_ms);
+
+void default_serial_write(uint8_t *buf, size_t len);
 
 #ifdef __cplusplus
 }

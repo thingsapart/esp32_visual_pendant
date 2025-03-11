@@ -85,6 +85,7 @@
         "queue": "c",
         "stack": "c",
         "debug.h": "c",
-        "machine_interface.h": "c"
+        "machine_interface.h": "c",
+        "remote_comms_wrapper.h": "c"
     }
 }

@@ -9,6 +9,8 @@
 #include <Stream.h>
 #include "Arduino.h"
 
+#include "debug.h"
+
 class RRFMachineSimStream : public Stream {
 #else
 #define override
