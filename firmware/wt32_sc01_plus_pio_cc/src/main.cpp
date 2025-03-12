@@ -149,10 +149,13 @@ bool machine_init() {
 
 // Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
 void machine_task(void *pvParameters) {
+    LOGI(TAG, ">> Starting machine task...");
     if (machine_remote_init()) {
+      LOGI(TAG, "  >> Success... running loop.");
       // Call the setup loop function (this will run indefinitely)
       machine_interface_setup_loop(&machine.base);
     }
+    LOGI(TAG, "<< Machine Task Loop Ended?");
 
     // Should never reach here, but good practice to include
     _d(2, "Machine task exiting (should not happen)");
@@ -189,11 +192,12 @@ void lvgl_task(void *pv_params) {
   while (true) {
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
+    if (sleep_time < 20) { sleep_time = 20; }
     vTaskDelay(sleep_time / portTICK_PERIOD_MS);
 
     auto time_end = millis();
-    if ((ctr++ % 1000) == 0) {
-      _df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
+    if ((ctr++ % 500) == 0) {
+      _df(0, "LVGL task stack size high: %d\n", uxTaskGetStackHighWaterMark(lvgl_task_handle));
     }
 
     // Update all components that rely on data from machine_interface.
@@ -230,28 +234,37 @@ void setup() {
 
   _d(0, "Creating LVGL Task..\n");
   // Create the FreeRTOS machine loop task.
-  xTaskCreatePinnedToCore(
+  BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,           // Function that implements the task
       "lvgl_task",         // Task name (for debugging)
-      1024 * 48,           // Stack size in words (adjust as needed)
+      1024 * 44,           // Stack size in words (adjust as needed)
       NULL,                // Task input parameter (not used here)
       10,                  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,   // Task handle (optional, can be used to control the task)
       0
   );
-  _d(0, "Creating LVGL Task..\n");
+  if (create_res == pdPASS) {
+    _d(0, "DONE: Created LVGL Task..\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create LVGL Task: error %d", create_res);
+  }
 
   _d(0, "Creating Machine Task..\n");
   // Create the FreeRTOS machine loop task.
-  xTaskCreatePinnedToCore(
+  create_res = xTaskCreatePinnedToCore(
       machine_task,         // Function that implements the task
       "machine_task",       // Task name (for debugging)
-      1024 * 24,            // Stack size in words (adjust as needed)
+      1024 * 28,            // Stack size in words (adjust as needed)
       NULL,                 // Task input parameter (not used here)
       5,                    // Task priority (adjust as needed)
       &machine_task_handle, // Task handle (optional, can be used to control the task)
       1
   );
+  if (create_res == pdPASS) {
+    _d(0, "DONE: Created Machine Task..\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create Machine Task: error %d", create_res);
+  }
 
   // start the UI
   _d(0, "Machine loaded..\n");

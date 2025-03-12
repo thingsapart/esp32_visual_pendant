@@ -124,16 +124,7 @@ void mcu_setup() {
 #endif
   Serial.setDebugOutput(true);
   _d(0, "PRE-INIT");
-
-  #ifndef PENDANT_RELEASE
-  delay(5000);
-
-  Serial.write("!!!!!! \n");
-
-  _d(0, "PRE-INIT DONE");
-  #else
   delay(200);
-  #endif
 }
 
 void mcu_startup() {

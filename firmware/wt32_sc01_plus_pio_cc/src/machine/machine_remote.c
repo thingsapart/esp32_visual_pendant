@@ -304,7 +304,7 @@ void _machine_interface_remote_update_machine_state(machine_interface_t *base_se
 
 void machine_interface_remote_buffer_message(machine_interface_remote_t *self, const uint8_t *data, size_t data_len) {
     size_t len = self->msg_buf_len;
-    if (len == MAX_MSG_BUFFERED) { return; }
+    if (len >= MAX_MSG_BUFFERED) { return; }
     self->msg_buf_len = len + 1;
     assert(data_len < sizeof(remote_msg_t) || "Remote message too large to buffer.");
     self->msg_buffer_msg_len[len] = data_len;

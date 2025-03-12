@@ -473,6 +473,10 @@ void machine_interface_setup_loop(machine_interface_t *self) {
         if (i++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
             machine_interface_task_loop_iter(self);
         }
+        if (i % 500 == 0) {
+            _df(0, "Machine task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
+        }
+
         vTaskDelay(pdMS_TO_TICKS(self->procrate_ms));
     }
 }
