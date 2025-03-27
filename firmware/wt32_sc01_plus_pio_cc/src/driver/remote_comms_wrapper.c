@@ -1,4 +1,5 @@
-// remote_wrapper.c
+// remote_comms_wrapper.c
+
 #include "remote_comms_wrapper.h"
 
 #include <string.h>

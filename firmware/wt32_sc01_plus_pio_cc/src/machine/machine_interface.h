@@ -180,7 +180,8 @@ typedef struct machine_interface_t {
     // --- "Virtual" Methods (Function Pointers) ---
     void (*send_gcode)(machine_interface_t *self, const char *gcode, uint32_t poll_state);
     void (*_send_gcode)(machine_interface_t *self, const char *gcode);
-    void (*_update_machine_state)(machine_interface_t *self, uint32_t poll_state);
+    void (*_update_machine_state)(machine_interface_t *self, uint32_t poll_state);                          // Periodically called to poll/update the machine's internal state model from real machine.
+    void (*process_machine_state_response)(machine_interface_t *self, void *data);                          // Called when new machine state data is available.
     bool (*is_connected)(machine_interface_t *self);
     void (*list_files)(machine_interface_t *self, const char *path);
     void (*run_macro)(machine_interface_t *self, const char *macro_name);
@@ -246,6 +247,7 @@ void machine_interface_modal_int(machine_interface_t *self, int val, int modal_i
 void machine_interface_modal_float(machine_interface_t *self, float val, int modal_id);
 void machine_interface_modal_str(machine_interface_t *self, const char *val, int modal_id);
 void machine_interface_probe(machine_interface_t *self, const char *probe_gcode);
+void machine_interface_process_machine_state_response(machine_interface_t *self, void *data);
 
 bool machine_interface_add_files_changed_cb(machine_interface_t *self, const char *path, void *user_data, files_changed_callback_cb_t cb);
 

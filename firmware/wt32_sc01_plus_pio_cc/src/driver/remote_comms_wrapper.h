@@ -1,4 +1,5 @@
-// remote_wrapper.h
+// remote_comms_wrapper.h
+
 #ifndef REMOTE_COMMS_WRAPPER_H
 #define REMOTE_COMMS_WRAPPER_H
 

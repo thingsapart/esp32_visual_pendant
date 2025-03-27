@@ -587,6 +587,10 @@ void machine_interface_probe(machine_interface_t *self, const char *probe_gcode)
     if (self->probe) { self->probe(self, probe_gcode); }
 }
 
+void machine_interface_process_machine_state_response(machine_interface_t *self, void *data) {
+    self->process_machine_state_response(self, data);
+}
+
 add_callback_fn(machine_interface, state_change)
 add_callback_fn(machine_interface, pos_changed)
 add_callback_fn(machine_interface, home_changed)

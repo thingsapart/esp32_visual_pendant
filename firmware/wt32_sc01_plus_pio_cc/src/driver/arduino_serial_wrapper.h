@@ -133,6 +133,7 @@ void serial_process_input(serial_handle_t handle);
 
 
 // The extern "C" block opened at the top is closed here
+#ifdef __cplusplus
 }
 #endif // __cplusplus
 
