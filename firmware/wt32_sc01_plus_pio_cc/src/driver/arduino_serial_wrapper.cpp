@@ -150,7 +150,7 @@ static void process_received_data(serial_port_data_t* port_data) {
 // Generic onReceive callback for HardwareSerial
 // IMPORTANT: This runs in ISR context on ESP32. Keep it short and fast.
 // Avoid blocking calls, memory allocation, or complex logic.
-static void IRAM_ATTR onReceiveGeneric(void *arg) {
+static void onReceiveGeneric(void *arg) { // Removed IRAM_ATTR
     serial_port_data_t* port_data = (serial_port_data_t*)arg;
     if (!port_data || !port_data->is_hw_serial) return; // Should not happen
 
