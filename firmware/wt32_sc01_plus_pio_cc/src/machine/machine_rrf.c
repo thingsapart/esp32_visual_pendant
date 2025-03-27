@@ -110,11 +110,16 @@ static void _machine_rrf_send_gcode(machine_interface_t *self, const char *gcode
     free(gcode_copy);
 }
 
+// DEPRECATED:
 static bool _machine_rrf_has_response(machine_rrf_t *self) {
-    return serial_available(self->uart);
+    return false;
+    //return serial_available(self->uart);
 }
 
+// DEPRECATED:
 static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t buffer_size) {
+    return false;
+    /*
     //_d(0, "Reading serial...\n");
     size_t len = serial_read_line_buf(self->uart, buffer, buffer_size, READ_TIMEOUT_MS);
     if (len > 0) {
@@ -125,11 +130,14 @@ static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t
     }
 
     return false;
+    */
 }
 
 static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd)
 {
     _machine_rrf_send_gcode((machine_interface_t*)self, cmd);
+
+    /* NOW HANDLED BY machine_response_proc_task asynchronously.
     char response_buffer[4096]; // Adjust size as needed
     if (_machine_rrf_read_response(self, response_buffer, sizeof(response_buffer))) {
         _machine_rrf_parse_json_response(self, response_buffer);
@@ -149,6 +157,7 @@ static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd
             machine_interface_connected_updated(&self->base);
         }
     }
+    */
 }
 
 static void _machine_rrf_update_machine_state(machine_interface_t *self, uint32_t poll_state) {

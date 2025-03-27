@@ -254,7 +254,7 @@ void setup() {
   create_res = xTaskCreatePinnedToCore(
       machine_task,         // Function that implements the task
       "machine_task",       // Task name (for debugging)
-      1024 * 28,            // Stack size in words (adjust as needed)
+      1024 * 16,            // Stack size in words (adjust as needed)
       NULL,                 // Task input parameter (not used here)
       5,                    // Task priority (adjust as needed)
       &machine_task_handle, // Task handle (optional, can be used to control the task)
