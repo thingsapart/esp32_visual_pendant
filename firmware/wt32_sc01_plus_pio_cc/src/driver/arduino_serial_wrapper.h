@@ -132,8 +132,8 @@ void default_serial_write(const uint8_t *buf, size_t len);
 void serial_process_input(serial_handle_t handle);
 
 
-#ifdef __cplusplus
+// The extern "C" block opened at the top is closed here
 }
-#endif
+#endif // __cplusplus
 
 #endif // ARDUINO_SERIAL_WRAPPER_H

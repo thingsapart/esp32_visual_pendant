@@ -96,7 +96,7 @@ static std::map<int, serial_handle_t> g_uart_num_to_handle;
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t* port_data);
 #if defined(ESP32_HW)
-static void IRAM_ATTR onReceiveGeneric(void *arg);
+static void onReceiveGeneric(void *arg); // Remove IRAM_ATTR from forward declaration
 #endif
 
 // --- Internal Helper Functions ---
