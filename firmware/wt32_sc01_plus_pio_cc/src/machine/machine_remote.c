@@ -215,29 +215,8 @@ machine_interface_remote_t *machine_interface_remote_create(const uint8_t *hub_m
      return machine_interface_remote_init(self, hub_mac);
 }
 
-static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
-     _df(0, "[%s] ESP-NOW send status: %s", TAG, status == 0 ? "success" : "fail");
-}
-
-void machine_interface_remote_buffer_message(machine_interface_remote_t *self, const uint8_t *data, size_t data_len);
-
-static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len, void *user_data) {
-    _df(0, "[%s] Received ESP-NOW data from "MACSTR", len: %d", TAG, MAC2STR(mac_addr), data_len);
-
-    machine_interface_remote_t *self = (machine_interface_remote_t *) user_data;
-
-    // Try to add/update the peer (hub)
-    if (!self->hub_mac_received) {
-        if (!remote_wrapper_add_peer_if_not_known(mac_addr, self->hub_mac_address)) {
-            LOGD(TAG, "Failed to add remote " MACSTR, MAC2STR(mac_addr)); 
-
-            return;
-        }
-        self->hub_mac_received = true;
-    }
-    //machine_interface_remote_process_message(self, data, data_len);
-    machine_interface_remote_buffer_message(self, data, data_len);
-}
+static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len, void *user_data);
+static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status, void *user_data);
 
 machine_interface_remote_t *machine_interface_remote_init(machine_interface_remote_t *self, const uint8_t *hub_mac) {
     // Initialize base class (important!)
@@ -246,6 +225,10 @@ machine_interface_remote_t *machine_interface_remote_init(machine_interface_remo
     // Copy the hub's MAC address
     memcpy(self->hub_mac_address, hub_mac, 6);
     self->hub_mac_received = false;
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+        self->proc_task_event_queue = NULL;
+#endif
 
     // Override base class methods with remote-specific implementations
     self->base.send_gcode = _machine_interface_remote_send_gcode;
@@ -467,3 +450,44 @@ void machine_interface_remote_process_messages(machine_interface_remote_t *self)
     self->msg_buf_len = 0;
     LOGI(TAG, "DONE.");
 }
+
+static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
+     _df(0, "[%s] ESP-NOW send status: %s", TAG, status == 0 ? "success" : "fail");
+}
+
+void machine_interface_remote_buffer_message(machine_interface_remote_t *self, const uint8_t *data, size_t data_len);
+
+static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len, void *user_data) {
+    LOGI(TAG, "Received ESP-NOW data from "MACSTR", len: %d", MAC2STR(mac_addr), data_len);
+
+    machine_interface_remote_t *self = (machine_interface_remote_t *) user_data;
+
+    // Try to add/update the peer (hub)
+    if (!self->hub_mac_received) {
+        if (!remote_wrapper_add_peer_if_not_known(mac_addr, self->hub_mac_address)) {
+            LOGD(TAG, "Failed to add remote " MACSTR, MAC2STR(mac_addr)); 
+
+            return;
+        }
+        self->hub_mac_received = true;
+    }
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+    if (self->proc_task_event_queue != NULL) {
+        machine_response_process_for_task(self->proc_task_event_queue, data, data_len);
+    }
+#else
+    //machine_interface_remote_process_message(self, data, data_len);
+    machine_interface_remote_buffer_message(self, data, data_len);
+#endif
+}
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+
+bool machine_remote_setup_response_processing_task(machine_interface_remote_t *self, QueueHandle_t task_event_queue) {
+    self->proc_task_event_queue = task_event_queue;
+
+    return true;
+}
+
+#endif

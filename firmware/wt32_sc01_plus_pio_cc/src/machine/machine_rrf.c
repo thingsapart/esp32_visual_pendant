@@ -8,6 +8,10 @@
 #include "driver/arduino_serial_wrapper.h"
 #include "debug.h"
 
+#ifdef ASYNC_RESPONSE_PROCESSING
+#  include "tasks/machine_response_proc_task.h"
+#endif
+
 static const char *TAG = "machine_rrf";
 
 #ifdef TFT_WIDTH
@@ -801,3 +805,50 @@ void machine_rrf_task_loop_iter(machine_rrf_t *self) {
     // Delegate to the base class implementation, which will call our overridden methods
     machine_interface_task_loop_iter(&self->base);
 }
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+
+#define MAX_SERIAL_PROC_TASKS 1
+
+static struct {
+    serial_handle_t serial;
+    QueueHandle_t queue;
+} queue_serial_map[MAX_SERIAL_PROC_TASKS] = { NULL };
+
+static void serial_line_received_callback(serial_handle_t handle, const char *line, size_t len) {
+    QueueHandle_t task_event_queue = NULL;
+    for (size_t i = 0; i < MAX_SERIAL_PROC_TASKS; ++i) {
+        if (queue_serial_map[i].serial == handle) {
+            task_event_queue = queue_serial_map[i].queue;
+        }
+    }
+
+    if (task_event_queue == NULL) {
+        LOGE(TAG, "Cannot find event queue for serial handle %p", handle);
+    }
+    machine_response_process_for_task(task_event_queue, line, len);
+}
+
+bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, QueueHandle_t task_event_queue) {
+    if (!serial_register_line_callback(self->uart, serial_line_received_callback)) {
+        LOGE(TAG, "Failed to register serial line callback!");
+        vQueueDelete(task_event_queue);      // Clean up queue
+        return false;
+    }
+
+    for (size_t i = 0; i < MAX_SERIAL_PROC_TASKS; ++i) {
+        if (queue_serial_map[i].serial == NULL) {
+            queue_serial_map[i].serial = self->uart;
+            queue_serial_map[i].queue = task_event_queue;
+        }
+
+        if (i == MAX_SERIAL_PROC_TASKS - 1) {
+            LOGE(TAG, "Number of serial processing tasks exceeds MAX_SERIAL_PROC_TASKS (%d)", MAX_SERIAL_PROC_TASKS);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+#endif

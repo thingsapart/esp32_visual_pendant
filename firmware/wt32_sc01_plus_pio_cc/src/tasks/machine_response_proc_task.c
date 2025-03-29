@@ -1,26 +1,23 @@
 #include "machine_response_proc_task.h"
 
-// --- Standard Includes ---
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <string.h>
-#include <stdlib.h> // For NULL
+#include <stdlib.h> 
 #include <stdbool.h>
 
-// --- FreeRTOS Includes ---
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/semphr.h" // For mutexes
+#include "freertos/semphr.h"
 
-// --- Project Includes ---
 #include "debug.h"
 #include "machine/machine_interface.h"
-#include "arduino_serial_wrapper.h" // For serial_handle_t, serial_line_callback_t
 
-// --- Task Handle ---
-TaskHandle_t machine_response_proc_task_handle = NULL;
-
-// --- Logging Tag ---
-static const char *TAG = "MACHINE_RESP_PROC_TASK";
+#define TASK_STACK_SIZE 8192
+#define TASK_PRIORITY (tskIDLE_PRIORITY + 3)
 
 // --- Configuration Constants ---
 // RAM Use: ~ 12KB.
@@ -28,10 +25,11 @@ static const char *TAG = "MACHINE_RESP_PROC_TASK";
 #define SHARED_BUFFER_SIZE 6144    // Total size of the underlying character buffer (adjust as needed)
 #define MAX_LINE_LENGTH 4096       // Max length of a single line (including null terminator), must be < SHARED_BUFFER_SIZE
 #define QUEUE_LENGTH 10            // Length of the notification queue (can be small)
-#define TASK_STACK_SIZE 8192       // Stack size for the processing task
-#define TASK_PRIORITY (tskIDLE_PRIORITY + 3) // Priority of the processing task
 
-// --- Ring Buffer Data Structures ---
+#define MAX_PROCESSING_TASKS 5
+
+static const char *TAG = "MACHINE_RESP_PROC_TASK";
+
 typedef struct {
     char *ptr;      // Pointer to the start of the string in the shared buffer
     size_t len;     // Length of the string (excluding null terminator)
@@ -47,12 +45,12 @@ typedef struct {
     SemaphoreHandle_t mutex;         // Mutex to protect access to the buffer
 } ring_buffer_t;
 
-// --- Global Variables ---
-static QueueHandle_t serial_received_queue = NULL;
-static ring_buffer_t response_buffer;
-static machine_interface_t *s_machine_interface = NULL; // Store the machine interface pointer globally for the task
+static struct {
+    QueueHandle_t queue;
+    ring_buffer_t *ring_buffer;
+} queue_buffers[MAX_PROCESSING_TASKS] = { NULL };
 
-// --- Forward Declarations for Ring Buffer Helpers ---
+
 static bool ring_buffer_init(ring_buffer_t *rb);
 static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len);
 static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer, size_t max_len, size_t *out_len);
@@ -260,34 +258,42 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer, size_t max
         _df(1, "Ring buffer empty after get, reset write offset");
     }
 
-
     // Release mutex
     xSemaphoreGive(rb->mutex);
     return true;
 }
 
 
-// --- Serial Callback ---
-
 /**
  * @brief Callback function registered with arduino_serial_wrapper.
  * Called when a complete line is received from the serial port.
  * NOTE: Assumes this callback runs in a context where brief mutex waits are acceptable.
  */
-static void serial_line_received_callback(serial_handle_t handle, const char *line, size_t len) {
+void machine_response_process_for_task(QueueHandle_t task_event_queue, const char *data, size_t len) {
+    ring_buffer_t *response_buffer = NULL;
+    for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
+        if (queue_buffers[i].queue == task_event_queue) {
+            response_buffer = queue_buffers[i].ring_buffer;
+        }
+    }
+    if (response_buffer == NULL) {
+        LOGE(TAG, "Cannot find response buffer for queue %p", task_event_queue);
+        return;
+    }
+
     // 1. Add the received line to the ring buffer
-    if (ring_buffer_add_line(&response_buffer, line, len)) {
+    if (ring_buffer_add_line(response_buffer, data, len)) {
         // 2. Notify the processing task queue that new data is available
-        if (serial_received_queue != NULL) {
+        if (task_event_queue != NULL) {
             uint8_t dummy_notification = 1; // Content doesn't matter, just the event
             // Use xQueueSend with a zero timeout - non-blocking. If queue is full,
             // notification is lost, but data is still in the ring buffer.
             // The task will eventually process it when it gets CPU time.
-            BaseType_t result = xQueueSend(serial_received_queue, &dummy_notification, 0);
+            BaseType_t result = xQueueSend(task_event_queue, &dummy_notification, 0);
             if (result != pdTRUE) {
                 // This might happen if the processing task falls behind significantly.
                 // Data is still buffered, so it's not critical, but indicates potential bottleneck.
-                 _df(1,"Serial notification queue full.");
+                 LOGW(1, "Machine processing task queue full.");
                 // Consider logging less frequently if this occurs often.
                 // LOGW(TAG, "Serial notification queue full.");
             }
@@ -301,15 +307,18 @@ static void serial_line_received_callback(serial_handle_t handle, const char *li
     // IMPORTANT: Keep this callback short and fast.
 }
 
-// --- Task Implementation ---
+typedef struct {
+    machine_interface_t *machine;
+    QueueHandle_t queue;
+} machine_response_proc_task_args_t;
 
 /**
  * @brief The main function for the Machine Response Processing Task.
  */
-void machine_response_proc_task(void *args) {
-    // The machine_interface_t instance is passed globally via s_machine_interface
-    // Alternatively, it could be passed via 'args', but setup function needs it too.
-    machine_interface_t *machine = s_machine_interface;
+void machine_response_proc_task(void *vpargs) {
+    machine_response_proc_task_args_t *args = (machine_response_proc_task_args_t *) vpargs;
+    machine_interface_t *machine = args->machine;
+    QueueHandle_t queue = args->queue;
 
     if (!machine) {
          LOGE(TAG, "Machine interface is NULL! Task cannot run.");
@@ -317,14 +326,36 @@ void machine_response_proc_task(void *args) {
          return; // Should not happen if run() succeeded
     }
 
+    free(args);
+
+    ring_buffer_t response_buffer;
+    bool abort = false;
+
+    if (!ring_buffer_init(&response_buffer)) {
+        LOGE(TAG, "Failed to initialize response ring buffer.");
+        abort = true;
+    }
+
+    for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
+        if (queue_buffers[i].ring_buffer == NULL) {
+            queue_buffers[i].queue = queue;
+            queue_buffers[i].ring_buffer = &response_buffer;
+        }
+
+        if (i == MAX_PROCESSING_TASKS - 1) {
+            LOGE(TAG, "Number of response processing tasks exceeded MAX_PROCESSING_TASKS!");
+            abort = true;
+        }
+    }
+
     LOGI(TAG, ">> Starting machine response processing task...");
 
     char line_buffer[MAX_LINE_LENGTH]; // Buffer to hold line retrieved from ring buffer
     uint8_t notification_item;         // Dummy item received from queue
 
-    while (1) {
+    while (!abort) {
         // Block indefinitely waiting for a notification from the queue
-        if (xQueueReceive(serial_received_queue, ¬ification_item, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(queue, &notification_item, portMAX_DELAY) == pdTRUE) {
             // Notification received, try to get data from the ring buffer
             size_t line_len;
             // Loop to process all available lines in the buffer before blocking again
@@ -343,27 +374,13 @@ void machine_response_proc_task(void *args) {
 
     // Should never reach here, but good practice to include
     LOGW(TAG, "Machine Response Processing Task terminating unexpectedly...");
-    s_machine_interface = NULL; // Clear global pointer
+    vSemaphoreDelete(response_buffer.mutex); // Clean up mutex
     vTaskDelete(NULL);
 }
 
-// --- Setup Routine ---
-
-/**
- * @brief Sets up and starts the machine response processing task.
- *
- * @param serial_handle Handle to the serial port obtained from serial_init.
- * @param machine Pointer to the initialized machine_interface_t instance.
- * @param pinned_core The core to which the task is pinned to, or tskNO_AFFINITY if the task has no core affinity.
- * @return true on success, false on failure.
- */
-bool machine_response_proc_task_run(serial_handle_t serial_handle, machine_interface_t *machine, BaseType_t pinned_core) {
-    if (machine_response_proc_task_handle != NULL) {
+bool machine_response_proc_task_run(const char *task_name, TaskHandle_t *task_handle, QueueHandle_t *queue, machine_interface_t *machine, BaseType_t pinned_core) {
+    if (task_handle != NULL) {
         LOGE(TAG, "Task already running!");
-        return false;
-    }
-    if (serial_handle == NULL) {
-        LOGE(TAG, "Invalid serial handle provided.");
         return false;
     }
     if (machine == NULL) {
@@ -373,56 +390,38 @@ bool machine_response_proc_task_run(serial_handle_t serial_handle, machine_inter
 
     LOGI(TAG, "Initializing machine response processing...");
 
-    // 1. Initialize the Ring Buffer
-    if (!ring_buffer_init(&response_buffer)) {
-        LOGE(TAG, "Failed to initialize response ring buffer.");
-        // No resources allocated yet other than potentially mutex, but cleanup is complex here.
-        // Best to ensure init succeeds or prevent startup.
-        return false;
-    }
-
-    // 2. Create the Notification Queue
-    // Queue stores simple notifications (uint8_t), not the full lines.
-    serial_received_queue = xQueueCreate(QUEUE_LENGTH, sizeof(uint8_t));
-    if (serial_received_queue == NULL) {
+    *queue = xQueueCreate(QUEUE_LENGTH, sizeof(uint8_t));
+    if (queue == NULL) {
         LOGE(TAG, "Failed to create serial received notification queue!");
-        vSemaphoreDelete(response_buffer.mutex); // Clean up mutex
         return false;
     }
 
-    // 3. Store machine interface pointer globally (needed by the task)
-    s_machine_interface = machine;
+    machine_response_proc_task_args_t *args = (machine_response_proc_task_args_t *) malloc(sizeof(machine_response_proc_task_args_t));
+    args->machine = machine;
+    args->queue = *queue;
 
-    // 4. Register the Serial Line Callback
-    if (!serial_register_line_callback(serial_handle, serial_line_received_callback)) {
-        LOGE(TAG, "Failed to register serial line callback!");
-        vQueueDelete(serial_received_queue);      // Clean up queue
-        vSemaphoreDelete(response_buffer.mutex); // Clean up mutex
-        s_machine_interface = NULL;
-        return false;
-    }
-
-    // 5. Create the Machine Response Processing Task
     BaseType_t task_created = xTaskCreatePinnedToCore(
         machine_response_proc_task,
         "MachineRespProc",              // Task name
         TASK_STACK_SIZE,                // Stack depth
-        NULL,                           // Parameter passed to the task (using global s_machine_interface instead)
+        args,                           // Parameter passed to the task (using global s_machine_interface instead)
         TASK_PRIORITY,                  // Task priority
-        &machine_response_proc_task_handle, // Task handle
+        task_handle,                    // Task handle
         pinned_core
     );
 
     if (task_created != pdPASS) {
         LOGE(TAG, "Failed to create machine response processing task!");
-        serial_unregister_line_callback(serial_handle, serial_line_received_callback); // Clean up callback
-        vQueueDelete(serial_received_queue);      // Clean up queue
-        vSemaphoreDelete(response_buffer.mutex); // Clean up mutex
-        machine_response_proc_task_handle = NULL; // Ensure handle is NULL on failure
-        s_machine_interface = NULL;
+        vQueueDelete(*queue);      // Clean up queue
+        *task_handle = NULL; // Ensure handle is NULL on failure
+        free(args);
         return false;
     }
 
     LOGI(TAG, "Machine response processing task started successfully.");
     return true;
 }
+
+#ifdef __cplusplus
+}
+#endif

@@ -1,19 +1,49 @@
 #ifndef __MACHINE_RESPONSE_PROC_TASK_H__
 #define __MACHINE_RESPONSE_PROC_TASK_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * The idea of this task is two-fold:
+ * 1. a quick way to receive line-ready callbacks from arduino_serial_wrapper ISR and store them
+ *    in a ring-buffer-line structure without doing any real processing from the ISR call,
+ * 2. a task that is mostly suspended until a line is received from serial which then
+ *    processes the line and parses machine state from serial data in a task.
+ */
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-extern TaskHandle_t machine_response_proc_task_handle;
+#include "machine/machine_interface.h"
+#include "driver/arduino_serial_wrapper.h"
 
 /**
- * @brief Sets up and starts the machine response processing task.
+ * The machine processing task handles processing received machine state data.
+ * It parses the received data and usually updates the internal machine state mode. 
  *
- * @param serial_handle Handle to the serial port obtained from serial_init.
- * @param machine Pointer to the initialized machine_interface_t instance.
- * @param pinned_core The core to which the task is pinned to, or tskNO_AFFINITY if the task has no core affinity.
- * @return true on success, false on failure.
+ * task_name: Task name.
+ * machine_task_handle: <out> handle of created task.
+ * queue: <out> handle of created queue.
+ * serial_handle: Handle to the serial port obtained from serial_init.
+ * machine: Pointer to the initialized machine_interface_t instance.
+ * pinned_core: The core to which the task is pinned to, or tskNO_AFFINITY if the task has no core affinity.
+ * returns true on success, false on failure.
  */
-bool machine_response_proc_task_run(serial_handle_t serial_handle, machine_interface_t *machine, BaseType_t pinned_core);
+bool machine_response_proc_task_run(const char *task_name, TaskHandle_t *task_handle, QueueHandle_t *queue, machine_interface_t *machine, BaseType_t pinned_core);
+
+/**
+ * Notify task of available new data.
+ * 
+ * task_event_queue: tasks' event queue.
+ * data: data received.
+ * len: size of data.
+ */
+void machine_response_process_for_task(QueueHandle_t task_event_queue, const char *data, size_t len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // __MACHINE_RESPONSE_PROC_TASK_H__

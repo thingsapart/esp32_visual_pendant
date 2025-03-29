@@ -9,7 +9,16 @@
 extern "C" {
 #endif
 
-#define MAX_MACHINES 5 // Maximum number of machines to support.  Adjust as needed.
+/* 
+ * This machine interface uses multiple "channels" to connect to the _same_ machine,
+ * _not to multiple machines_.
+ * That is, it has only a single state for a single machine that can be maintained
+ * via multiple channels (say, wirelessly or wired via serial).
+ * Generally, it's meant to be used with one of these channels being active but should
+ * work with multiple channels at the same time though that is not well tested.
+*/
+
+#define MAX_MACHINES 5 // Maximum number of machine interface channels to support.
 
 typedef struct {
     machine_interface_t base;

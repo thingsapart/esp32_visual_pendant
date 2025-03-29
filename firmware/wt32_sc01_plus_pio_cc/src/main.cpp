@@ -33,6 +33,9 @@ static const char *TAG = "ESP32_CNC_HMI";
 
 #include "driver/encoder.hpp"
 
+#include "tasks/machine_task.h"
+#include "tasks/machine_response_proc_task.h"
+
 static bool uiMode = false;
 void encoder_indev_read(lv_indev_t * indev, lv_indev_data_t * data) {
   /*
@@ -82,7 +85,6 @@ static multi_machine_interface_t machine;
 
 static interface_t interface;
 
-TaskHandle_t machine_task_handle = NULL;
 TaskHandle_t lvgl_task_handle = NULL;
 
 /* Initialize the input device driver */
@@ -115,11 +117,13 @@ bool machine_remote_init() {
     return true;
 }
 
+int rrf_uart_num = -1;
+
 bool machine_init() {
 #ifndef RRF_SIM
-    int rrf_uart_num = RRF_SERIAL_UART_NUM;
+    rrf_uart_num = RRF_SERIAL_UART_NUM;
 #else
-    int rrf_uart_num = add_rrf_sim_serial();
+    rrf_uart_num = add_rrf_sim_serial();
 #endif
     // Create and initialize the machine interface (RRF in this case)
     if (!machine_rrf_init(&machine_rrf, rrf_uart_num, MACHINE_SEND_GCODE_INTERVAL_MS, MACH_UART_PIN_TX, MACH_UART_PIN_RX)) {
@@ -145,24 +149,6 @@ bool machine_init() {
     }
 
     return true;
-}
-
-// Function that will run as the FreeRTOS task calling machine_interface_setup_lookp infinitely.
-void machine_task(void *pvParameters) {
-    LOGI(TAG, ">> Starting machine task...");
-    if (machine_remote_init()) {
-      LOGI(TAG, "  >> Success... running loop.");
-      // Call the setup loop function (this will run indefinitely)
-      machine_interface_setup_loop(&machine.base);
-    }
-    LOGI(TAG, "<< Machine Task Loop Ended?");
-
-    // Should never reach here, but good practice to include
-    _d(2, "Machine task exiting (should not happen)");
-    multi_machine_interface_deinit(&machine);
-    machine_rrf_deinit(&machine_rrf); // Clean up if the loop somehow exits
-    machine_interface_remote_deinit(&machine_remote); // Clean up if the loop somehow exits
-    vTaskDelete(NULL);
 }
 
 static unsigned int ctr = 0;
@@ -224,6 +210,14 @@ void lvgl_task(void *pv_params) {
   }
 }
 
+TaskHandle_t machine_rrf_proc_task_handle;
+QueueHandle_t machine_rrf_proc_queu;
+TaskHandle_t machine_rrf_task;
+
+TaskHandle_t machine_remote_proc_task_handle;
+QueueHandle_t machine_remote_proc_queu;
+TaskHandle_t machine_remote_task;
+
 void setup() {
   mcu_setup();
   mcu_startup();
@@ -232,7 +226,9 @@ void setup() {
 
   //_df(0, "Loop task stack size high: %d\n", uxTaskGetStackHighWaterMark(NULL));
 
-  _d(0, "Creating LVGL Task..\n");
+  bool abort = false;
+
+  LOGI(0, "Creating LVGL Task..\n");
   // Create the FreeRTOS machine loop task.
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,           // Function that implements the task
@@ -244,30 +240,82 @@ void setup() {
       0
   );
   if (create_res == pdPASS) {
-    _d(0, "DONE: Created LVGL Task..\n");
+    LOGI(0, "DONE: Created LVGL Task..\n");
   } else {
     LOGE(TAG, "FAIL: Could not create LVGL Task: error %d", create_res);
+    abort = true;
   }
 
-  _d(0, "Creating Machine Task..\n");
-  // Create the FreeRTOS machine loop task.
-  create_res = xTaskCreatePinnedToCore(
-      machine_task,         // Function that implements the task
-      "machine_task",       // Task name (for debugging)
-      1024 * 16,            // Stack size in words (adjust as needed)
-      NULL,                 // Task input parameter (not used here)
-      5,                    // Task priority (adjust as needed)
-      &machine_task_handle, // Task handle (optional, can be used to control the task)
-      1
-  );
-  if (create_res == pdPASS) {
-    _d(0, "DONE: Created Machine Task..\n");
+  LOGI(0, "Creating Machine Tasks...\n");
+
+  LOGI(0, "Creating Machine Interfaces... ");
+  if (!abort && 
+      machine_remote_init() && 
+      machine_init()) {
+    LOGI(0, "DONE\n");
   } else {
-    LOGE(TAG, "FAIL: Could not create Machine Task: error %d", create_res);
+    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    abort = true;
   }
 
-  // start the UI
-  _d(0, "Machine loaded..\n");
+  LOGI(0, "Creating RRF Machine Task... ");
+  if (!abort &&
+      machine_task_run("MachineRRF", &machine_rrf_task, &machine.base, TASK_MACHINE_CORE)) {
+    LOGI(0, "DONE\n");
+  } else {
+    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+
+  LOGI(0, "Creating Remote Machine Task... ");
+  if (!abort &&
+      machine_task_run("MachineRemote", &machine_remote_task, &machine.base, TASK_MACHINE_CORE)) {
+    LOGI(0, "DONE\n");
+  } else {
+    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+
+  LOGI(0, "Creating RRF Machine State Processing Task... ");
+  if (!abort && 
+      machine_response_proc_task_run(
+        "MachineRRFProc", 
+        &machine_rrf_proc_task_handle,
+        &machine_rrf_proc_queu,
+        &machine_rrf.base, 
+        TASK_MACHINE_CORE)) {
+    if (!machine_rrf_setup_response_processing_task(&machine_rrf, machine_rrf_proc_queu)) {
+      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+    }
+    LOGI(0, "DONE\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+
+  LOGI(0, "Creating Remote Machine State Processing Task... ");
+  if (!abort && 
+      machine_response_proc_task_run(
+        "MachineRemoteProc", 
+        &machine_remote_proc_task_handle,
+        &machine_remote_proc_queu,
+        &machine_rrf.base, 
+        TASK_MACHINE_CORE)) {
+    if (!machine_remote_setup_response_processing_task(&machine_remote, machine_remote_proc_queu)) {
+      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+    }
+    LOGI(0, "DONE\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+  LOGI(0, "Machine loaded..\n");
+
+  if (abort) {
+    multi_machine_interface_deinit(&machine);
+    machine_rrf_deinit(&machine_rrf);
+    machine_interface_remote_deinit(&machine_remote);
+  }
 }
 
 void loop() {

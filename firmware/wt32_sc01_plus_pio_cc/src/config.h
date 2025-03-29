@@ -21,3 +21,7 @@
 
 // Broadcast:
 #define DISPLAY_MAC_ADDR { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }
+
+#define ASYNC_RESPONSE_PROCESSING 1             // Use Tasks to process serial/esp32 state updates.
+#define TASK_MACHINE_CORE 1                     // Machine Task Core.
+#define TASK_MACHINE_STATE_PROC_CORE 1          // Machine State Processing Task Core.
