@@ -228,7 +228,7 @@ void setup() {
 
   bool abort = false;
 
-  LOGI(0, "Creating LVGL Task..\n");
+  LOGI(TAG, "Creating LVGL Task..\n");
   // Create the FreeRTOS machine loop task.
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,           // Function that implements the task
@@ -240,43 +240,43 @@ void setup() {
       0
   );
   if (create_res == pdPASS) {
-    LOGI(0, "DONE: Created LVGL Task..\n");
+    LOGI(TAG, "DONE: Created LVGL Task..\n");
   } else {
     LOGE(TAG, "FAIL: Could not create LVGL Task: error %d", create_res);
     abort = true;
   }
 
-  LOGI(0, "Creating Machine Tasks...\n");
+  LOGI(TAG, "Creating Machine Tasks...\n");
 
-  LOGI(0, "Creating Machine Interfaces... ");
+  LOGI(TAG, "Creating Machine Interfaces... ");
   if (!abort && 
       machine_remote_init() && 
       machine_init()) {
-    LOGI(0, "DONE\n");
+    LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
     abort = true;
   }
 
-  LOGI(0, "Creating RRF Machine Task... ");
+  LOGI(TAG, "Creating RRF Machine Task... ");
   if (!abort &&
       machine_task_run("MachineRRF", &machine_rrf_task, &machine.base, TASK_MACHINE_CORE)) {
-    LOGI(0, "DONE\n");
+    LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
     abort = true;
   }
 
-  LOGI(0, "Creating Remote Machine Task... ");
+  LOGI(TAG, "Creating Remote Machine Task... ");
   if (!abort &&
       machine_task_run("MachineRemote", &machine_remote_task, &machine.base, TASK_MACHINE_CORE)) {
-    LOGI(0, "DONE\n");
+    LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
     abort = true;
   }
 
-  LOGI(0, "Creating RRF Machine State Processing Task... ");
+  LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort && 
       machine_response_proc_task_run(
         "MachineRRFProc", 
@@ -287,13 +287,13 @@ void setup() {
     if (!machine_rrf_setup_response_processing_task(&machine_rrf, machine_rrf_proc_queu)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
     }
-    LOGI(0, "DONE\n");
+    LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "FAIL: Could not create Machine Task: error");
     abort = true;
   }
 
-  LOGI(0, "Creating Remote Machine State Processing Task... ");
+  LOGI(TAG, "Creating Remote Machine State Processing Task... ");
   if (!abort && 
       machine_response_proc_task_run(
         "MachineRemoteProc", 
@@ -304,12 +304,12 @@ void setup() {
     if (!machine_remote_setup_response_processing_task(&machine_remote, machine_remote_proc_queu)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
     }
-    LOGI(0, "DONE\n");
+    LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "FAIL: Could not create Machine Task: error");
     abort = true;
   }
-  LOGI(0, "Machine loaded..\n");
+  LOGI(TAG, "Machine loaded..\n");
 
   if (abort) {
     multi_machine_interface_deinit(&machine);

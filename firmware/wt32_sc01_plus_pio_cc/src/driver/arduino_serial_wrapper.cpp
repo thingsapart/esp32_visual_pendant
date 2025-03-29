@@ -424,7 +424,7 @@ void add_standard_serial() {
 
 #if defined(ESP32_HW)
     Stream* serial_stream = &Serial;
-    serial_handle_t handle = (serial_handle_t)serial_stream;
+    serial_handle_t handle = (serial_handle_t) serial_stream;
 
     // Assume Serial might be initialized externally, just manage it
     serial_port_data_t* port_data = new serial_port_data_t;
@@ -434,15 +434,15 @@ void add_standard_serial() {
     }
     memset(port_data, 0, sizeof(serial_port_data_t));
 
-    if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
+    /*if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
         _d(0, "Failed to allocate ring buffer for standard serial");
         delete port_data;
         return;
-    }
+    }*/
 
     port_data->stream = serial_stream;
     port_data->uart_num = uart_num;
-    port_data->is_hw_serial = true; // Assume standard Serial is HardwareSerial
+    port_data->is_hw_serial = false; // Assume standard Serial is HardwareSerial
     port_data->owns_stream = false; // We don't own the global Serial object
     port_data->line_pos = 0;
     port_data->num_callbacks = 0;
@@ -451,9 +451,9 @@ void add_standard_serial() {
     g_uart_num_to_handle[uart_num] = handle;
 
     // Register the onReceive callback
-    HardwareSerial* hw_serial = static_cast<HardwareSerial*>(serial_stream);
-    hw_serial->onReceive(onReceiveM1, port_data);
-    _d(1, "Standard Serial added for management. onReceive callback registered.");
+    // HardwareSerial* hw_serial = static_cast<HardwareSerial*>(serial_stream);
+    // hw_serial->onReceive(onReceiveM1, port_data);
+    // _d(1, "Standard Serial added for management. onReceive callback registered.");
 
 #else
     _d(0, "add_standard_serial: Not supported on this platform.");
@@ -487,7 +487,7 @@ serial_handle_t get_serial_handle(int uart_num) {
 void default_serial_write(const uint8_t *buf, size_t len) {
     serial_handle_t handle = get_serial_handle(-1);
     if (handle) {
-        serial_write(handle, buf, len);
+        // serial_write(handle, buf, len);
     } else {
         // Fallback if standard serial wasn't initialized/added
         printf("%.*s", (int)len, (const char *)buf);
