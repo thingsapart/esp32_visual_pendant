@@ -87,6 +87,8 @@
         "debug.h": "c",
         "machine_interface.h": "c",
         "remote_comms_wrapper.h": "c",
-        "freertos.h": "c"
+        "freertos.h": "c",
+        "machine_response_proc_task.h": "c",
+        "queue.h": "c"
     }
 }

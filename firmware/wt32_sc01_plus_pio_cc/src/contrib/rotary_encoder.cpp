@@ -2,7 +2,7 @@
 
 #include "contrib/rotary_encoder.hpp"
 
-void RotaryEncoderPCNT::init(){
+void RotaryEncoderPCNT::init() {
   // Unit config
   pcnt_unit_config_t unit_config = {
       .low_limit = low_limit,
@@ -38,10 +38,18 @@ void RotaryEncoderPCNT::init(){
   ESP_ERROR_CHECK(pcnt_new_channel(unit, &chan_b_config, &chan_b));
 
   // Set edge and level actions for both channels
-  ESP_ERROR_CHECK(pcnt_channel_set_edge_action(chan_a, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE));
-  ESP_ERROR_CHECK(pcnt_channel_set_level_action(chan_a, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
-  ESP_ERROR_CHECK(pcnt_channel_set_edge_action(chan_b, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE));
-  ESP_ERROR_CHECK(pcnt_channel_set_level_action(chan_b, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
+  ESP_ERROR_CHECK(
+      pcnt_channel_set_edge_action(chan_a, PCNT_CHANNEL_EDGE_ACTION_DECREASE,
+                                   PCNT_CHANNEL_EDGE_ACTION_INCREASE));
+  ESP_ERROR_CHECK(
+      pcnt_channel_set_level_action(chan_a, PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+                                    PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
+  ESP_ERROR_CHECK(
+      pcnt_channel_set_edge_action(chan_b, PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+                                   PCNT_CHANNEL_EDGE_ACTION_DECREASE));
+  ESP_ERROR_CHECK(
+      pcnt_channel_set_level_action(chan_b, PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+                                    PCNT_CHANNEL_LEVEL_ACTION_INVERSE));
 
   // Enable, clear and start the PCNT unit.
   ESP_ERROR_CHECK(pcnt_unit_enable(unit));
@@ -49,7 +57,7 @@ void RotaryEncoderPCNT::init(){
   ESP_ERROR_CHECK(pcnt_unit_start(unit));
 }
 
-void RotaryEncoderPCNT::deinit(){
+void RotaryEncoderPCNT::deinit() {
   // Free PCNT resources when destroyed.
   pcnt_unit_disable(unit);
   pcnt_del_channel(chan_a);
@@ -57,19 +65,17 @@ void RotaryEncoderPCNT::deinit(){
   pcnt_del_unit(unit);
 }
 
-int RotaryEncoderPCNT::position(){
+int RotaryEncoderPCNT::position() {
   pcnt_unit_get_count(unit, &count);
   return (count + offset);
 }
 
-void RotaryEncoderPCNT::setPosition(int pos){
+void RotaryEncoderPCNT::setPosition(int pos) {
   offset = pos;
   pcnt_unit_get_count(unit, &count);
   zero();
 }
 
-void RotaryEncoderPCNT::zero(){
-  pcnt_unit_clear_count(unit);
-}
+void RotaryEncoderPCNT::zero() { pcnt_unit_clear_count(unit); }
 
 #endif // ESP32

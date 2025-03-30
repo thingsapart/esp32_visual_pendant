@@ -16,17 +16,17 @@ extern "C" {
 #include "debug.h"
 #include "machine/machine_interface.h"
 
-#define TASK_STACK_SIZE 8192
+#define TASK_STACK_SIZE (8 * 1024)
 #define TASK_PRIORITY (tskIDLE_PRIORITY + 3)
 
 // --- Configuration Constants ---
-// RAM Use: ~ 12KB.
+// RAM Use: ~ 8KB.
 #define MAX_BUFFER_SLOTS 20        // Max number of lines (slots) to buffer
-#define SHARED_BUFFER_SIZE 6144    // Total size of the underlying character buffer (adjust as needed)
+#define SHARED_BUFFER_SIZE 4096    // Total size of the underlying character buffer (adjust as needed)
 #define MAX_LINE_LENGTH 4096       // Max length of a single line (including null terminator), must be < SHARED_BUFFER_SIZE
 #define QUEUE_LENGTH 10            // Length of the notification queue (can be small)
 
-#define MAX_PROCESSING_TASKS 5
+#define MAX_PROCESSING_TASKS 2
 
 static const char *TAG = "MACHINE_RESP_PROC_TASK";
 
@@ -49,7 +49,6 @@ static struct {
     QueueHandle_t queue;
     ring_buffer_t *ring_buffer;
 } queue_buffers[MAX_PROCESSING_TASKS] = { NULL };
-
 
 static bool ring_buffer_init(ring_buffer_t *rb);
 static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len);
@@ -119,7 +118,7 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len
     }
 
     // Acquire mutex - wait a short time, essential for shared access
-    if (xSemaphoreTake(rb->mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    if (xSemaphoreTake(rb->mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         LOGE(TAG, "Failed to acquire ring buffer mutex in add_line!");
         return false; // Could not get mutex, drop the line
     }
@@ -136,50 +135,44 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len
 
         // 2. Check if buffer space is available
         write_ptr = NULL;
+
         // Try space from current write offset to end
-        if (rb->buffer_write_offset + required_len <= SHARED_BUFFER_SIZE) {
-            // Check if this overlaps with the start of the *oldest* data if wrapped around
-            size_t oldest_data_start = (rb->start_slot != rb->end_slot) ? rb->slots[rb->start_slot].offset : rb->buffer_write_offset; // If empty, no overlap possible
-            bool wraps_around = rb->buffer_write_offset < oldest_data_start; // True if write ptr is earlier than read ptr
-            
-            // Overlap occurs if:
-            // a) buffer is NOT wrapped AND new data goes past oldest data start
-            // b) buffer IS wrapped (write ptr < oldest ptr) AND new data crosses buffer end OR goes past oldest data start
-            bool overlaps = !wraps_around && (rb->buffer_write_offset + required_len > oldest_data_start) && oldest_data_start >= rb->buffer_write_offset; // Case a) simplified
-            
-            if (!overlaps) {
-                 _df(1,"Fit at end: offset=%u", rb->buffer_write_offset);
-                write_offset = rb->buffer_write_offset;
-                write_ptr = rb->buffer + write_offset;
-            }
+        if (rb->buffer_write_offset + required_len < SHARED_BUFFER_SIZE) {
+            write_offset = rb->buffer_write_offset;
+            write_ptr = rb->buffer + write_offset;
         }
 
         // Try space from beginning if it didn't fit at the end
-        if (write_ptr == NULL && required_len <= rb->buffer_write_offset) { // Check if there's space *before* the current write offset
-             size_t oldest_data_start = (rb->start_slot != rb->end_slot) ? rb->slots[rb->start_slot].offset : 0;
-             // Overlap occurs if wrapped data goes past the start of the oldest data
-             if(required_len <= oldest_data_start || oldest_data_start == 0){ // Allow if fits before oldest or if oldest is also at 0 (buffer effectively linear at this point)
+        if (write_ptr == NULL && required_len < rb->buffer_write_offset) { // Check if there's space *before* the current write offset
+            size_t oldest_data_start = (rb->start_slot != rb->end_slot && rb->buffer_write_offset != 0) ? rb->slots[rb->start_slot].offset : 0;
+            // Overlap occurs if wrapped data goes past the start of the oldest data
+            if(required_len <= oldest_data_start || oldest_data_start == 0){ // Allow if fits before oldest or if oldest is also at 0 (buffer effectively linear at this point)
                 _df(1,"Fit at start: offset=0");
                 write_offset = 0;
                 write_ptr = rb->buffer;
-             }
+            } else {
+                LOGI(TAG, "No fit at start: %d + %d> %d (old start %d)\n", rb->buffer_write_offset, required_len, oldest_data_start, rb->buffer_write_offset);
+            }
         }
 
 
         // 3. If slot and buffer space found, break loop
         if (slot_available && write_ptr != NULL) {
+            LOGI(TAG, "Fit found %p (buf %p, offs %f)", write_ptr, rb->buffer, rb->buffer_write_offset);
             break;
         }
 
         // 4. If no space/slot, free the oldest slot
-        if (rb->start_slot == rb->end_slot) {
+        if (rb->start_slot == rb->end_slot && rb->buffer_write_offset != 0) {
             // Should not happen if required_len <= SHARED_BUFFER_SIZE, but safety check
             LOGE(TAG, "Ring buffer full and cannot free space for line (len %d). Dropping.", required_len);
             xSemaphoreGive(rb->mutex);
             return false;
         }
         
-        LOGW(TAG, "Ring buffer full or fragmented, freeing oldest slot (%d).", rb->start_slot);
+        LOGW(TAG, "Ring buffer full or fragmented, freeing oldest slot (%d) [start %d, end %d, slot avail %d, write_offs %d, req len %d, end next %d].", 
+            rb->start_slot, rb->start_slot, rb->end_slot, slot_available, rb->buffer_write_offset, required_len,
+            (rb->end_slot + 1) % MAX_BUFFER_SLOTS);
         ring_buffer_free_oldest(rb);
         // Loop again to re-check space
     }
@@ -199,14 +192,13 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len
     // Update buffer write offset for next potential write
     rb->buffer_write_offset = (write_offset + required_len) % SHARED_BUFFER_SIZE;
     // Handle edge case where write exactly fills buffer
-     if (rb->buffer_write_offset == 0 && required_len == SHARED_BUFFER_SIZE) {
-         // Technically full, but next write should try from 0.
-         // If the next write also needs the full buffer, it will free this one.
-     } else if (rb->buffer_write_offset == 0 && write_offset + required_len == SHARED_BUFFER_SIZE) {
-          // Wrapped perfectly to the end, next write starts at 0.
-          rb->buffer_write_offset = 0;
-     }
-
+    if (rb->buffer_write_offset == 0 && required_len == SHARED_BUFFER_SIZE) {
+        // Technically full, but next write should try from 0.
+        // If the next write also needs the full buffer, it will free this one.
+    } else if (rb->buffer_write_offset == 0 && write_offset + required_len == SHARED_BUFFER_SIZE) {
+        // Wrapped perfectly to the end, next write starts at 0.
+        rb->buffer_write_offset = 0;
+    }
 
     _df(1,"Added Line: start=%u, end=%u, new_write_offset=%u", rb->start_slot, rb->end_slot, rb->buffer_write_offset);
 
@@ -215,6 +207,63 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line, size_t len
     return true;
 }
 
+static char *ring_buffer_line_data(ring_buffer_t *rb, size_t *out_len) {
+    if (!rb || !out_len) return false;
+
+    // Acquire mutex
+    if (xSemaphoreTake(rb->mutex, portMAX_DELAY) != pdTRUE) {
+        LOGE(TAG, "Failed to acquire ring buffer mutex in get_line!");
+        return false;
+    }
+
+    // Check if buffer is empty
+    if (rb->start_slot == rb->end_slot) {
+        xSemaphoreGive(rb->mutex);
+        *out_len = 0;
+        return false; // No data available
+    }
+
+    // Get data from the oldest slot
+    line_slot_t *slot = &rb->slots[rb->start_slot];
+    size_t len_to_copy = slot->len;
+
+    xSemaphoreGive(rb->mutex);
+
+    *out_len = len_to_copy;
+    return slot->ptr;
+}
+
+static bool ring_buffer_purge_line(ring_buffer_t *rb) {
+    if (!rb) return false;
+
+    // Acquire mutex
+    if (xSemaphoreTake(rb->mutex, portMAX_DELAY) != pdTRUE) {
+        LOGE(TAG, "Failed to acquire ring buffer mutex in get_line!");
+        return false;
+    }
+
+    // Check if buffer is empty
+    if (rb->start_slot == rb->end_slot) {
+        xSemaphoreGive(rb->mutex);
+        return false; // No data available
+    }
+
+    // Get data from the oldest slot
+    line_slot_t *slot = &rb->slots[rb->start_slot];
+    size_t len_to_copy = slot->len;
+
+    rb->start_slot = (rb->start_slot + 1) % MAX_BUFFER_SLOTS;
+    
+    // Optimization: If buffer becomes empty, reset write offset.
+    if (rb->start_slot == rb->end_slot) {
+        rb->buffer_write_offset = 0;
+        LOGI(TAG, "Ring buffer empty after get, reset write offset");
+    }
+
+    // Release mutex
+    xSemaphoreGive(rb->mutex);
+    return true;
+}
 /**
  * @brief Retrieves the oldest line from the ring buffer.
  */
@@ -281,6 +330,8 @@ void machine_response_process_for_task(QueueHandle_t task_event_queue, const cha
         return;
     }
 
+    // LOGI(TAG, "Received %s data\n", len);
+
     // 1. Add the received line to the ring buffer
     if (ring_buffer_add_line(response_buffer, data, len)) {
         // 2. Notify the processing task queue that new data is available
@@ -296,6 +347,8 @@ void machine_response_process_for_task(QueueHandle_t task_event_queue, const cha
                  LOGW(1, "Machine processing task queue full.");
                 // Consider logging less frequently if this occurs often.
                 // LOGW(TAG, "Serial notification queue full.");
+            } else {
+                LOGI(TAG, "Queue sent!");
             }
         } else {
              LOGE(TAG,"Serial received queue is NULL in callback!");
@@ -310,6 +363,7 @@ void machine_response_process_for_task(QueueHandle_t task_event_queue, const cha
 typedef struct {
     machine_interface_t *machine;
     QueueHandle_t queue;
+    const char *task_name;
 } machine_response_proc_task_args_t;
 
 /**
@@ -319,6 +373,11 @@ void machine_response_proc_task(void *vpargs) {
     machine_response_proc_task_args_t *args = (machine_response_proc_task_args_t *) vpargs;
     machine_interface_t *machine = args->machine;
     QueueHandle_t queue = args->queue;
+
+    size_t task_name_len = strlen(args->task_name);
+    char task_name[task_name_len + 1];
+    strncpy(task_name, args->task_name, task_name_len);
+    task_name[task_name_len] = '\0';
 
     if (!machine) {
          LOGE(TAG, "Machine interface is NULL! Task cannot run.");
@@ -340,6 +399,7 @@ void machine_response_proc_task(void *vpargs) {
         if (queue_buffers[i].ring_buffer == NULL) {
             queue_buffers[i].queue = queue;
             queue_buffers[i].ring_buffer = &response_buffer;
+            break;
         }
 
         if (i == MAX_PROCESSING_TASKS - 1) {
@@ -350,7 +410,12 @@ void machine_response_proc_task(void *vpargs) {
 
     LOGI(TAG, ">> Starting machine response processing task...");
 
+    #if 0
     char line_buffer[MAX_LINE_LENGTH]; // Buffer to hold line retrieved from ring buffer
+    #else
+    char *line_buffer;
+    #endif
+
     uint8_t notification_item;         // Dummy item received from queue
 
     while (!abort) {
@@ -358,15 +423,30 @@ void machine_response_proc_task(void *vpargs) {
         if (xQueueReceive(queue, &notification_item, portMAX_DELAY) == pdTRUE) {
             // Notification received, try to get data from the ring buffer
             size_t line_len;
+
+            #if 0
             // Loop to process all available lines in the buffer before blocking again
             while (ring_buffer_get_line(&response_buffer, line_buffer, MAX_LINE_LENGTH, &line_len)) {
-                 _df(1, "Processing line (len %d): %s", line_len, line_buffer);
+                LOGI(TAG, "Processing line (len %d): %s", line_len, line_buffer);
                 if (line_len > 0) {
                     // Call the machine interface function to process the response
                     // Pass the line_buffer containing the null-terminated string
                     machine_interface_process_machine_state_response(machine, line_buffer);
                 }
             }
+            #else
+                // Loop to process all available lines in the buffer before blocking again
+                while ((line_buffer = ring_buffer_line_data(&response_buffer, &line_len))) {
+                    LOGI(TAG, "[%s] Processing line (len %d): %p, machine %p, queue %p", task_name, line_len, line_buffer, machine, queue);
+                    if (line_len > 0) {
+                        // Call the machine interface function to process the response
+                        // Pass the line_buffer containing the null-terminated string
+                        machine_interface_process_machine_state_response(machine, line_buffer, line_len);
+                    }
+                    ring_buffer_purge_line(&response_buffer);
+                }
+
+            #endif
             // No more lines currently in the buffer, loop back to wait for next notification
         }
         // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop continues
@@ -379,7 +459,7 @@ void machine_response_proc_task(void *vpargs) {
 }
 
 bool machine_response_proc_task_run(const char *task_name, TaskHandle_t *task_handle, QueueHandle_t *queue, machine_interface_t *machine, BaseType_t pinned_core) {
-    if (task_handle != NULL) {
+    if (*task_handle != NULL) {
         LOGE(TAG, "Task already running!");
         return false;
     }
@@ -399,19 +479,21 @@ bool machine_response_proc_task_run(const char *task_name, TaskHandle_t *task_ha
     machine_response_proc_task_args_t *args = (machine_response_proc_task_args_t *) malloc(sizeof(machine_response_proc_task_args_t));
     args->machine = machine;
     args->queue = *queue;
+    args->task_name = task_name;
 
     BaseType_t task_created = xTaskCreatePinnedToCore(
         machine_response_proc_task,
-        "MachineRespProc",              // Task name
+        task_name,                      // Task name
         TASK_STACK_SIZE,                // Stack depth
         args,                           // Parameter passed to the task (using global s_machine_interface instead)
         TASK_PRIORITY,                  // Task priority
         task_handle,                    // Task handle
         pinned_core
     );
+    LOGI(TAG, "Creating task: %s => %p, queue %p, machine %p", task_name, *task_handle, *queue, machine);
 
     if (task_created != pdPASS) {
-        LOGE(TAG, "Failed to create machine response processing task!");
+        LOGE(TAG, "Failed to create machine response processing task (%d)!", task_created);
         vQueueDelete(*queue);      // Clean up queue
         *task_handle = NULL; // Ensure handle is NULL on failure
         free(args);

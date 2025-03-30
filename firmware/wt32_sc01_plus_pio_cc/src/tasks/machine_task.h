@@ -8,19 +8,21 @@ extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "machine/machine_interface.h"
 #include "driver/arduino_serial_wrapper.h"
+#include "machine/machine_interface.h"
 
 /**
- * @brief The machine task is responsible for managing periodic machine state updates and sending
- *         non-urgent commands/messages to the machine.
+ * @brief The machine task is responsible for managing periodic machine state
+ * updates and sending non-urgent commands/messages to the machine.
  *
  * @param task_name Task name.
  * @param machine Pointer to the initialized machine_interface_t instance.
- * @param pinned_core The core to which the task is pinned to, or tskNO_AFFINITY if the task has no core affinity.
+ * @param pinned_core The core to which the task is pinned to, or tskNO_AFFINITY
+ * if the task has no core affinity.
  * @return true on success, false on failure.
  */
-bool machine_task_run(const char *task_name, TaskHandle_t *machine_task_handle, machine_interface_t *machine, BaseType_t pinned_core);
+bool machine_task_run(const char *task_name, TaskHandle_t *machine_task_handle,
+                      machine_interface_t *machine, BaseType_t pinned_core);
 
 #ifdef __cplusplus
 }

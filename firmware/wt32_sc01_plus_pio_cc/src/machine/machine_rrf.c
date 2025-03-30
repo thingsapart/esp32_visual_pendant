@@ -137,6 +137,21 @@ static bool _machine_rrf_read_response(machine_rrf_t *self, char *buffer, size_t
     */
 }
 
+static void _machine_rrf_proc_machine_state_response(machine_interface_t *iself, void *data, size_t len) {
+    machine_rrf_t *self = (machine_rrf_t *) iself;
+    const char *response_buffer = (const char *) data;
+    _machine_rrf_parse_json_response(self, response_buffer);
+    if (!self->connected) {
+        self->connected = true;
+        self->message_box_last_dismissed_seq = -99999;
+        machine_interface_connected_updated(&self->base);
+
+        machine_interface_position_updated(&self->base);
+        machine_interface_wcs_updated(&self->base);
+        machine_interface_home_updated(&self->base);
+    }
+}
+
 static void _machine_rrf_proc_machine_state(machine_rrf_t *self, const char *cmd)
 {
     _machine_rrf_send_gcode((machine_interface_t*)self, cmd);
@@ -769,6 +784,7 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_
     self->base.modal_float = _machine_rrf_modal_float;
     self->base.modal_str = _machine_rrf_modal_str;
     self->base.probe = _machine_rrf_probe;
+    self->base.process_machine_state_response = _machine_rrf_proc_machine_state_response;
 
     _d(0, "Initialized RRF machine...\n");
 
@@ -840,6 +856,7 @@ bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, QueueHandle
         if (queue_serial_map[i].serial == NULL) {
             queue_serial_map[i].serial = self->uart;
             queue_serial_map[i].queue = task_event_queue;
+            break;
         }
 
         if (i == MAX_SERIAL_PROC_TASKS - 1) {

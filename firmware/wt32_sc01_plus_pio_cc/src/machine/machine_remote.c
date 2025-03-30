@@ -6,6 +6,10 @@
 
 #include "driver/remote_comms_wrapper.h"  // For ESP-NOW communication
 
+#ifdef ASYNC_RESPONSE_PROCESSING
+#  include "tasks/machine_response_proc_task.h"
+#endif
+
 #include "debug.h"
 
 static const char *TAG = "machine_remote";
@@ -217,6 +221,7 @@ machine_interface_remote_t *machine_interface_remote_create(const uint8_t *hub_m
 
 static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8_t *data, int data_len, void *user_data);
 static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status, void *user_data);
+static void _machine_interface_remote_process_state(machine_interface_t *self, void *data, size_t len);
 
 machine_interface_remote_t *machine_interface_remote_init(machine_interface_remote_t *self, const uint8_t *hub_mac) {
     // Initialize base class (important!)
@@ -247,6 +252,7 @@ machine_interface_remote_t *machine_interface_remote_init(machine_interface_remo
     self->base.set_wcs_zero = _machine_interface_remote_set_wcs_zero;
     self->base.next_wcs = _machine_interface_remote_next_wcs;
     self->base.probe = _machine_interface_remote_probe;
+    self->base.process_machine_state_response = _machine_interface_remote_process_state;
 
     // Disable methods not implemented on the remote
     self->base._update_machine_state = _machine_interface_remote_update_machine_state;
@@ -451,6 +457,10 @@ void machine_interface_remote_process_messages(machine_interface_remote_t *self)
     LOGI(TAG, "DONE.");
 }
 
+static void _machine_interface_remote_process_state(machine_interface_t *self, void *data, size_t len) {
+  machine_interface_remote_process_message((machine_interface_remote_t *) self, (const uint8_t *) data, len);
+}
+
 static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
      _df(0, "[%s] ESP-NOW send status: %s", TAG, status == 0 ? "success" : "fail");
 }
@@ -475,6 +485,8 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8
 #ifdef ASYNC_RESPONSE_PROCESSING
     if (self->proc_task_event_queue != NULL) {
         machine_response_process_for_task(self->proc_task_event_queue, data, data_len);
+    } else {
+        LOGW(TAG, "Cannot machine_response_process_for_task => queue NULL");
     }
 #else
     //machine_interface_remote_process_message(self, data, data_len);
@@ -485,6 +497,7 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8
 #ifdef ASYNC_RESPONSE_PROCESSING
 
 bool machine_remote_setup_response_processing_task(machine_interface_remote_t *self, QueueHandle_t task_event_queue) {
+    LOGI(TAG, "Updating proc_task_event_queue for remote %p: %p");
     self->proc_task_event_queue = task_event_queue;
 
     return true;

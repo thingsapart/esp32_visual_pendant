@@ -17,7 +17,7 @@ extern "C" {
 #include "debug.h"
 #include "machine/machine_interface.h"
 
-#define TASK_STACK_SIZE 1024 * 8
+#define TASK_STACK_SIZE 1024 * 6
 #define TASK_PRIORITY (tskIDLE_PRIORITY + 4) // Priority of the processing task
 
 static const char *TAG = "MACHINE_TASK";
@@ -37,7 +37,7 @@ void machine_task(void *pvParameters) {
 }
 
 bool machine_task_run(const char *task_name, TaskHandle_t *machine_task_handle, machine_interface_t *machine, BaseType_t pinned_core) {
-    if (machine_task_handle != NULL) {
+    if (*machine_task_handle != NULL) {
         LOGE(TAG, "Task already running!");
         return false;
     }

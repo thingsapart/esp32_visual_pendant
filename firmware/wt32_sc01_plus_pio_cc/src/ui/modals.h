@@ -14,7 +14,9 @@ void close_curr_modal();
 // to close any pending existing ones.
 void set_curr_modal_and_close_prev(lv_obj_t *modal);
 
-lv_obj_t *button_modal(const char *title, const char *text, const char *buttons[], const modal_button_cb_t btn_cbs[], void *modal_user_data);
+lv_obj_t *button_modal(const char *title, const char *text,
+                       const char *buttons[], const modal_button_cb_t btn_cbs[],
+                       void *modal_user_data);
 
 lv_obj_t *home_modal(machine_interface_t *mach);
 lv_obj_t *message_modal(const char *title, const char *text);
