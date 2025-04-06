@@ -9,6 +9,13 @@
 extern "C" {
 #endif
 
+#include "config.h"
+
+#ifdef ASYNC_GCODE_SENDING
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#endif
+
 // --- Constants and Enumerations ---
 
 typedef enum {
@@ -111,8 +118,11 @@ typedef struct files_changed_callback_t {
 
 // --- G-code Queue ---
 
-#define MAX_GCODE_Q_LEN 20
 #define MAX_GCODE_STR_LEN 128
+
+#ifndef ASYNC_GCODE_SENDING
+
+#define MAX_GCODE_Q_LEN 20
 
 typedef struct {
   char buffer[MAX_GCODE_Q_LEN]
@@ -122,6 +132,8 @@ typedef struct {
   size_t tail;
   size_t count;
 } gcode_queue_t;
+
+#endif
 
 // --- Machine Interface Structure (Virtual Class) ---
 
@@ -140,8 +152,7 @@ typedef struct machine_interface_t {
   axis_t current_move_axis;
   float current_move_step;
   int wcs;
-  const char
-      *tool; // Pointer to a string literal or dynamically allocated string
+  const char *tool;
   float z_offs;
   float feed;
   float feed_req;
@@ -163,8 +174,11 @@ typedef struct machine_interface_t {
   size_t num_spindles;
   message_box_t *message_box;
 
-  // --- G-code Queue ---
+#ifndef ASYNC_GCODE_SENDING
   gcode_queue_t gcode_queue;
+#else
+  QueueHandle_t gcode_queue;
+#endif
 
   // --- Callbacks ---
 #define MAX_CALLBACKS 5
@@ -223,7 +237,7 @@ typedef struct machine_interface_t {
   void (*modal_float)(machine_interface_t *self, float val, int modal_id);
   void (*modal_str)(machine_interface_t *self, const char *val, int modal_id);
   void (*probe)(machine_interface_t *self, const char *probe_gcode);
-  // Add other "virtual" methods here
+  void (*set_connected)(machine_interface_t *self, bool connected);
 } machine_interface_t;
 
 machine_interface_t *machine_interface_create(uint16_t procrate_ms);
@@ -287,6 +301,34 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             const char *path, void *user_data,
                                             files_changed_callback_cb_t cb);
 
+// <type>_add_<callback_name>_cb(<tye> *self, void *user_data, <callback_t>
+// callback);
+// => eg machine_interface_add_state_changed_cb(...),
+// machine_interface_add_pos_changed_cb(...).
+#define add_callback_proto(type, cbs_name)                                     \
+  bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,             \
+                                  machine_callback_t cb)
+
+add_callback_proto(machine_interface, state_change);
+add_callback_proto(machine_interface, pos_changed);
+add_callback_proto(machine_interface, home_changed);
+add_callback_proto(machine_interface, wcs_changed);
+add_callback_proto(machine_interface, feed_changed);
+add_callback_proto(machine_interface, sensors_changed);
+add_callback_proto(machine_interface, dialogs_changed);
+add_callback_proto(machine_interface, spindles_tools_changed);
+add_callback_proto(machine_interface, connected_changed);
+add_callback_proto(machine_interface, current_move_axis_changed);
+
+#ifndef ASYNC_GCODE_SENDING
+// G-code queue functions
+void gcode_queue_init(gcode_queue_t *queue);
+bool gcode_queue_push(gcode_queue_t *queue, const char *gcode);
+bool gcode_queue_pop(gcode_queue_t *queue, char *gcode);
+bool gcode_queue_peek(const gcode_queue_t *queue, char *gcode);
+size_t gcode_queue_count(const gcode_queue_t *queue);
+#endif
+
 #define add_callback_fn(type, cbs_name)                                        \
   bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,             \
                                   machine_callback_t cb) {                     \
@@ -301,38 +343,6 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self,
     assert(0 && "Maximum number of callbacks reached");                        \
     return false;                                                              \
   }
-
-// <type>_add_<callback_name>_cb(<tye> *self, void *user_data, <callback_t>
-// callback);
-// => eg machine_interface_add_state_changed_cb(...),
-// machine_interface_add_pos_changed_cb(...).
-#define add_callback_proto(type, cbs_name)                                     \
-  bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,             \
-                                  machine_callback_t cb);
-
-add_callback_proto(machine_interface, state_change)
-    add_callback_proto(machine_interface, pos_changed)
-        add_callback_proto(machine_interface,
-                           home_changed) add_callback_proto(machine_interface,
-                                                            wcs_changed)
-            add_callback_proto(machine_interface, feed_changed)
-                add_callback_proto(machine_interface, sensors_changed)
-                    add_callback_proto(machine_interface, dialogs_changed)
-                        add_callback_proto(machine_interface,
-                                           spindles_tools_changed)
-                            add_callback_proto(machine_interface,
-                                               connected_changed)
-                                add_callback_proto(machine_interface,
-                                                   current_move_axis_changed)
-
-    // G-code queue functions
-    void gcode_queue_init(gcode_queue_t *queue);
-bool gcode_queue_push(gcode_queue_t *queue, const char *gcode);
-bool gcode_queue_pop(gcode_queue_t *queue,
-                     char *gcode); // Retrieves and removes
-bool gcode_queue_peek(const gcode_queue_t *queue,
-                      char *gcode); // Retrieves without removing
-size_t gcode_queue_count(const gcode_queue_t *queue);
 
 #ifdef __cplusplus
 }

@@ -39,6 +39,7 @@ static const char *TAG = "ESP32_CNC_HMI";
 
 #include "tasks/machine_response_proc_task.h"
 #include "tasks/machine_task.h"
+#include "tasks/machine_send_task.h"
 
 static bool uiMode = false;
 void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
@@ -194,7 +195,7 @@ void lvgl_task(void *pv_params) {
 
     auto time_end = millis();
     if ((ctr++ % 500) == 0) {
-      _df(0, "LVGL task stack size high: %d\n",
+      LOGI(TAG, "LVGL task stack size high: %d\n",
           uxTaskGetStackHighWaterMark(lvgl_task_handle));
     }
 
@@ -232,6 +233,9 @@ TaskHandle_t machine_remote_proc_task_handle = NULL;
 QueueHandle_t machine_remote_proc_queue = NULL;
 TaskHandle_t machine_remote_task = NULL;
 
+TaskHandle_t machine_send_task_handle = NULL;
+QueueHandle_t machine_send_queue = NULL;
+
 void setup() {
   mcu_setup();
   mcu_startup();
@@ -246,13 +250,13 @@ void setup() {
   LOGI(TAG, "Creating LVGL Task..\n");
   // Create the FreeRTOS machine loop task.
   BaseType_t create_res = xTaskCreatePinnedToCore(
-      lvgl_task,   // Function that implements the task
-      "lvgl_task", // Task name (for debugging)
-      1024 * 40,   // Stack size in words (adjust as needed)
-      NULL,        // Task input parameter (not used here)
-      10, // Task priority (adjust as needed) - higher than machine task
-      &lvgl_task_handle, // Task handle (optional, can be used to control the
-                         // task)
+      lvgl_task,            // Function that implements the task
+      "lvgl_task",          // Task name (for debugging)
+      1024 * 32,            // Stack size (adjust as needed, ESP32 it's bytes)
+      NULL,                 // Task input parameter (not used here)
+      tskIDLE_PRIORITY + 2, // Task priority (adjust as needed) - higher than machine task
+      &lvgl_task_handle,    // Task handle (optional, can be used to control the
+                            // task)
       0);
   if (create_res == pdPASS) {
     LOGI(TAG, "DONE: Created LVGL Task..\n");
@@ -264,7 +268,7 @@ void setup() {
   LOGI(TAG, "Creating Machine Tasks...\n");
 
   LOGI(TAG, "Creating Machine Interfaces... ");
-  if (!abort && machine_remote_init() && machine_init()) {
+  if (!abort && machine_init() && machine_remote_init()) {
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
@@ -319,6 +323,23 @@ void setup() {
          "FAIL: Could not create Remote Machine State Processing Task: error");
     abort = true;
   }
+
+
+#ifdef ASYNC_GCODE_SENDING
+  LOGI(TAG, "Creating Machine GCode Sending Task... ");
+  if (!abort && machine_send_task_run(
+                    "MachineSendTask", &machine_send_task_handle,
+                    &machine_send_queue, &machine_rrf.base,
+                    TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 5)) {
+    machine_rrf.base.gcode_queue = machine_send_queue;
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG,
+         "FAIL: Could not create Machine GCode Sending Task: error");
+    abort = true;
+  }
+#endif
+
   LOGI(TAG, "Machine loaded..\n");
 
   if (abort) {

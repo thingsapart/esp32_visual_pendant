@@ -39,6 +39,8 @@ static const char axes[] = {
     } \
 } while (0)
 
+#ifndef ASYNC_GCODE_SENDING
+
 // Initialize the G-code queue
 void gcode_queue_init(gcode_queue_t *queue) {
     queue->head = 0;
@@ -95,6 +97,8 @@ static void machinte_interface_send_gcode(machine_interface_t *self, const char 
     self->poll_state = (uint32_t) self->poll_state | poll_state;
     _df(-1, "gcode queued: %s", gcode);
 }
+
+#endif
 
 // --- Default "Virtual" Method Implementations ---
 // These are the default implementations that can be overridden.
@@ -201,7 +205,11 @@ static char* _default_debug_print(machine_interface_t *self) {
         self->tool ? self->tool : "None", // Handle NULL tool
         self->feed_multiplier,
         self->z_offs,
+#ifndef ASYNC_GCODE_SENDING
         gcode_queue_count(&self->gcode_queue),
+#else
+        0,
+#endif
         (int) self->poll_state
     );
     return debug_str;
@@ -249,7 +257,11 @@ machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t 
     self->spindles = NULL;
     self->num_spindles = 0;
 
+#ifndef ASYNC_GCODE_SENDING
     gcode_queue_init(&self->gcode_queue);
+#else
+    self->gcode_queue = NULL;
+#endif
 
     // Set default "virtual" method implementations
     self->send_gcode = machine_interface_send_gcode;
@@ -376,9 +388,9 @@ char idx_to_axis(int i) {
     return axes[i];
 }
 
+#ifndef ASYNC_GCODE_SENDING
 void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, uint32_t poll_state) {
-    if (!gcode_queue_push(&self->gcode_queue, gcode))
-    {
+    if (!gcode_queue_push(&self->gcode_queue, gcode)) {
          _d(2, "Failed to add gcode to the queue");
     }
     self->poll_state = (uint32_t) self->poll_state | poll_state;
@@ -392,6 +404,37 @@ void machine_interface_process_gcode_q(machine_interface_t *self) {
         // Add response handling here if needed
     }
 }
+#else
+void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, uint32_t poll_state) {
+    if (self->gcode_queue == NULL) {
+        LOGW(TAG, "WARNING: GCode Queue is not initialized!");
+        return;
+    }
+
+    size_t len = strlen(gcode);
+    if (len >= MAX_GCODE_STR_LEN) {
+        LOGW(TAG, "WARNING: Gcode to send exceeds MAX_GCODE_STR_LEN, truncating!");
+    }
+
+    LOGI(TAG, "Sending gcode: %s", gcode);
+    char buf[MAX_GCODE_STR_LEN];
+    memset(buf, 0, MAX_GCODE_STR_LEN);
+    memcpy(buf, gcode, len + 1);
+    buf[len] = '\0';
+
+    BaseType_t result = xQueueSend(self->gcode_queue, buf, 0);
+    if (result != pdTRUE) {
+         LOGW(TAG, "Failed to add gcode to the queue: %s", gcode);
+    }
+
+    self->poll_state = (uint32_t) self->poll_state | poll_state;
+    LOGV(TAG, "gcode queued: %s", gcode);
+}
+
+void machine_interface_process_gcode_q(machine_interface_t *self) {
+    // NOP - this is done in task in async mode.
+}
+#endif
 
 uint32_t machine_interface_next_poll_state(machine_interface_t *self)
 {

@@ -1,5 +1,7 @@
 // hub_main.cpp
 
+#include "config.h"
+
 #ifdef ESP_NOW_HUB
 
 #include <assert.h>
@@ -18,6 +20,9 @@
 #include "machine/machine_interface.h"
 #include "machine/machine_rrf.h"
 
+#include "tasks/machine_send_task.h"
+#include "tasks/machine_response_proc_task.h"
+
 #include "debug.h"
 
 static const char *TAG = "hub_main";
@@ -30,13 +35,22 @@ static const char *TAG = "hub_main";
 static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
 
 // --- Global Variables ---
-static machine_rrf_t *g_machine =
-    NULL; // Global pointer to the machine interface
+static machine_rrf_t *g_machine = NULL;
 static machine_interface_t *g_machine_base = NULL;
 static int g_full_state_counter = 0;
 
+#define PAYLOAD_MAX (ESP_NOW_MAX_DATA_LEN + 1)
+
+#define HUB_TASK_PRIORITY (tskIDLE_PRIORITY + 2)
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+#define MAX_MSG_BUFFER 0
+
+#define RECV_TASK_PRIORITY (tskIDLE_PRIORITY + 1)
+#define RECV_QUEUE_LENGTH 5
+
+#else
 #define MAX_MSG_BUFFER 20
-#define PAYLOAD_MAX 251
 static uint8_t message_buffer1[PAYLOAD_MAX][MAX_MSG_BUFFER];
 static uint8_t message_buffer2[PAYLOAD_MAX][MAX_MSG_BUFFER];
 static size_t message_lens1[MAX_MSG_BUFFER];
@@ -45,6 +59,7 @@ static uint8_t (*message_buffer)[PAYLOAD_MAX][MAX_MSG_BUFFER];
 static size_t *message_lens;
 
 static size_t message_buffer_len;
+#endif
 
 // --- ESP-NOW Message Types ---
 
@@ -57,7 +72,7 @@ void on_machine_state_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_STATUS;
   msg.status = machine->machine_status;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGI(TAG, "Sending status %d", machine->machine_status);
+  LOGV(TAG, "Sending status %d", machine->machine_status);
 }
 
 void on_position_change(machine_interface_t *machine, void *user_data) {
@@ -335,30 +350,12 @@ static void process_probe_cmd(const uint8_t *data, int data_len) {
 // --- ESP-NOW Callbacks ---
 
 void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
-  _df(0, "[%s] ESP-NOW send status: %s", TAG, status == 0 ? "success" : "fail");
-}
-
-void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
-                         int data_len, void *user_data) {
-  size_t msgbuf_len = message_buffer_len;
-  ++message_buffer_len;
-  if (msgbuf_len >= MAX_MSG_BUFFER) {
-    LOGW(TAG, "Message buffer full or processing in progress...");
-    return;
-  }
-
-  uint8_t *cmd = &(*message_buffer)[msgbuf_len][0];
-  memcpy(cmd, data, data_len);
-  cmd[data_len] = '\0';
-  message_lens[msgbuf_len] = data_len;
-
-  _df(0, "[%s] Received ESP-NOW data from " MACSTR ", len: %d, data: \"%s\"",
-      TAG, MAC2STR(mac_addr), data_len, cmd);
+  LOGV(TAG, "ESP-NOW send status: %s", status == 0 ? "success" : "fail");
+  if (status != 0) { LOGW(TAG, "ESP-NOW send status: fail"); }
 }
 
 void process_message(const uint8_t *data, const size_t data_len) {
   // Process incoming commands from the display
-  if (data_len > 0) {
     uint8_t command_type = data[0]; // get the command type
     switch (command_type) {
     case CMD_TYPE_SEND_GCODE:
@@ -417,11 +414,10 @@ void process_message(const uint8_t *data, const size_t data_len) {
     default:
       LOGW(TAG, "Unknown command type: %d", command_type);
       break;
-    }
   }
 }
 
-// --- Main Task ---
+#ifndef ASYNC_RESPONSE_PROCESSING
 
 void process_buffered_messages() {
   // Execute remote commands.
@@ -446,6 +442,93 @@ void process_buffered_messages() {
     process_message(data_buf, data_len);
   }
 }
+
+void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
+                         int data_len, void *user_data) {
+  LOGI(TAG, "Remote message received (len %d)", data_len);
+
+  size_t msgbuf_len = message_buffer_len;
+  ++message_buffer_len;
+  if (msgbuf_len >= MAX_MSG_BUFFER) {
+    LOGW(TAG, "Message buffer full or processing in progress...");
+    return;
+  }
+
+  uint8_t *cmd = &(*message_buffer)[msgbuf_len][0];
+  memcpy(cmd, data, data_len);
+  cmd[data_len] = '\0';
+  message_lens[msgbuf_len] = data_len;
+
+  _df(0, "[%s] Received ESP-NOW data from " MACSTR ", len: %d, data: \"%s\"",
+      TAG, MAC2STR(mac_addr), data_len, cmd);
+}
+
+#else
+
+static QueueHandle_t recv_queue = NULL;
+static TaskHandle_t recv_task_handle = NULL;
+
+void remote_recv_task(void *args) {
+  bool abort = false;
+
+  uint8_t msg[PAYLOAD_MAX + 2];
+
+   while (!abort) {
+        // Block indefinitely waiting for a notification from the queue
+        if (xQueueReceive(recv_queue, msg, portMAX_DELAY) == pdTRUE) {
+            const uint8_t *data_buf = &msg[1];
+            const uint8_t data_len = msg[0];
+
+            LOGI(TAG, "Processing buffered message: %d", data_len);
+            LOGI(TAG, "Q MSG: %u:%u:%u:%u:%u", msg[0], msg[1], msg[2], msg[3], msg[5]);
+            process_message(data_buf, data_len);
+        }
+        // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop continues
+    }
+    LOGI(TAG, "<< Machine Task Loop Ended?");
+
+    // Should never reach here, but good practice to include
+    LOGE(TAG, "Machine task unexpectedly exiting");
+
+    vTaskDelete(NULL);
+}
+
+void process_buffered_messages() {
+}
+
+void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
+                         int data_len, void *user_data) {
+    uint8_t buf[PAYLOAD_MAX + 2];
+
+    memset(buf, 0, PAYLOAD_MAX + 2);
+    buf[0] = data_len;
+    memcpy(buf + 1, data, data_len);
+    LOGI(TAG, "MSG: %d/%u, %u:%u:%u:%u:%u => %u:%u:%u:%u:%u:%u", data_len, data_len, data[0], data[1], data[2], data[3], data[4], buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
+
+    if (recv_queue != NULL) {
+      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+      //BaseType_t result = xQueueSendToBackFromISR(recv_queue, buf, &xHigherPriorityTaskWoken);
+      BaseType_t result = xQueueSendToBack(recv_queue, buf, 0);
+      if (result != pdTRUE) {
+            LOGW(TAG, "Remote recv task queue full.");
+      }
+      if(xHigherPriorityTaskWoken) { portYIELD_FROM_ISR(); }
+    } else {
+        LOGW(TAG, "Cannot queue from on_remote_data_recv => queue NULL");
+    }
+}
+
+void remote_recv_task_run() {
+  recv_queue = xQueueCreate(RECV_QUEUE_LENGTH, PAYLOAD_MAX);
+  if (recv_queue == NULL) {
+      LOGE(TAG, "Failed to create remote command received task queue!");
+      return;
+  }
+
+  xTaskCreatePinnedToCore(remote_recv_task, "remote_recv_task", 6 * 1024, NULL, 5, &recv_task_handle, TASK_MACHINE_STATE_PROC_CORE);
+}
+
+#endif
 
 unsigned int ctr = 0;
 void machine_poll_send_task_iter() {
@@ -481,12 +564,15 @@ void machine_poll_send_task_iter() {
                         sizeof(keep_alive_msg));
   }
 
-  _df(2, "[%s] Tick...", TAG);
+  LOGV(TAG, "Tick...");
 }
+
 void hub_task(void *pvParameters) {
+#ifndef ASYNC_RESPONSE_PROCESSING
   message_buffer_len = 0;
   message_buffer = &message_buffer1;
   message_lens = &message_lens1[0];
+#endif
 
   // Initialize ESP-NOW
   if (!remote_wrapper_init(on_remote_data_recv, on_remote_data_sent, NULL)) {
@@ -502,6 +588,19 @@ void hub_task(void *pvParameters) {
     return;
   }
 
+  LOGI(TAG, "Initilized hub_task... DONE");
+  // Main loop
+  while (1) {
+    // Process buffered commands, possibly altering machine state.
+    process_buffered_messages();
+    // Read out new machine state and send to clients.
+    machine_poll_send_task_iter();
+
+    vTaskDelay(pdMS_TO_TICKS(HUB_POLL_INTERVAL_MS));
+  }
+}
+
+void setup_machine_interface() {
   // Initialize the machine interface
   g_machine = machine_rrf_create(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
                                  MACH_UART_PIN_RX); // Use UART 0
@@ -528,80 +627,84 @@ void hub_task(void *pvParameters) {
                                                   on_spindles_tools_change);
   machine_interface_add_connected_changed_cb(mach, mach, on_connected_change);
 
-  // Main loop
-  while (1) {
-    // Process buffered commands, possibly altering machine state.
-    process_buffered_messages();
-    // Read out new machine state and send to clients.
-    machine_poll_send_task_iter();
-
-    vTaskDelay(pdMS_TO_TICKS(HUB_POLL_INTERVAL_MS));
-  }
+  remote_recv_task_run();
 }
 
-void setup_hub_task() {
-  xTaskCreatePinnedToCore(hub_task, "hub_task", 24 * 1024, NULL, 5, NULL, 0);
+void setup_hub_tasks() {
+  xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL, HUB_TASK_PRIORITY, NULL, 0);
 }
 
-// Currently not used, just combined into single task on single core.
-#if 0
-void machine_poll_task(void *param) {
-    while (true) {
-        machine_poll_send_task_iter();
+TaskHandle_t machine_rrf_proc_task_handle = NULL;
+QueueHandle_t machine_rrf_proc_queue = NULL;
 
-        vTaskDelay(pdMS_TO_TICKS(HUB_POLL_INTERVAL_MS - 10));
-    }
-}
-
-void setup_machine_poll_task() {
-   xTaskCreatePinned(machine_poll_task, "machine_poll_task", 4096, NULL, 5, NULL, 1);
-}
-#endif
+TaskHandle_t machine_send_task_handle = NULL;
+QueueHandle_t machine_send_queue = NULL;
 
 void setup() {
   mcu_setup();
   mcu_startup();
 
-#ifndef USE_ARDUINO_SETUP_LOOP
-  setup_hub_task();
-  // setup_machine_poll_task();
+  setup_machine_interface();
+
+  bool abort = false;
+
+#ifdef ASYNC_RESPONSE_PROCESSING
+  /* 
+   * Currently also handled by hub_task.
+  LOGI(TAG, "Creating RRF Machine Task... ");
+  if (!abort && machine_task_run("MachineRRF", &machine_rrf_task, &g_machine_base,
+                                 TASK_MACHINE_CORE)) {
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+  */
+
+  LOGI(TAG, "Creating RRF Machine State Processing Task... ");
+  if (!abort &&
+      machine_response_proc_task_run(
+          "MachineRRFProc", &machine_rrf_proc_task_handle,
+          &machine_rrf_proc_queue, g_machine_base, TASK_MACHINE_CORE)) {
+    if (!machine_rrf_setup_response_processing_task(g_machine,
+                                                    machine_rrf_proc_queue)) {
+      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+    }
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
+    abort = true;
+  }
+#endif
+
+#ifdef ASYNC_GCODE_SENDING
+  LOGI(TAG, "Creating Machine GCode Sending Task... ");
+  if (!abort && machine_send_task_run(
+                    "MachineSendTask", &machine_send_task_handle,
+                    &machine_send_queue, g_machine_base,
+                    TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 1)) {
+    g_machine->base.gcode_queue = machine_send_queue;
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG,
+         "FAIL: Could not create Machine GCode Sending Task: error");
+    abort = true;
+  }
+
+  LOGI(TAG, "Creating Remote Receive Processing Task... ");
+  if (!abort) {
+
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
+    abort = true;
+  }
+#endif
+
+#ifndef USE_ARDINO_SETUP_LOOP
+  setup_hub_tasks();
 #else
-  // Initialize ESP-NOW
-  if (!remote_wrapper_init(on_remote_data_recv, on_remote_data_sent, NULL)) {
-    _df(2, "[%s] Failed to initialize ESP-NOW", TAG);
-    return;
-  }
-
-  // Add the display as a peer
-  if (!remote_wrapper_add_peer(display_mac_address)) {
-    _df(2, "[%s] Failed to add display as peer", TAG);
-    return;
-  }
-
-  // Initialize the machine interface
-  g_machine = machine_rrf_create(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
-                                 MACH_UART_PIN_RX); // Use UART 0
-  if (!g_machine) {
-    _df(2, "[%s] Failed to create machine interface", TAG);
-    return;
-  }
-
-  // Register callbacks
-  machine_interface_add_state_change_cb(&g_machine->base, NULL,
-                                        on_machine_state_change);
-  machine_interface_add_pos_changed_cb(&g_machine->base, NULL,
-                                       on_position_change);
-  machine_interface_add_home_changed_cb(&g_machine->base, NULL, on_home_change);
-  machine_interface_add_wcs_changed_cb(&g_machine->base, NULL, on_wcs_change);
-  machine_interface_add_feed_changed_cb(&g_machine->base, NULL, on_feed_change);
-  machine_interface_add_sensors_changed_cb(&g_machine->base, NULL,
-                                           on_sensors_change);
-  machine_interface_add_dialogs_changed_cb(&g_machine->base, NULL,
-                                           on_dialogs_change);
-  machine_interface_add_spindles_tools_changed_cb(&g_machine->base, NULL,
-                                                  on_spindles_tools_change);
-  machine_interface_add_connected_changed_cb(&g_machine->base, NULL,
-                                             on_connected_change);
+  LOGI(TAG, "Machine loaded..\n");
 #endif
 }
 

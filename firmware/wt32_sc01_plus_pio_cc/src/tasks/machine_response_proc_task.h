@@ -45,9 +45,10 @@ bool machine_response_proc_task_run(const char *task_name,
  * task_event_queue: tasks' event queue.
  * data: data received.
  * len: size of data.
+ * from_isr: use ISR-aware queue handling when called from ISR.
  */
-void machine_response_process_for_task(QueueHandle_t task_event_queue,
-                                       const char *data, size_t len);
+void machine_response_proc_task_data_ready(QueueHandle_t task_event_queue,
+                                       const char *data, size_t len, bool from_isr);
 
 #ifdef __cplusplus
 }

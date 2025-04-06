@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "driver/arduino_serial_wrapper.h"
+
 #include "debug.h"
 
 #ifdef ASYNC_RESPONSE_PROCESSING
@@ -748,6 +749,14 @@ void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
     machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
 }
 
+void _machine_rrf_set_connected(machine_interface_t *self, bool connected) {
+    machine_rrf_t *rself = (machine_rrf_t *) self;
+    if (rself->connected != connected) {
+        rself->connected = connected;
+        machine_interface_connected_updated(self);
+    }
+}
+
 machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_t sleep_ms, int tx_pin, int rx_pin) {
     // Initialize the base class part
     machine_interface_init(&self->base, sleep_ms);
@@ -784,6 +793,7 @@ machine_rrf_t* machine_rrf_init(machine_rrf_t *self, int rrf_serial_num, uint16_
     self->base.modal_float = _machine_rrf_modal_float;
     self->base.modal_str = _machine_rrf_modal_str;
     self->base.probe = _machine_rrf_probe;
+    self->base.set_connected = _machine_rrf_set_connected;
     self->base.process_machine_state_response = _machine_rrf_proc_machine_state_response;
 
     _d(0, "Initialized RRF machine...\n");
@@ -833,16 +843,20 @@ static struct {
 
 static void serial_line_received_callback(serial_handle_t handle, const char *line, size_t len) {
     QueueHandle_t task_event_queue = NULL;
+    size_t found = 9999;
     for (size_t i = 0; i < MAX_SERIAL_PROC_TASKS; ++i) {
         if (queue_serial_map[i].serial == handle) {
             task_event_queue = queue_serial_map[i].queue;
+            found = i;
         }
     }
 
     if (task_event_queue == NULL) {
         LOGE(TAG, "Cannot find event queue for serial handle %p", handle);
+    } else {
+        LOGV(TAG, "Data ready for uart %p, task queue %p.", queue_serial_map[found].serial, task_event_queue);
     }
-    machine_response_process_for_task(task_event_queue, line, len);
+    machine_response_proc_task_data_ready(task_event_queue, line, len, true);
 }
 
 bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, QueueHandle_t task_event_queue) {
@@ -850,6 +864,8 @@ bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, QueueHandle
         LOGE(TAG, "Failed to register serial line callback!");
         vQueueDelete(task_event_queue);      // Clean up queue
         return false;
+    } else {
+        LOGI(TAG, "Registered serial response processing for uart %p.", self->uart);
     }
 
     for (size_t i = 0; i < MAX_SERIAL_PROC_TASKS; ++i) {

@@ -108,17 +108,19 @@ void interface_update_machine_state(interface_t *interface,
                                     machine_interface_t *machine);
 void interface_tick(interface_t *interface);
 
-add_callback_proto(interface, state_changed) add_callback_proto(
-    interface, pos_changed) add_callback_proto(interface, home_changed)
-    add_callback_proto(interface, wcs_changed) add_callback_proto(
-        interface, feed_changed) add_callback_proto(interface, sensors_changed)
-        add_callback_proto(interface, dialogs_changed) add_callback_proto(
-            interface,
-            spindles_tools_changed) add_callback_proto(interface,
-                                                       connected_changed)
-            add_callback_proto(interface, current_move_axis_changed) bool interface_add_files_changed_cb(
-                interface_t *self, const char *path, void *user_data,
-                files_changed_callback_cb_t cb);
+add_callback_proto(interface, state_changed);
+add_callback_proto(interface, pos_changed);
+add_callback_proto(interface, home_changed);
+add_callback_proto(interface, wcs_changed);
+add_callback_proto(interface, feed_changed);
+add_callback_proto(interface, sensors_changed);
+add_callback_proto(interface, dialogs_changed);
+add_callback_proto(interface, spindles_tools_changed);
+add_callback_proto(interface, connected_changed);
+add_callback_proto(interface, current_move_axis_changed);
+bool interface_add_files_changed_cb(
+  interface_t *self, const char *path, void *user_data,
+  files_changed_callback_cb_t cb);
 
 #ifdef __cplusplus
 }

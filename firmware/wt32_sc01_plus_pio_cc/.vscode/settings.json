@@ -89,6 +89,7 @@
         "remote_comms_wrapper.h": "c",
         "freertos.h": "c",
         "machine_response_proc_task.h": "c",
-        "queue.h": "c"
+        "queue.h": "c",
+        "stdbool.h": "c"
     }
 }

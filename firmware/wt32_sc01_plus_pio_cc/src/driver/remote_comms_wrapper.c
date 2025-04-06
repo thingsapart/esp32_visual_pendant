@@ -110,10 +110,15 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr, uint
 
 bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data, size_t len) {
     assert(len <= ESP_NOW_MAX_DATA_LEN);
-    if (esp_now_send(mac_addr, data, len) != ESP_OK) {
-        ESP_LOGE(TAG, "Error sending ESP-NOW data");
+    esp_err_t res = ESP_OK;
+    if ((res = esp_now_send(mac_addr, data, len)) != ESP_OK) {
+        ESP_LOGE(TAG, "Error sending ESP-NOW data (%d)", res);
         return false;
     }
+
+    // Avoid ESP_ERR_ESPNOW_NO_MEM.
+    vTaskDelay(2 / portTICK_PERIOD_MS);
+
     return true;
 }
 

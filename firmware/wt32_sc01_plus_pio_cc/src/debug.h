@@ -5,7 +5,9 @@
 #define D_WARN 1
 #define D_ERROR 2
 
+#ifndef UI_DEBUG_LOG
 #define UI_DEBUG_LOG D_INFO
+#endif
 
 #ifdef UI_DEBUG_LOG
 
@@ -18,7 +20,7 @@
   do {                                                                         \
     if (lvl >= UI_DEBUG_LOG) {                                                 \
       default_serial_write((uint8_t *)s, strlen(s));                           \
-      default_serial_write((uint8_t *)"\n", 1);                                \
+      default_serial_write((uint8_t *)"  \n", 3);                              \
     }                                                                          \
   } while (false)
 #define _df(lvl, format, ...)                                                  \
@@ -26,7 +28,8 @@
     if (lvl >= UI_DEBUG_LOG) {                                                 \
       size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__);    \
       char __temp[__len + 1];                                                  \
-      snprintf(__temp, __len, format __VA_OPT__(, )##__VA_ARGS__);             \
+      snprintf(__temp, __len + 1, format __VA_OPT__(, )##__VA_ARGS__);         \
+      __temp[__len] = '\0';                                                    \
       _d(lvl, __temp);                                                         \
     }                                                                          \
   } while (false)
@@ -52,6 +55,9 @@
 #undef ESP_LOGD
 #define LOGD(tag, fmt, ...) _df(-1, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #define ESP_LOGD LOGD
+
+// Verbose.
+#define LOGV(tag, fmt, ...) _df(-1, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 
 #else
 #include <stdio.h>

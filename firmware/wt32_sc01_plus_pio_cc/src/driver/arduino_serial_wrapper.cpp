@@ -17,11 +17,13 @@ typedef RRFMachineSimStream Stream; // Use the simulator stream
 
 #include "debug.h"
 
+static const char *TAG = "arduino_serial_wrapper";
+
 // --- Configuration ---
 #define RING_BUFFER_SIZE                                                       \
   4096 // Size of the ring buffer for incoming serial data
 #define MAX_LINE_LENGTH                                                        \
-  1024 // Maximum length of a line to buffer before calling callback
+  (256 * 6) // Maximum length of a line to buffer before calling callback
 #define MAX_CALLBACKS 5     // Maximum number of callbacks per serial port
 #define RRF_SIM_UART_NUM 99 // Logical UART number for the RRF simulator
 
@@ -165,11 +167,13 @@ static void onReceiveGeneric(void *arg) { // Removed IRAM_ATTR
     return; // Should not happen
 
   HardwareSerial *hw_serial = static_cast<HardwareSerial *>(port_data->stream);
+  LOGV(TAG, "=> RECV/READ hw serial %p", hw_serial);
 
   // Read all available bytes from HW FIFO into the ring buffer
   while (hw_serial->available()) {
     uint8_t byte = hw_serial->read();
     // Try to push to ring buffer. If it fails (full), data is lost.
+    LOGV(TAG, "=> RECV/READ - COUNT: %d", byte);
     if (!rb_push(&port_data->rx_buffer, byte)) {
       // Ring buffer overflow handling (optional: log, count errors, etc.)
       // For now, we just lose the byte.
@@ -226,7 +230,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
 #if defined(ESP32_HW)
   if (uart_num == -1) { // Standard Serial (usually UART0)
     serial_stream = &Serial;
-    is_hw = true; // Serial is typically HardwareSerial
+    is_hw = false; // Serial is typically HardwareSerial
     // Check if Serial was already begun externally
     if (!Serial) { // Heuristic: Check if Serial object is valid (might not be
                    // perfect)
@@ -235,9 +239,9 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
       // Using provided pins might conflict if they differ from default
       // USB/UART0 pins. Be cautious when re-initializing Serial.
       // Serial.begin(baud, config, rx_pin, tx_pin);
-      Serial.begin(baud);
       Serial.setRxBufferSize(RING_BUFFER_SIZE /
                              2); // Increase buffer if possible
+      Serial.begin(baud);
       _d(0, "Standard Serial initialized internally.");
     } else {
       _d(0, "Standard Serial already initialized externally.");
@@ -250,8 +254,8 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
       _df(0, "Failed to allocate HardwareSerial for UART %d", uart_num);
       return NULL;
     }
-    hw_serial->begin(baud, config, rx_pin, tx_pin);
     hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2); // Set buffer size
+    hw_serial->begin(baud, config, rx_pin, tx_pin);
     // Set FIFO threshold to trigger onReceive frequently (e.g., for every byte)
     // This depends on the ESP-IDF version / Arduino core.
     hw_serial->setRxFIFOFull(100); // Example, check specific API for your core
@@ -302,7 +306,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
-  serial_handle_t handle = (serial_handle_t)serial_stream;
+  serial_handle_t handle = (serial_handle_t) serial_stream;
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
@@ -312,17 +316,22 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
     HardwareSerial *hw_serial = static_cast<HardwareSerial *>(serial_stream);
     // Pass port_data as the argument to the callback
     if (uart_num == 0) {
-      hw_serial->onReceive(onReceive0, port_data);
+      hw_serial->onReceive(onReceive0, false);
+      LOGI(TAG, "OnReceive 0 %p", port_data);
     } else if (uart_num == 1) {
-      hw_serial->onReceive(onReceive1, port_data);
+      hw_serial->onReceive(onReceive1, false);
+      LOGI(TAG, "OnReceive 1 %p", port_data);
     } else if (uart_num == 2) {
-      hw_serial->onReceive(onReceive2, port_data);
+      hw_serial->onReceive(onReceive2, false);
+      LOGI(TAG, "OnReceive 2 %p", port_data);
     } else if (uart_num == 3) {
-      hw_serial->onReceive(onReceive3, port_data);
+      hw_serial->onReceive(onReceive3, false);
+      LOGI(TAG, "OnReceive 3 %p", port_data);
     } else if (uart_num == 4) {
-      hw_serial->onReceive(onReceive4, port_data);
+      hw_serial->onReceive(onReceive4, false);
+      LOGI(TAG, "OnReceive 4 %p", port_data);
     }
-    _df(1, "onReceive callback registered for UART %d", uart_num);
+    _df(1, "onReceive callback registered for UART \"%d\"...", uart_num);
   }
 #endif
 

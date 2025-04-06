@@ -13,11 +13,13 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
+#define UI_DEBUG_LOG D_ERROR
 #include "debug.h"
+
 #include "machine/machine_interface.h"
 
-#define TASK_STACK_SIZE (8 * 1024)
-#define TASK_PRIORITY (tskIDLE_PRIORITY + 3)
+#define TASK_STACK_SIZE (1024 * 6)
+#define TASK_PRIORITY (tskIDLE_PRIORITY + 1)
 
 // --- Configuration Constants ---
 // RAM Use: ~ 8KB.
@@ -314,11 +316,13 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer, size_t max
 
 
 /**
- * @brief Callback function registered with arduino_serial_wrapper.
- * Called when a complete line is received from the serial port.
- * NOTE: Assumes this callback runs in a context where brief mutex waits are acceptable.
+ * Notify task of data being ready.
+ * 
+ * task_event_queue: queue to post notification to.
+ * data: data that's ready.
+ * len: data length.
  */
-void machine_response_process_for_task(QueueHandle_t task_event_queue, const char *data, size_t len) {
+void machine_response_proc_task_data_ready(QueueHandle_t task_event_queue, const char *data, size_t len, bool from_isr) {
     ring_buffer_t *response_buffer = NULL;
     for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
         if (queue_buffers[i].queue == task_event_queue) {
@@ -340,18 +344,23 @@ void machine_response_process_for_task(QueueHandle_t task_event_queue, const cha
             // Use xQueueSend with a zero timeout - non-blocking. If queue is full,
             // notification is lost, but data is still in the ring buffer.
             // The task will eventually process it when it gets CPU time.
-            BaseType_t result = xQueueSend(task_event_queue, &dummy_notification, 0);
+            BaseType_t result = pdFAIL;
+            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+            if (!from_isr) {
+                result = xQueueSend(task_event_queue, &dummy_notification, 0);
+            } else {
+                result = xQueueSendFromISR(task_event_queue, &dummy_notification, &xHigherPriorityTaskWoken);
+            }
             if (result != pdTRUE) {
                 // This might happen if the processing task falls behind significantly.
                 // Data is still buffered, so it's not critical, but indicates potential bottleneck.
-                 LOGW(1, "Machine processing task queue full.");
-                // Consider logging less frequently if this occurs often.
-                // LOGW(TAG, "Serial notification queue full.");
+                LOGW(TAG, "Machine processing task queue full.");
             } else {
-                LOGI(TAG, "Queue sent!");
+                LOGV(TAG, "Queue sent!");
+                if(xHigherPriorityTaskWoken) { portYIELD_FROM_ISR(); }
             }
         } else {
-             LOGE(TAG,"Serial received queue is NULL in callback!");
+            LOGE(TAG,"Serial received queue is NULL in callback!");
         }
     } else {
         // ring_buffer_add_line already logs errors/warnings
@@ -418,11 +427,19 @@ void machine_response_proc_task(void *vpargs) {
 
     uint8_t notification_item;         // Dummy item received from queue
 
+    // LOGI(TAG, "%s task stack size high: %d\n", task_name,
+    //     uxTaskGetStackHighWaterMark(NULL));
+
     while (!abort) {
         // Block indefinitely waiting for a notification from the queue
         if (xQueueReceive(queue, &notification_item, portMAX_DELAY) == pdTRUE) {
             // Notification received, try to get data from the ring buffer
             size_t line_len;
+
+            // LOGI(TAG, "%s task stack size high: %d\n", task_name,
+            //     uxTaskGetStackHighWaterMark(NULL));
+
+            machine->set_connected(machine, true);
 
             #if 0
             // Loop to process all available lines in the buffer before blocking again

@@ -18,7 +18,7 @@ extern "C" {
 #include "machine/machine_interface.h"
 
 #define TASK_STACK_SIZE 1024 * 6
-#define TASK_PRIORITY (tskIDLE_PRIORITY + 4) // Priority of the processing task
+#define TASK_PRIORITY (tskIDLE_PRIORITY + 1) // Priority of the processing task
 
 static const char *TAG = "MACHINE_TASK";
 

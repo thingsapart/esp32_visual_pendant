@@ -10,6 +10,7 @@
 #  include "tasks/machine_response_proc_task.h"
 #endif
 
+#define UI_DEBUG_LOG D_ERROR
 #include "debug.h"
 
 static const char *TAG = "machine_remote";
@@ -50,13 +51,15 @@ static void _machine_interface_remote_send_gcode(machine_interface_t *self,
     cmd->type = CMD_TYPE_SEND_GCODE;
     cmd->len = strlen(gcode);
     strcpy(cmd->gcode, gcode);  // Copy the G-code string
+    LOGI(TAG, "Sending '%s'", gcode);
     _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
     free(cmd);
 }
 
 static bool _machine_interface_remote_is_connected(machine_interface_t *self) {
   machine_interface_remote_t *mach = (machine_interface_remote_t *) self;
-  return mach->hub_mac_address;
+  // TODO: Timeout connection.
+  return mach->hub_mac_received;
 }
 
 static void _machine_interface_remote_list_files(machine_interface_t *self, const char *path)
@@ -71,7 +74,7 @@ static void _machine_interface_remote_list_files(machine_interface_t *self, cons
     cmd->type = CMD_TYPE_LIST_FILES;
     cmd->len = strlen(path);
     strcpy(cmd->path, path);
-     _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
+    _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
     free(cmd);
 }
 
@@ -205,6 +208,14 @@ static void _machine_interface_remote_probe(machine_interface_t *self, const cha
     free(cmd);
 }
 
+void _machine_interface_remote_set_connected(machine_interface_t *self, bool connected) {
+    machine_interface_remote_t *rself = (machine_interface_remote_t *) self;
+    if (!connected) {
+        rself->hub_mac_received = false;
+    }
+    machine_interface_connected_updated(self);
+}
+
 // --- Constructor/Destructor ---
 
 machine_interface_remote_t *machine_interface_remote_create(const uint8_t *hub_mac) {
@@ -253,6 +264,7 @@ machine_interface_remote_t *machine_interface_remote_init(machine_interface_remo
     self->base.next_wcs = _machine_interface_remote_next_wcs;
     self->base.probe = _machine_interface_remote_probe;
     self->base.process_machine_state_response = _machine_interface_remote_process_state;
+    self->base.set_connected = _machine_interface_remote_set_connected;
 
     // Disable methods not implemented on the remote
     self->base._update_machine_state = _machine_interface_remote_update_machine_state;
@@ -484,7 +496,7 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8
 
 #ifdef ASYNC_RESPONSE_PROCESSING
     if (self->proc_task_event_queue != NULL) {
-        machine_response_process_for_task(self->proc_task_event_queue, data, data_len);
+        machine_response_proc_task_data_ready(self->proc_task_event_queue, data, data_len, true);
     } else {
         LOGW(TAG, "Cannot machine_response_process_for_task => queue NULL");
     }

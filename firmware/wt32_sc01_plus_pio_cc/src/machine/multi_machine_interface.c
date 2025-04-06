@@ -39,12 +39,13 @@ static void _multi_machine_probe(machine_interface_t *self, const char *probe_gc
 static void _multi_machine__continuous_stop(machine_interface_t *self);
 static void _multi_machine__continuous_move(machine_interface_t *self, const char axis, float feed, int direction);
 
-
 // --- Method Implementations ---
 
 static void _multi_machine_send_gcode(machine_interface_t *self, const char *gcode, uint32_t poll_state) {
     multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
     for (size_t i = 0; i < multi_self->num_machines; i++) {
+        LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode, multi_self->machines[i]->is_connected(multi_self->machines[i]));
+
         if (multi_self->machines[i]->is_connected && multi_self->machines[i]->is_connected(multi_self->machines[i])) {
             if(multi_self->machines[i]->send_gcode) { // Always check for NULL
                 multi_self->machines[i]->send_gcode(multi_self->machines[i], gcode, poll_state);
@@ -57,6 +58,7 @@ static void _multi_machine__send_gcode(machine_interface_t *self, const char *gc
 {
     multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
     for (size_t i = 0; i < multi_self->num_machines; i++) {
+        LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode, multi_self->machines[i]->is_connected(multi_self->machines[i]));
         if (multi_self->machines[i]->is_connected && multi_self->machines[i]->is_connected(multi_self->machines[i])) {
              if(multi_self->machines[i]->_send_gcode) { // Always check for NULL
                 multi_self->machines[i]->_send_gcode(multi_self->machines[i], gcode);
@@ -84,6 +86,7 @@ static bool _multi_machine_is_connected(machine_interface_t *self)
     bool any_connected = false;
     for (size_t i = 0; i < multi_self->num_machines; i++) {
         // Check for NULL and then call is_connected
+        LOGI(TAG, "Connected machine %d => (conn %d)", i , multi_self->machines[i]->is_connected(multi_self->machines[i]));
         if (multi_self->machines[i] && multi_self->machines[i]->is_connected) {
             if (multi_self->machines[i]->is_connected(multi_self->machines[i])) {
                 any_connected = true;
