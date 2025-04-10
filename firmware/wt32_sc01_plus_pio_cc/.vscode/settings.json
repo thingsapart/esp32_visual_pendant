@@ -90,6 +90,9 @@
         "freertos.h": "c",
         "machine_response_proc_task.h": "c",
         "queue.h": "c",
-        "stdbool.h": "c"
+        "stdbool.h": "c",
+        "esp_wifi.h": "c",
+        "esp_now.h": "c",
+        "esp_err.h": "c"
     }
 }

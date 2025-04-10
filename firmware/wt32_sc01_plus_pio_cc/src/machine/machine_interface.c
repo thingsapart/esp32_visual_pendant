@@ -143,7 +143,11 @@ static void _default_move_to(machine_interface_t *self, const char axis, float f
         pos = self->moving_target_position[axi];
     }
     char gcode_cmd[64]; // Buffer for the formatted G-code
+#   ifdef CONTROLLER_BENCH_TEST
+    snprintf(gcode_cmd, sizeof(gcode_cmd), "G92 %c%.3f F%.3f\n", mode, axis, self->moving_target_position[axi], feed);
+#   else
     snprintf(gcode_cmd, sizeof(gcode_cmd), "M120\n%s\nG1 %c%.3f F%.3f\nM121", mode, axis, pos, feed);
+#   endif
     self->send_gcode(self, gcode_cmd, MACHINE_POSITION);
 }
 
@@ -461,15 +465,19 @@ axis_t machine_interface_move_current_axis(machine_interface_t *self, float feed
 }
 
 axis_t machine_interface_step_current_axis(machine_interface_t *self, float feed, int steps) {
+    LOGI(TAG, "> machine_interface_step_current_axis (AX_OFF = %d)", self->current_move_axis == AXIS_OFF);
     if (self->current_move_axis == AXIS_OFF) { return self->current_move_axis; }
     int axi = machine_interface_axis_t_idx(self->current_move_axis);
+    LOGI(TAG, "  axi: %d", axi);
     if (axi < 0 || axi >= AXIS_OFF) { return self->current_move_axis; }
 
     char axis = idx_to_axis(axi);
+    LOGI(TAG, "  axis: %c", axis);
 
     float dist = self->current_move_step * steps;
     _df(0, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1], axes[2]);
     _default_move_to(self, axis, feed, dist, true);
+    LOGI(TAG, "< machine_interface_step_current_axis");
     return self->current_move_axis;
 }
 
@@ -530,6 +538,7 @@ void machine_interface_maybe_execute_continuous_move(machine_interface_t *self) 
 
 void machine_interface_position_updated(machine_interface_t *self) {
     machine_interface_maybe_execute_continuous_move(self);
+    LOGI(TAG, "Pos updated: callbacks %p, %p, %p", self->pos_changed_cb[0], self->pos_changed_cb[1], self->pos_changed_cb[2]);
     call_callbacks(pos_changed_cb);
 }
 
@@ -632,6 +641,24 @@ void machine_interface_probe(machine_interface_t *self, const char *probe_gcode)
 
 void machine_interface_process_machine_state_response(machine_interface_t *self, void *data, size_t len) {
     self->process_machine_state_response(self, data, len);
+}
+
+void free_message_box_t(message_box_t *msg_box) {
+    if (!msg_box) {
+        return;
+    }
+
+    free(msg_box->title);
+    free(msg_box->text);
+
+    if (msg_box->choices) {
+        for (size_t i = 0; i < msg_box->num_choices; ++i) {
+            free(msg_box->choices[i]);
+        }
+        free(msg_box->choices);
+    }
+
+    free(msg_box);
 }
 
 add_callback_fn(machine_interface, state_change)

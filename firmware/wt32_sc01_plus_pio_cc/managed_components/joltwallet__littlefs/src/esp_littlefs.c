@@ -23,16 +23,18 @@
 #include <sys/lock.h>
 #include <sys/param.h>
 #include <unistd.h>
+#include "esp_random.h"
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
+#error "esp_littlefs requires esp-idf >=5.0"
+#endif
+
 
 #ifdef CONFIG_LITTLEFS_SDMMC_SUPPORT
 #include <sdmmc_cmd.h>
 #endif
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include "spi_flash_mmap.h"
-#else
-#include "esp_spi_flash.h"
-#endif
 
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/rom/spi_flash.h"
@@ -62,12 +64,22 @@
 /**
  * @brief Last Modified Time
  *
- * Use 't' for LITTLEFS_ATTR_MTIME to match example:
+ * Use 't' for ESP_LITTLEFS_ATTR_MTIME to match example:
  *     https://github.com/ARMmbed/littlefs/issues/23#issuecomment-482293539
  * And to match other external tools such as:
  *     https://github.com/earlephilhower/mklittlefs
  */
-#define LITTLEFS_ATTR_MTIME ((uint8_t) 't')
+#define ESP_LITTLEFS_ATTR_MTIME ((uint8_t) 't')
+
+// ESP_PARTITION_SUBTYPE_DATA_LITTLEFS was introduced in later patch versions of esp-idf.
+// * v5.0.7
+// * v5.1.4
+// * v5.2.0
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 2, 0)
+#ifndef ESP_PARTITION_SUBTYPE_DATA_LITTLEFS
+#define ESP_PARTITION_SUBTYPE_DATA_LITTLEFS 0x83
+#endif
+#endif
 
 /**
  * @brief littlefs DIR structure
@@ -116,10 +128,11 @@ static void      esp_littlefs_dir_free(vfs_littlefs_dir_t *dir);
 
 static void      esp_littlefs_take_efs_lock(void);
 static esp_err_t esp_littlefs_init_efs(esp_littlefs_t** efs, const esp_partition_t* partition, bool read_only);
-static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf);
+static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf, int *index);
 
 static esp_err_t esp_littlefs_by_label(const char* label, int * index);
 static esp_err_t esp_littlefs_by_partition(const esp_partition_t* part, int*index);
+static int esp_littlefs_file_sync(esp_littlefs_t *efs, vfs_littlefs_file_t *file);
 
 #ifdef CONFIG_LITTLEFS_SDMMC_SUPPORT
 static esp_err_t esp_littlefs_by_sdmmc_handle(sdmmc_card_t *handle, int *index);
@@ -131,9 +144,9 @@ static int       esp_littlefs_flags_conv(int m);
 
 #if CONFIG_LITTLEFS_USE_MTIME
 static int       vfs_littlefs_utime(void *ctx, const char *path, const struct utimbuf *times);
-static void      vfs_littlefs_update_mtime(esp_littlefs_t *efs, const char *path);
-static int       vfs_littlefs_update_mtime_value(esp_littlefs_t *efs, const char *path, time_t t);
-static time_t    vfs_littlefs_get_mtime(esp_littlefs_t *efs, const char *path);
+static int       esp_littlefs_update_mtime_attr(esp_littlefs_t *efs, const char *path, time_t t);
+static time_t    esp_littlefs_get_mtime_attr(esp_littlefs_t *efs, const char *path);
+static time_t    esp_littlefs_get_updated_time(esp_littlefs_t *efs, vfs_littlefs_file_t *file, const char *path);
 #endif
 
 #ifndef CONFIG_LITTLEFS_USE_ONLY_HASH
@@ -414,38 +427,16 @@ static esp_vfs_fs_ops_t s_vfs_littlefs = {
 #endif // ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
 esp_err_t esp_vfs_littlefs_register(const esp_vfs_littlefs_conf_t * conf)
 {
+    int index;
     assert(conf->base_path);
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 4, 0)
     const esp_vfs_t vfs = vfs_littlefs_create_struct(!conf->read_only);
 #endif // ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 4, 0)
 
-    esp_err_t err = esp_littlefs_init(conf);
+    esp_err_t err = esp_littlefs_init(conf, &index);
     if (err != ESP_OK) {
         ESP_LOGE(ESP_LITTLEFS_TAG, "Failed to initialize LittleFS");
         return err;
-    }
-
-    int index;
-
-    if(conf->partition_label) {
-        if (esp_littlefs_by_label(conf->partition_label, &index) != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Unable to find partition \"%s\"", conf->partition_label);
-            return ESP_ERR_NOT_FOUND;
-        }
-    }
-#ifdef CONFIG_LITTLEFS_SDMMC_SUPPORT
-    else if (conf->sdcard) {
-        if (esp_littlefs_by_sdmmc_handle(conf->sdcard, &index) != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Unable to find SD card \"%p\"", conf->sdcard);
-            return ESP_ERR_NOT_FOUND;
-        }
-    }
-#endif
-    else {
-        if (esp_littlefs_by_partition(conf->partition, &index) != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Unable to find partition \"0x%08"PRIX32"\"", conf->partition->address);
-            return ESP_ERR_NOT_FOUND;
-        }
     }
 
     strlcat(_efs[index]->base_path, conf->base_path, ESP_VFS_PATH_MAX + 1);
@@ -470,7 +461,6 @@ esp_err_t esp_vfs_littlefs_register(const esp_vfs_littlefs_conf_t * conf)
 
 esp_err_t esp_vfs_littlefs_unregister(const char* partition_label)
 {
-    assert(partition_label);
     int index;
     if (esp_littlefs_by_label(partition_label, &index) != ESP_OK) {
         ESP_LOGE(ESP_LITTLEFS_TAG, "Partition was never registered.");
@@ -529,8 +519,6 @@ esp_err_t esp_vfs_littlefs_unregister_partition(const esp_partition_t* partition
 }
 
 esp_err_t esp_littlefs_format(const char* partition_label) {
-    assert( partition_label );
-
     bool efs_free = false;
     int index = -1;
     esp_err_t err;
@@ -549,15 +537,9 @@ esp_err_t esp_littlefs_format(const char* partition_label) {
                 .dont_mount = true,
                 .partition_label = partition_label,
         };
-        err = esp_littlefs_init(&conf);
+        err = esp_littlefs_init(&conf, &index);
         if( err != ESP_OK ) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "Failed to initialize to format.");
-            goto exit;
-        }
-
-        err = esp_littlefs_by_label(partition_label, &index);
-        if ( err != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Error obtaining context.");
             goto exit;
         }
     }
@@ -591,15 +573,9 @@ esp_err_t esp_littlefs_format_partition(const esp_partition_t* partition) {
                 .partition_label = NULL,
                 .partition = partition,
         };
-        err = esp_littlefs_init(&conf);
+        err = esp_littlefs_init(&conf, &index);
         if( err != ESP_OK ) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "Failed to initialize to format.");
-            goto exit;
-        }
-
-        err = esp_littlefs_by_partition(partition, &index);
-        if ( err != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Error obtaining context.");
             goto exit;
         }
     }
@@ -637,15 +613,9 @@ esp_err_t esp_littlefs_format_sdmmc(sdmmc_card_t *sdcard)
                 .sdcard = sdcard,
         };
 
-        err = esp_littlefs_init(&conf);
+        err = esp_littlefs_init(&conf, &index);
         if( err != ESP_OK ) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "Failed to initialize to format.");
-            goto exit;
-        }
-
-        err = esp_littlefs_by_sdmmc_handle(sdcard, &index);
-        if ( err != ESP_OK) {
-            ESP_LOGE(ESP_LITTLEFS_TAG, "Error obtaining context.");
             goto exit;
         }
     }
@@ -766,6 +736,11 @@ static void esp_littlefs_free(esp_littlefs_t ** efs)
         free(e->fs);
     }
     if(e->lock) vSemaphoreDelete(e->lock);
+
+#ifdef CONFIG_LITTLEFS_MMAP_PARTITION
+    esp_partition_munmap(e->mmap_handle);
+#endif
+
     esp_littlefs_free_fds(e);
     free(e);
 }
@@ -787,7 +762,6 @@ static void esp_littlefs_dir_free(vfs_littlefs_dir_t *dir){
  * @param[out] index index into _efs
  * @return ESP_OK on success
  */
-
 static esp_err_t esp_littlefs_by_partition(const esp_partition_t* part, int * index){
     int i;
     esp_littlefs_t * p;
@@ -811,11 +785,30 @@ static esp_err_t esp_littlefs_by_partition(const esp_partition_t* part, int * in
     return ESP_ERR_NOT_FOUND;
 }
 
+/**
+ * @brief Find index of already mounted littlefs filesystem by label.
+ * @param[in] label
+ * @param[out] index
+ */
 static esp_err_t esp_littlefs_by_label(const char* label, int * index){
     int i;
     esp_littlefs_t * p;
+    const esp_partition_t *partition;
 
-    if(!label || !index) return ESP_ERR_INVALID_ARG;
+    if(!index) return ESP_ERR_INVALID_ARG;
+    if(!label){
+        // Search for first dat partition with subtype "littlefs"
+        partition = esp_partition_find_first(
+                ESP_PARTITION_TYPE_DATA,
+                ESP_PARTITION_SUBTYPE_DATA_LITTLEFS,
+                NULL
+        );
+        if(!partition){
+            ESP_LOGE(ESP_LITTLEFS_TAG, "No data partition with subtype \"littlefs\" found");
+            return ESP_ERR_NOT_FOUND;
+        }
+        label = partition->label;
+    }
 
     ESP_LOGV(ESP_LITTLEFS_TAG, "Searching for existing filesystem for partition \"%s\"", label);
 
@@ -988,12 +981,24 @@ static esp_err_t esp_littlefs_init_efs(esp_littlefs_t** efs, const esp_partition
     }
     (*efs)->partition = partition;
 
+#ifdef CONFIG_LITTLEFS_MMAP_PARTITION
+    esp_err_t err = esp_partition_mmap(partition, 0, partition->size, SPI_FLASH_MMAP_DATA, &(*efs)->mmap_data, &(*efs)->mmap_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(ESP_LITTLEFS_TAG, "esp_littlefs could not map data");
+        return err;
+    }
+#endif
+
     { /* LittleFS Configuration */
         (*efs)->cfg.context = *efs;
         (*efs)->read_only = read_only;
 
         // block device operations
+#ifdef CONFIG_LITTLEFS_MMAP_PARTITION
+        (*efs)->cfg.read  = littlefs_esp_part_read_mmap;
+#else
         (*efs)->cfg.read  = littlefs_esp_part_read;
+#endif
         (*efs)->cfg.prog  = littlefs_esp_part_write;
         (*efs)->cfg.erase = littlefs_esp_part_erase;
         (*efs)->cfg.sync  = littlefs_esp_part_sync;
@@ -1037,18 +1042,19 @@ static esp_err_t esp_littlefs_init_efs(esp_littlefs_t** efs, const esp_partition
 /**
  * @brief Initialize and mount littlefs
  * @param[in] conf Filesystem Configuration
+ * @param[out] index On success, index into _efs.
  * @return ESP_OK on success
  */
-static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
+static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf, int *index)
 {
-    int index = -1;
     esp_err_t err = ESP_FAIL;
     const esp_partition_t* partition = NULL;
     esp_littlefs_t * efs = NULL;
+    *index = -1;
 
     esp_littlefs_take_efs_lock();
 
-    if (esp_littlefs_get_empty(&index) != ESP_OK) {
+    if (esp_littlefs_get_empty(index) != ESP_OK) {
         ESP_LOGE(ESP_LITTLEFS_TAG, "max mounted partitions reached");
         err = ESP_ERR_INVALID_STATE;
         goto exit;
@@ -1057,13 +1063,14 @@ static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
     if(conf->partition_label)
     {
         /* Input and Environment Validation */
-        if (esp_littlefs_by_label(conf->partition_label, &index) == ESP_OK) {
+        if (esp_littlefs_by_label(conf->partition_label, index) == ESP_OK) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "Partition already used");
             err = ESP_ERR_INVALID_STATE;
             goto exit;
         }
         partition = esp_partition_find_first(
-                ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY,
+                ESP_PARTITION_TYPE_DATA,
+                ESP_PARTITION_SUBTYPE_ANY,
                 conf->partition_label);
         if (!partition) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "partition \"%s\" could not be found", conf->partition_label);
@@ -1072,7 +1079,7 @@ static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
         }
 
     } else if(conf->partition) {
-        if (esp_littlefs_by_partition(conf->partition, &index) == ESP_OK) {
+        if (esp_littlefs_by_partition(conf->partition, index) == ESP_OK) {
             ESP_LOGE(ESP_LITTLEFS_TAG, "Partition already used");
             err = ESP_ERR_INVALID_STATE;
             goto exit;
@@ -1088,9 +1095,17 @@ static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
         }
 #endif
     } else {
-        ESP_LOGE(ESP_LITTLEFS_TAG, "No partition specified in configuration");
-        err = ESP_ERR_INVALID_ARG;
-        goto exit;
+        // Find first partition with "littlefs" subtype.
+        partition = esp_partition_find_first(
+                ESP_PARTITION_TYPE_DATA,
+                ESP_PARTITION_SUBTYPE_DATA_LITTLEFS,
+                NULL
+        );
+        if (!partition) {
+            ESP_LOGE(ESP_LITTLEFS_TAG, "No data partition with subtype \"littlefs\" found");
+            err = ESP_ERR_NOT_FOUND;
+            goto exit;
+        }
     }
 
 #ifdef CONFIG_LITTLEFS_SDMMC_SUPPORT
@@ -1119,7 +1134,7 @@ static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
     }
 
     // Mount and Error Check
-    _efs[index] = efs;
+    _efs[*index] = efs;
     if(!conf->dont_mount){
         int res;
 
@@ -1171,8 +1186,8 @@ static esp_err_t esp_littlefs_init(const esp_vfs_littlefs_conf_t* conf)
 
 exit:
     if(err != ESP_OK){
-        if( index >= 0 ) {
-            esp_littlefs_free(&_efs[index]);
+        if( *index >= 0 ) {
+            esp_littlefs_free(&_efs[*index]);
         }
         else{
             esp_littlefs_free(&efs);
@@ -1283,6 +1298,16 @@ static int esp_littlefs_allocate_fd(esp_littlefs_t *efs, vfs_littlefs_file_t ** 
     */
     (*file)->path = (char*)(*file) + sizeof(**file);
 #endif
+
+    /* initialize lfs_file_config */
+    (*file)->lfs_file_config.buffer = (*file)->lfs_buffer;
+#if ESP_LITTLEFS_ATTR_COUNT
+    (*file)->lfs_file_config.attrs = (*file)->lfs_attr;
+    (*file)->lfs_attr[0].type = ESP_LITTLEFS_ATTR_MTIME;
+    (*file)->lfs_attr[0].buffer = &(*file)->lfs_attr_time_buffer;
+    (*file)->lfs_attr[0].size = sizeof((*file)->lfs_attr_time_buffer);
+#endif
+    (*file)->lfs_file_config.attr_count = ESP_LITTLEFS_ATTR_COUNT;
 
     /* Now find a free place in cache */
     for(i=0; i < efs->cache_size; i++) {
@@ -1484,7 +1509,16 @@ static int vfs_littlefs_open(void* ctx, const char * path, int flags, int mode) 
 
 #ifndef CONFIG_LITTLEFS_MALLOC_STRATEGY_DISABLE
     /* Open File */
-    res = lfs_file_open(efs->fs, &file->file, path, lfs_flags);
+    res = lfs_file_opencfg(efs->fs, &file->file, path, lfs_flags, &file->lfs_file_config);
+#if CONFIG_LITTLEFS_MTIME_USE_NONCE
+    if(!(lfs_flags & LFS_O_RDONLY)){
+        // When the READ flag is set, LittleFS will automatically populate attributes.
+        // If it's not set, it will not populate attributes.
+        // We want the attributes regardless so that we can properly update it.
+        file->lfs_attr_time_buffer = esp_littlefs_get_mtime_attr(efs, path);
+    }
+#endif
+
 #else
     #error "The use of static buffers is not currently supported by this VFS wrapper"
 #endif
@@ -1518,9 +1552,9 @@ static int vfs_littlefs_open(void* ctx, const char * path, int flags, int mode) 
 #if CONFIG_LITTLEFS_OPEN_DIR
     if ( (flags & O_DIRECTORY) == 0 ) {
 #endif
-    if(!efs->read_only)
+    if(!efs->read_only && lfs_flags != LFS_O_RDONLY)
     {
-        res = lfs_file_sync(efs->fs, &file->file);
+        res = esp_littlefs_file_sync(efs, file);
     }
     if(res < 0){
         errno = lfs_errno_remap(res);
@@ -1539,13 +1573,6 @@ static int vfs_littlefs_open(void* ctx, const char * path, int flags, int mode) 
     file->hash = compute_hash(path);
 #ifndef CONFIG_LITTLEFS_USE_ONLY_HASH
     memcpy(file->path, path, path_len);
-#endif
-
-#if CONFIG_LITTLEFS_USE_MTIME
-    if (lfs_flags != LFS_O_RDONLY) {
-        /* If this is being opened as not read-only */
-        vfs_littlefs_update_mtime(efs, path);
-    }
 #endif
 
     sem_give(efs);
@@ -1737,7 +1764,6 @@ exit:
 }
 
 static int vfs_littlefs_close(void* ctx, int fd) {
-    // TODO update mtime on close? SPIFFS doesn't do this
     esp_littlefs_t * efs = (esp_littlefs_t *)ctx;
     int res;
     vfs_littlefs_file_t *file = NULL;
@@ -1755,6 +1781,9 @@ static int vfs_littlefs_close(void* ctx, int fd) {
 #if CONFIG_LITTLEFS_OPEN_DIR
     if ((file->file.flags & O_DIRECTORY) == 0) {
 #endif
+#if CONFIG_LITTLEFS_USE_MTIME
+    file->lfs_attr_time_buffer = esp_littlefs_get_updated_time(efs, file, NULL);
+#endif
     res = lfs_file_close(efs->fs, &file->file);
     if(res < 0){
         errno = lfs_errno_remap(res);
@@ -1768,6 +1797,7 @@ static int vfs_littlefs_close(void* ctx, int fd) {
 #endif
         return -1;
     }
+    // TODO: update directory containing file's mtime.
 #if CONFIG_LITTLEFS_OPEN_DIR
     } else {
         res = 0;
@@ -1836,7 +1866,7 @@ static int vfs_littlefs_fsync(void* ctx, int fd)
         return -1;
     }
     file = efs->cache[fd];
-    res = lfs_file_sync(efs->fs, &file->file);
+    res = esp_littlefs_file_sync(efs, file);
     sem_give(efs);
 
     if(res < 0){
@@ -1881,13 +1911,20 @@ static int vfs_littlefs_fstat(void* ctx, int fd, struct stat * st) {
     }
 
 #if CONFIG_LITTLEFS_USE_MTIME
-    st->st_mtime = vfs_littlefs_get_mtime(efs, file->path);
+    st->st_mtime = file->lfs_attr_time_buffer;
 #endif
 
     sem_give(efs);
-
-    st->st_size = info.size;
-    st->st_mode = ((info.type==LFS_TYPE_REG)?S_IFREG:S_IFDIR);
+    if(info.type==LFS_TYPE_REG){
+        // Regular File
+        st->st_mode = S_IFREG;
+        st->st_size = info.size;
+    }
+    else{
+        // Directory
+        st->st_mode = S_IFDIR;
+        st->st_size = 0;  // info.size is only valid for REG files
+    }
     return 0;
 }
 #endif
@@ -1914,11 +1951,19 @@ static int vfs_littlefs_stat(void* ctx, const char * path, struct stat * st) {
         return -1;
     }
 #if CONFIG_LITTLEFS_USE_MTIME
-    st->st_mtime = vfs_littlefs_get_mtime(efs, path);
+    st->st_mtime = esp_littlefs_get_mtime_attr(efs, path);
 #endif
     sem_give(efs);
-    st->st_size = info.size;
-    st->st_mode = ((info.type==LFS_TYPE_REG)?S_IFREG:S_IFDIR);
+    if(info.type==LFS_TYPE_REG){
+        // Regular File
+        st->st_mode = S_IFREG;
+        st->st_size = info.size;
+    }
+    else{
+        // Directory
+        st->st_mode = S_IFDIR;
+        st->st_size = 0;  // info.size is only valid for REG files
+    }
     return 0;
 }
 
@@ -2312,14 +2357,29 @@ static int vfs_littlefs_ftruncate(void *ctx, int fd, off_t size)
 #endif // ESP_LITTLEFS_ENABLE_FTRUNCATE
 #endif //CONFIG_VFS_SUPPORT_DIR
 
+/**
+ * Syncs file while also updating mtime (if necessary)
+ */
+static int esp_littlefs_file_sync(esp_littlefs_t *efs, vfs_littlefs_file_t *file)
+{
+    int res;
+#if CONFIG_LITTLEFS_USE_MTIME
+    if((file->file.flags & 0x3) != LFS_O_RDONLY){
+        file->lfs_attr_time_buffer = esp_littlefs_get_updated_time(efs, file, NULL);
+    }
+#endif
+    res = lfs_file_sync(efs->fs, &file->file);
+    return res;
+}
+
 #if CONFIG_LITTLEFS_USE_MTIME
 /**
  * Sets the mtime attr to t.
  */
-static int vfs_littlefs_update_mtime_value(esp_littlefs_t *efs, const char *path, time_t t)
+static int esp_littlefs_update_mtime_attr(esp_littlefs_t *efs, const char *path, time_t t)
 {
     int res;
-    res = lfs_setattr(efs->fs, path, LITTLEFS_ATTR_MTIME,
+    res = lfs_setattr(efs->fs, path, ESP_LITTLEFS_ATTR_MTIME,
             &t, sizeof(t));
     if( res < 0 ) {
         errno = lfs_errno_remap(res);
@@ -2331,13 +2391,37 @@ static int vfs_littlefs_update_mtime_value(esp_littlefs_t *efs, const char *path
 }
 
 /**
- * Sets the mtime attr to an appropriate value
+ * @brief Only to be used when calcualting what time we should write to disk.
+ * @param file If non-null, use this file's attribute to get previous file's time (if use nonce).
+ * @param path If non-null, use this path to read in the previous file's time (if use nonce).
  */
-static void vfs_littlefs_update_mtime(esp_littlefs_t *efs, const char *path)
+static time_t esp_littlefs_get_updated_time(esp_littlefs_t *efs, vfs_littlefs_file_t *file, const char *path)
 {
-    vfs_littlefs_utime(efs, path, NULL);
-}
+    time_t t;
+#if CONFIG_LITTLEFS_MTIME_USE_SECONDS
+    // use current time
+    t = time(NULL);
+#elif CONFIG_LITTLEFS_MTIME_USE_NONCE
+    assert( sizeof(time_t) == 8 );
+    if(path){
+        t = esp_littlefs_get_mtime_attr(efs, path);
+    }
+    else if(file){
+        t = file->lfs_attr_time_buffer;
+    }
+    else{
+        // Invalid input arguments.
+        assert(0);
+    }
+    if( 0 == t ) t = esp_random();
+    else t += 1;
 
+    if( 0 == t ) t = 1;
+#else
+#error "Invalid MTIME configuration"
+#endif
+    return t;
+}
 
 static int vfs_littlefs_utime(void *ctx, const char *path, const struct utimbuf *times)
 {
@@ -2350,31 +2434,19 @@ static int vfs_littlefs_utime(void *ctx, const char *path, const struct utimbuf 
     if (times) {
         t = times->modtime;
     } else {
-#if CONFIG_LITTLEFS_MTIME_USE_SECONDS
-        // use current time
-        t = time(NULL);
-#elif CONFIG_LITTLEFS_MTIME_USE_NONCE
-        assert( sizeof(time_t) == 4 );
-        t = vfs_littlefs_get_mtime(efs, path);
-        if( 0 == t ) t = esp_random();
-        else t += 1;
-
-        if( 0 == t ) t = 1;
-#else
-#error "Invalid MTIME configuration"
-#endif
+        t = esp_littlefs_get_updated_time(efs, NULL, path);
     }
 
-    int ret = vfs_littlefs_update_mtime_value(efs, path, t);
+    int ret = esp_littlefs_update_mtime_attr(efs, path, t);
     sem_give(efs);
     return ret;
 }
 
-static time_t vfs_littlefs_get_mtime(esp_littlefs_t *efs, const char *path)
+static time_t esp_littlefs_get_mtime_attr(esp_littlefs_t *efs, const char *path)
 {
     time_t t;
     int size;
-    size = lfs_getattr(efs->fs, path, LITTLEFS_ATTR_MTIME,
+    size = lfs_getattr(efs->fs, path, ESP_LITTLEFS_ATTR_MTIME,
             &t, sizeof(t));
     if( size < 0 ) {
         errno = lfs_errno_remap(size);

@@ -120,6 +120,7 @@ bool machine_remote_init() {
         &machine_remote); // Clean up if the loop somehow exits
     return false;
   }
+  LOGI(TAG, "Machine remote initialized");
 
   return true;
 }
@@ -252,7 +253,7 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,            // Function that implements the task
       "lvgl_task",          // Task name (for debugging)
-      1024 * 32,            // Stack size (adjust as needed, ESP32 it's bytes)
+      1024 * 36,            // Stack size (adjust as needed, ESP32 it's bytes)
       NULL,                 // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2, // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,    // Task handle (optional, can be used to control the

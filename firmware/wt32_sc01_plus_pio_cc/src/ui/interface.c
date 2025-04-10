@@ -15,6 +15,8 @@
 
 // Forward decls.
 
+const char *TAG = "ui/interface";
+
 void message_box_t_modal(machine_interface_t *mach, void *user_data);
 void _mach_state_changed(machine_interface_t *mach, void *user_data);
 void _mach_home_changed(machine_interface_t *mach, void *user_data);
@@ -309,7 +311,7 @@ void _mach_state_changed(machine_interface_t *mach, void *user_data) {
 }
 
 void _mach_pos_changed(machine_interface_t *mach, void *user_data) {
-    _d(-1, "POS CHANGED");
+    LOGI(TAG, "POS CHANGED");
     interface_t *interface = (interface_t *)user_data;
     interface->machine_state_udated.pos_changed = true;
 }

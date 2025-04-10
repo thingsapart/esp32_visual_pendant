@@ -18,7 +18,7 @@ extern "C" {
 
 #include "machine/machine_interface.h"
 
-#define TASK_STACK_SIZE (1024 * 6)
+#define TASK_STACK_SIZE (1024 * 7)
 #define TASK_PRIORITY (tskIDLE_PRIORITY + 1)
 
 // --- Configuration Constants ---
@@ -334,7 +334,7 @@ void machine_response_proc_task_data_ready(QueueHandle_t task_event_queue, const
         return;
     }
 
-    // LOGI(TAG, "Received %s data\n", len);
+    LOGI(TAG, "Received %d data\n", len);
 
     // 1. Add the received line to the ring buffer
     if (ring_buffer_add_line(response_buffer, data, len)) {
@@ -433,6 +433,8 @@ void machine_response_proc_task(void *vpargs) {
     while (!abort) {
         // Block indefinitely waiting for a notification from the queue
         if (xQueueReceive(queue, &notification_item, portMAX_DELAY) == pdTRUE) {
+            LOGI(TAG, "Response proc queue item received");
+
             // Notification received, try to get data from the ring buffer
             size_t line_len;
 

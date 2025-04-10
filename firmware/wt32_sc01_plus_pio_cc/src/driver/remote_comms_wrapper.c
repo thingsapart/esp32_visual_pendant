@@ -39,6 +39,106 @@ static void wifi_init() {
     // For simplicity, we'll just start Wi-Fi in station mode.
 }
 
+#define USE_SEND_QUEUE
+
+#ifdef USE_SEND_QUEUE
+#define QUEUE_LENGTH 2
+#define TASK_PRIORITY (tskIDLE_PRIORITY + 1)
+
+typedef struct {
+    uint8_t mac[6];
+    uint8_t data_len;
+    uint8_t data[ESP_NOW_MAX_DATA_LEN];
+} remote_send_queue_item_t;
+
+void remote_send_task(void *args) {
+    QueueHandle_t queue = (QueueHandle_t) args;
+    bool abort = false;
+
+    while (!abort) {
+        // Block indefinitely waiting for a notification from the queue
+        remote_send_queue_item_t item;
+        if (xQueueReceive(queue, &item, portMAX_DELAY) == pdTRUE) {
+            bool res = remote_wrapper_send_now(item.mac, item.data, item.data_len);
+            if (res) {
+                LOGI(TAG, "Sent remote message len %d [OK]", item.data_len);
+            } else {
+                LOGW(TAG, "Failed to send remote message len %d", item.data_len);
+            }
+            
+            // Delay a little to avoid ESP_ERR_ESP_NOW_NO_MEM.
+            vTaskDelay(5 / portTICK_PERIOD_MS);
+        }
+    }
+
+    LOGW(TAG, "remote_send_task ended unexpectedly.");
+}
+QueueHandle_t remote_send_queue = NULL;
+
+TaskHandle_t remote_send_task_run() {
+    QueueHandle_t queue = xQueueCreate(QUEUE_LENGTH, sizeof(remote_send_queue_item_t));
+    if (queue == NULL) {
+        LOGE(TAG, "Failed to create serial received notification queue!");
+        return false;
+    }
+
+    TaskHandle_t task_handle;
+    BaseType_t task_created = xTaskCreatePinnedToCore(
+        remote_send_task,
+        "remote_send_task",             // Task name
+        1024*4,                         // Stack depth
+        queue,                          // Parameter passed to the task (using global s_machine_interface instead)
+        TASK_PRIORITY,                  // Task priority
+        &task_handle,                    // Task handle
+        TASK_MACHINE_STATE_PROC_CORE
+    );
+    LOGI(TAG, "Creating task: %s => %p, queue %p", "remote_send_task", task_handle, queue);
+
+    if (task_created != pdPASS) {
+        LOGE(TAG, "Failed to create remote send task (%d)!", task_created);
+        vQueueDelete(queue);
+        return NULL;
+    }
+
+    LOGI(TAG, "Remote send task started successfully.");
+
+    remote_send_queue = queue;
+
+    return task_handle;
+}
+
+bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                         size_t len) {
+    if (remote_send_queue == NULL) {
+        LOGW(TAG, "Remote send queue NULL - not sending!");
+        return false;
+    }
+
+    remote_send_queue_item_t item = { 0 };
+    item.data_len = len;
+    memcpy(&item.mac[0], mac_addr, sizeof(item.mac));
+    memcpy(&item.data[0], data, len);
+
+    BaseType_t res = xQueueSend(remote_send_queue, &item, 0);
+    if (res != pdTRUE) {
+        LOGW(TAG, "Remote send queue most likely full.");
+        return false;
+    } else {
+        LOGV(TAG, "Remote send queued: %d", len);
+    }
+   
+    return true;
+}
+
+#else
+
+bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                         size_t len) {
+    return remote_wrapper_send_now(mac_addr, data, len);
+}
+
+#endif
+
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb, remote_wrapper_send_cb_t send_cb, void *user_data) {
     // Initialize NVS (needed for Wi-Fi)
     esp_err_t ret = nvs_flash_init();
@@ -60,6 +160,14 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb, remote_wrapper_send_c
     // Register callbacks
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_data_sent));
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_data_recv));
+ 
+ #ifdef USE_SEND_QUEUE
+    if (!remote_send_task_run()) {
+        LOGE(TAG, "Failed to start remote send task");
+
+        return false;
+    }
+ #endif
 
     return true;
 }
@@ -108,16 +216,13 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr, uint
     }
 }
 
-bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data, size_t len) {
+bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data, size_t len) {
     assert(len <= ESP_NOW_MAX_DATA_LEN);
     esp_err_t res = ESP_OK;
     if ((res = esp_now_send(mac_addr, data, len)) != ESP_OK) {
         ESP_LOGE(TAG, "Error sending ESP-NOW data (%d)", res);
         return false;
     }
-
-    // Avoid ESP_ERR_ESPNOW_NO_MEM.
-    vTaskDelay(2 / portTICK_PERIOD_MS);
 
     return true;
 }

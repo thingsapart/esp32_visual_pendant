@@ -301,6 +301,8 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             const char *path, void *user_data,
                                             files_changed_callback_cb_t cb);
 
+void free_message_box_t(message_box_t *msg_box);
+
 // <type>_add_<callback_name>_cb(<tye> *self, void *user_data, <callback_t>
 // callback);
 // => eg machine_interface_add_state_changed_cb(...),

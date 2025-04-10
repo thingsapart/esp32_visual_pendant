@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.8.2](https://github.com/espressif/esp-protocols/commits/mdns-v1.8.2)
+
+### Bug Fixes
+
+- Fix parsing incorrect txt records ([8fd2c99f](https://github.com/espressif/esp-protocols/commit/8fd2c99f))
+
+## [1.8.1](https://github.com/espressif/esp-protocols/commits/mdns-v1.8.1)
+
+### Bug Fixes
+
+- Fix potential task delete race ([8ca45f34](https://github.com/espressif/esp-protocols/commit/8ca45f34))
+
+## [1.8.0](https://github.com/espressif/esp-protocols/commits/mdns-v1.8.0)
+
+### Features
+
+- Add version keys ([e01e67e7](https://github.com/espressif/esp-protocols/commit/e01e67e7))
+
+### Bug Fixes
+
+- Reformat mdns sources per indent-cont=120 ([c7663cde](https://github.com/espressif/esp-protocols/commit/c7663cde))
+
+## [1.7.0](https://github.com/espressif/esp-protocols/commits/mdns-v1.7.0)
+
+### Features
+
+- Support user defined allocators ([88162d1f](https://github.com/espressif/esp-protocols/commit/88162d1f))
+- Allow allocate memory with configured caps ([7d29b476](https://github.com/espressif/esp-protocols/commit/7d29b476))
+
+### Bug Fixes
+
+- Adjust some formatting per indent-cont=120 ([5b2077e3](https://github.com/espressif/esp-protocols/commit/5b2077e3))
+
 ## [1.6.0](https://github.com/espressif/esp-protocols/commits/mdns-v1.6.0)
 
 ### Features

@@ -401,49 +401,218 @@ void multi_machine_interface_destroy(multi_machine_interface_t *self) {
     }
 }
 
+#define MACH_MEMCPY(prop) (memcpy(mm->base.prop, mach->prop, sizeof(mach->prop)))
+#define MACH_ARRCPY(prop) do { \
+    if (mm->base.num_##prop > 0) { free(mm->base.prop); } \
+    if (mach->num_##prop > 0) { \
+        size_t __len_a = sizeof(mach->prop[0]) * mach->num_##prop; \
+        mm->base.prop = malloc(__len_a); \
+        memcpy(mm->base.prop, mach->prop, __len_a); \
+    } \
+} while (0)
+
+static void _mach_copy_homed(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_MEMCPY(axes_homed);
+    MACH_MEMCPY(position);
+    MACH_MEMCPY(wcs_position);
+    MACH_MEMCPY(target_position);
+}
+
+static void _mach_copy_wcs(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    mm->base.wcs = mach->wcs;
+}
+
+static void _mach_copy_feed(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    mm->base.feed = mach->feed;
+    mm->base.feed_req = mach->feed_req;
+}
+
+static void _mach_copy_pos(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_MEMCPY(axes_homed);
+    MACH_MEMCPY(position);
+    MACH_MEMCPY(wcs_position);
+    MACH_MEMCPY(target_position);
+    // mm->base.current_move_axis = mach->current_move_axis;
+    // mm->base.current_move_step = mach->current_move_step;
+    mm->base.wcs = mach->wcs;
+    mm->base.z_offs = mach->z_offs;
+    mm->base.feed = mach->feed;
+    mm->base.feed_req = mach->feed_req;
+    // mm->base.move_relative = mach->move_relative;
+    // mm->base.move_step = mach->move_step;
+}
+
+static void _mach_copy_probes(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_ARRCPY(probes);
+}
+
+static void _mach_copy_files(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+        if (mm->base.filelists[i].fdir) {
+            free((void *) mm->base.filelists[i].fdir);
+        }
+        if (mm->base.filelists[i].files) {
+            for (size_t j = 0; mm->base.filelists[i].files[j] != NULL; ++j) {
+                free((void *) mm->base.filelists[i].files[j]);
+            }
+        }
+        mm->base.filelists[i].fdir = NULL;
+        mm->base.filelists[i].files = NULL;
+    }
+    for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+        if (mach->filelists[i].fdir != NULL) {
+            size_t n_files = 0;
+            for (n_files = 0; mach->filelists[i].files != NULL; ++n_files) {}
+            mm->base.filelists[i].fdir = strdup(mach->filelists[i].fdir);
+            mm->base.filelists[i].files = malloc(sizeof(char *) * n_files + 1);
+            for (size_t j = 0; j < n_files; ++j) {
+                mm->base.filelists[i].files[j] = strdup(mach->filelists[i].files[j]);
+            }
+            mm->base.filelists[i].files[n_files] = NULL;
+        }
+    }
+}
+
+static void _mach_copy_end_stops(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_ARRCPY(end_stops);
+}
+
+static void _mach_copy_spindles(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_ARRCPY(spindles);
+}
+
+static void _mach_copy_message_box(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    if (mach->message_box) {
+        if (!mm->base.message_box) { 
+            free(mm->base.message_box->title);
+            free(mm->base.message_box->text);
+            for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
+                mm->base.message_box->choices[i];
+            }
+            free(mm->base.message_box->choices);
+        }
+        mm->base.message_box = malloc(sizeof(message_box_t));
+        mm->base.message_box->title = strndup(mach->message_box->title, 128);
+        mm->base.message_box->text = strndup(mach->message_box->text, 512);
+        mm->base.message_box->num_choices = mach->message_box->num_choices;
+        mm->base.message_box->choices = malloc(sizeof(char *) * mach->message_box->num_choices);
+        for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
+            mm->base.message_box->choices[i] = strndup(mach->message_box->choices[i], 50);
+       }
+       mm->base.message_box->machine = &mm->base;
+    }
+}
+
+static void _mach_copy_state(multi_machine_interface_t *mm, machine_interface_t *mach) {
+    MACH_MEMCPY(axes_homed);
+    MACH_MEMCPY(position);
+    MACH_MEMCPY(wcs_position);
+    MACH_MEMCPY(target_position);
+    // mm->base.current_move_axis = mach->current_move_axis;
+    // mm->base.current_move_step = mach->current_move_step;
+    mm->base.wcs = mach->wcs;
+    mm->base.z_offs = mach->z_offs;
+    mm->base.feed = mach->feed;
+    mm->base.feed_req = mach->feed_req;
+    // mm->base.move_relative = mach->move_relative;
+    // mm->base.move_step = mach->move_step;
+
+    if (mach->tool) {
+        if (mm->base.tool) { free((void *) mm->base.tool); }
+        mm->base.tool = strdup(mach->tool); 
+    }
+
+    MACH_ARRCPY(probes);
+    MACH_ARRCPY(end_stops);
+    MACH_ARRCPY(spindles);
+
+    if (mach->message_box) {
+        if (!mm->base.message_box) { 
+            free(mm->base.message_box->title);
+            free(mm->base.message_box->text);
+            for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
+                mm->base.message_box->choices[i];
+            }
+            free(mm->base.message_box->choices);
+        }
+        mm->base.message_box = malloc(sizeof(message_box_t));
+        mm->base.message_box->title = strndup(mach->message_box->title, 128);
+        mm->base.message_box->text = strndup(mach->message_box->text, 512);
+        mm->base.message_box->num_choices = mach->message_box->num_choices;
+        mm->base.message_box->choices = malloc(sizeof(char *) * mach->message_box->num_choices);
+        for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
+            mm->base.message_box->choices[i] = strndup(mach->message_box->choices[i], 50);
+       }
+       mm->base.message_box->machine = &mm->base;
+    }
+
+}
+
+#undef MACH_MEMCPY
+#undef MACH_ARRCPY
+
 void _mach_cb_state(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
     // NOP, done on every task loop iter.
+    // ? _mach_copy_state(self, mach);
+    _mach_copy_pos(self, mach);
 }
 
 void _mach_cb_pos(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+
+    _mach_copy_pos(self, mach);
+    LOGI(TAG, "Pos updated.");
     machine_interface_position_updated(&self->base);
 }
 
 void _mach_cb_home(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+
+    _mach_copy_homed(self, mach);
     machine_interface_home_updated(&self->base);
 }
 
 void _mach_cb_wcs(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+
+    _mach_copy_wcs(self, mach);
     machine_interface_wcs_updated(&self->base);
 }
 
 void _mach_cb_feed(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+    _mach_copy_feed(self, mach);
     machine_interface_feed_updated(&self->base);
 }
 
 void _mach_cb_sensors(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+    
+    _mach_copy_probes(self, mach);
+    _mach_copy_end_stops(self, mach);
+
     machine_interface_sensors_updated(&self->base);
 }
 
 
 void _mach_cb_dialogs(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+    _mach_copy_message_box(self, mach);
     machine_interface_dialogs_updated(&self->base);
 }
 
 void _mach_cb_spindles(machine_interface_t *mach, void *user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+    _mach_copy_spindles(self, mach);
     machine_interface_spindles_tools_updated(&self->base);
 }
 
 void _mach_cb_files(machine_interface_t *mach, void *user_data, const char *path, const char **files) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
+
+    _mach_copy_files(self, mach);
+
     machine_interface_files_updated(&self->base, path);
 }
 
@@ -466,6 +635,6 @@ bool multi_machine_add_impl(multi_machine_interface_t *self, machine_interface_t
     machine_interface_add_spindles_tools_changed_cb(machine, self, _mach_cb_spindles);
     machine_interface_add_files_changed_cb(machine, NULL, self, _mach_cb_files);
 
-    ESP_LOGI(TAG, "Added machine interface, total: %zu", self->num_machines);
+    ESP_LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
     return true;
 }

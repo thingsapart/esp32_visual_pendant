@@ -57,7 +57,7 @@
 #define ESP_LOGD LOGD
 
 // Verbose.
-#define LOGV(tag, fmt, ...) _df(-1, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#define LOGV(tag, fmt, ...) _df(-2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 
 #else
 #include <stdio.h>
@@ -81,5 +81,7 @@
 #define _d(lvl, s)
 #define _df(lvl, format, ...)
 #endif
+
+void LOG_CURR_TASK();
 
 #endif // __DEBUG_H_

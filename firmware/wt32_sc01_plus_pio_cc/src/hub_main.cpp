@@ -19,6 +19,7 @@
 
 #include "machine/machine_interface.h"
 #include "machine/machine_rrf.h"
+#include "machine/machine_remote.h" // for message_box_t_to_payload function.
 
 #include "tasks/machine_send_task.h"
 #include "tasks/machine_response_proc_task.h"
@@ -38,16 +39,17 @@ static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
 static machine_rrf_t *g_machine = NULL;
 static machine_interface_t *g_machine_base = NULL;
 static int g_full_state_counter = 0;
+static uint16_t g_binary_seq_id = 0; // Sequence ID counter for sending binary payloads
 
 #define PAYLOAD_MAX (ESP_NOW_MAX_DATA_LEN + 1)
 
-#define HUB_TASK_PRIORITY (tskIDLE_PRIORITY + 2)
+#define HUB_TASK_PRIORITY (tskIDLE_PRIORITY + 1)
 
 #ifdef ASYNC_RESPONSE_PROCESSING
 #define MAX_MSG_BUFFER 0
 
 #define RECV_TASK_PRIORITY (tskIDLE_PRIORITY + 1)
-#define RECV_QUEUE_LENGTH 5
+#define RECV_QUEUE_LENGTH 3
 
 #else
 #define MAX_MSG_BUFFER 20
@@ -61,12 +63,93 @@ static size_t *message_lens;
 static size_t message_buffer_len;
 #endif
 
-// --- ESP-NOW Message Types ---
+bool send_binary_payload(const void* payload, const size_t data_len, binary_payload_sub_type_t payload_type) {
+    if (!payload || data_len == 0) {
+        LOGE(TAG, "send_binary_payload: Invalid payload or zero length.");
+        return false;
+    }
+
+    const uint8_t* payload_bytes = (const uint8_t*)payload;
+    uint16_t current_seq_id = g_binary_seq_id;
+
+    // Calculate maximum data bytes per fragment
+    const size_t max_frag_data_len = PAYLOAD_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
+    if (max_frag_data_len <= 0) {
+        LOGE(TAG, "send_binary_payload: PAYLOAD_MAX too small for header.");
+        return false; // Should not happen with standard ESP_NOW_MAX_DATA_LEN
+    }
+
+    // Calculate total number of fragments needed
+    const uint16_t total_fragments = (data_len + max_frag_data_len - 1) / max_frag_data_len;
+
+    LOGI(TAG, "Sending binary payload: Seq=%u, Type=%u, TotalSize=%zu, Fragments=%u, MaxFragData=%zu",
+         current_seq_id, payload_type, data_len, total_fragments, max_frag_data_len);
+
+    // Use a stack buffer for the fragment message (header + max data)
+    uint8_t frag_buffer[PAYLOAD_MAX]; // Max possible size for one ESP-NOW message
+    binary_fragment_msg_t* frag_msg = (binary_fragment_msg_t*)frag_buffer;
+
+    size_t bytes_sent = 0;
+    bool all_sent_ok = true;
+
+    for (uint16_t i = 0; i < total_fragments; ++i) {
+        uint32_t current_offset = bytes_sent;
+        uint16_t current_len = std::min((size_t)max_frag_data_len, data_len - bytes_sent);
+
+        // Fill the header
+        frag_msg->type = MSG_TYPE_BINARY;
+        frag_msg->sub_type = payload_type;
+        frag_msg->seq_id = current_seq_id;
+        frag_msg->total_payload_size = data_len;
+        frag_msg->total_fragments = total_fragments;
+        frag_msg->fragment_index = i;
+        frag_msg->fragment_offset = current_offset;
+        frag_msg->fragment_len = current_len;
+
+        // Copy the data chunk into the buffer right after the header
+        memcpy(frag_msg->data, payload_bytes + current_offset, current_len);
+
+        // Calculate the total size of this specific fragment message
+        size_t total_frag_msg_size = BINARY_FRAGMENT_MSG_HEADER_SIZE + current_len;
+
+        LOGD(TAG, "  Sending Frag %u/%u: Offset=%u, Len=%u, TotalMsgSize=%zu",
+             i, total_fragments, current_offset, current_len, total_frag_msg_size);
+
+        // Send the fragment (using the broadcast address)
+        if (!remote_wrapper_send(display_mac_address, frag_buffer, total_frag_msg_size)) {
+            LOGW(TAG, "Failed to queue fragment %u for sending.", i);
+            all_sent_ok = false;
+            break;
+        }
+
+        bytes_sent += current_len;
+
+        // Add small delay between fragments if experiencing issues
+        // vTaskDelay(pdMS_TO_TICKS(5));
+    }
+
+    if (bytes_sent != data_len) {
+         LOGE(TAG, "Logic error in fragmentation: bytes_sent (%zu) != data_len (%zu)", bytes_sent, data_len);
+         all_sent_ok = false; // Indicate an internal error
+    }
+
+    // Increment the global sequence ID for the *next* binary message
+    if (all_sent_ok) { // Or increment even if sending failed? Decide based on recovery strategy.
+        g_binary_seq_id++;
+        LOGI(TAG, "Binary payload seq %u queued.", current_seq_id);
+    } else {
+        LOGW(TAG, "Failed to queue all fragments for binary payload seq %u.", current_seq_id);
+    }
+
+    return all_sent_ok;
+}
 
 // --- Callback Functions (for machine interface) ---
 // These are called when the machine's state changes.
 
 void on_machine_state_change(machine_interface_t *machine, void *user_data) {
+  LOG_CURR_TASK();
+
   // Send status update message
   status_msg_t msg;
   msg.type = MSG_TYPE_STATUS;
@@ -127,7 +210,19 @@ void on_sensors_change(machine_interface_t *machine, void *user_data) {
 }
 
 void on_dialogs_change(machine_interface_t *machine, void *user_data) {
-  // TODO
+  LOGI(TAG, "Dialog change detected.");
+  if (machine->message_box) {
+      LOGI(TAG, "Message box present, attempting to serialize and send.");
+      size_t payload_size;
+      void* msg_box_payload = message_box_t_to_payload(machine->message_box, &payload_size);
+      if (msg_box_payload) {
+          LOGI(TAG, "Serialized message box to %zu bytes.", payload_size);
+          send_binary_payload(msg_box_payload, payload_size, MSG_SUB_TYPE_MESSAGE_BOX);
+          free(msg_box_payload);
+      } else {
+          LOGE(TAG, "Failed to serialize message box.");
+      }
+  }
 }
 
 void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
@@ -630,8 +725,10 @@ void setup_machine_interface() {
   remote_recv_task_run();
 }
 
+TaskHandle_t hub_task_handle = NULL;
+
 void setup_hub_tasks() {
-  xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL, HUB_TASK_PRIORITY, NULL, 0);
+  xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL, HUB_TASK_PRIORITY, &hub_task_handle, 0);
 }
 
 TaskHandle_t machine_rrf_proc_task_handle = NULL;
@@ -699,10 +796,13 @@ void setup() {
     LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
     abort = true;
   }
+
+  LOGI(TAG, "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n", recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle, hub_task_handle);
 #endif
 
 #ifndef USE_ARDINO_SETUP_LOOP
   setup_hub_tasks();
+  LOGI(TAG, "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n", recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle, hub_task_handle);
 #else
   LOGI(TAG, "Machine loaded..\n");
 #endif

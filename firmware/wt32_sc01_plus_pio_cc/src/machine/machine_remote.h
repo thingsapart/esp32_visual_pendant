@@ -53,6 +53,8 @@ bool machine_remote_setup_response_processing_task(
     machine_interface_remote_t *self, QueueHandle_t task_event_queue);
 #endif
 
+void* message_box_t_to_payload(const message_box_t *msg_box, size_t *out_size);
+
 #ifdef __cplusplus
 }
 #endif

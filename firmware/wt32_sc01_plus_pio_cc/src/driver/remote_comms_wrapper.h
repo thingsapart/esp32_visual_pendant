@@ -29,8 +29,14 @@ typedef enum {
   MSG_TYPE_FEED,
   MSG_TYPE_SPINDLES_TOOLS,
   MSG_TYPE_SENSORS_CHANGED,
-  MSG_TYPE_DIALOG_UPDATED,
+  MSG_TYPE_BINARY,         // Currently used for dialogs, file lists, sub-typed.
 } remote_message_type_t;
+
+// MSG_TYPE_BINARY sub-types.
+typedef enum {
+  MSG_SUB_TYPE_MESSAGE_BOX,
+  MSG_SUB_TYPE_FILE_LIST,
+} binary_payload_sub_type_t;
 
 typedef struct {
   uint8_t type; // MSG_TYPE_KEEP_ALIVE
@@ -81,6 +87,24 @@ typedef struct {
                 // TODO, add probes and endstops here.
 } sensors_changed_msg_t;
 
+// NOTE: This structure defines the *header* for a binary fragment message.
+// The actual payload data follows immediately after in the ESP-NOW message.
+// Ensure total size (header + data) <= ESP_NOW_MAX_DATA_LEN.
+typedef struct {
+  uint8_t type;               // MSG_TYPE_BINARY
+  uint8_t sub_type;           // binary_payload_sub_type_t: What the complete payload represents
+  uint16_t seq_id;            // Sequence ID for the entire multi-fragment message
+  uint32_t total_payload_size;// Total size of the original binary payload in bytes
+  uint16_t total_fragments;   // How many fragments make up the complete payload
+  uint16_t fragment_index;    // 0-based index of this fragment
+  uint32_t fragment_offset;   // Start offset of this fragment's data in the original payload
+  uint16_t fragment_len;      // Length of the payload data *in this fragment*
+  uint8_t data[];             // Flexible array member for the fragment data
+} binary_fragment_msg_t;
+
+// Helper macro to get the size of the header part of binary_fragment_msg_t
+#define BINARY_FRAGMENT_MSG_HEADER_SIZE (offsetof(binary_fragment_msg_t, data))
+
 typedef union {
   uint8_t
       type; // all structs that are part of the union MUST start with a type.
@@ -92,7 +116,8 @@ typedef union {
   feed_msg_t feed;
   spindles_tools_msg_t spindles_tools;
   sensors_changed_msg_t sensors;
-  // add more message types
+  // NOTE: binary_fragment_msg_t is NOT included here because of the flexible array member.
+  // binary_fragment_msg_t binary_fragment;
 } remote_msg_t;
 
 typedef enum {
@@ -203,6 +228,8 @@ bool remote_wrapper_add_peer(const uint8_t *mac_addr);
 bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
                                           uint8_t *stored_mac_addr);
 bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                         size_t len);
+bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
                          size_t len);
 void remote_wrapper_deinit();
 

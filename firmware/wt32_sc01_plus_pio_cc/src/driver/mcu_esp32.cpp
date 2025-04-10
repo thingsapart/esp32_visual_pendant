@@ -157,4 +157,70 @@ void mcu_startup() {
   _d(0, "POST-INIT DONE");
 }
 
+void LIST_TASKS() {
+    const char *TAG = "LIST_TASKS";
+
+    // Get the number of tasks
+    size_t num_tasks = uxTaskGetNumberOfTasks();
+
+    // Allocate memory for TaskStatus_t structures
+    TaskStatus_t *task_status_array = (TaskStatus_t *)pvPortMalloc(num_tasks * sizeof(TaskStatus_t));
+
+    // Check if memory allocation was successful
+    if (task_status_array == NULL) {
+        LOGI(TAG, "Memory allocation failed!\n");
+        return;
+    }
+
+    // Get the system state
+    size_t num_tasks_populated = uxTaskGetSystemState(task_status_array, num_tasks, NULL);
+
+    // Check if the function returned the correct number of tasks
+    if (num_tasks_populated != num_tasks) {
+        LOGI(TAG, "Error: uxTaskGetSystemState returned %zu tasks, expected %zu\n", num_tasks_populated, num_tasks);
+        vPortFree(task_status_array);
+        return;
+    }
+
+    // Print task information
+    printf("FreeRTOS Task List:\n");
+    for (size_t i = 0; i < num_tasks; i++) {
+        LOGI(TAG, "  Task Name: %s\n", task_status_array[i].pcTaskName);
+        LOGI(TAG, "  Task Priority: %u\n", task_status_array[i].uxCurrentPriority);
+        LOGI(TAG, "  Task Base Priority: %u\n", task_status_array[i].uxBasePriority);
+        LOGI(TAG, "  Task State: %s\n", (task_status_array[i].eCurrentState == eRunning) ? "Running" : (task_status_array[i].eCurrentState == eReady) ? "Ready" : (task_status_array[i].eCurrentState == eBlocked) ? "Blocked" : "Other");
+        LOGI(TAG, "  Task Handle: 0x%X\n", task_status_array[i].xHandle);
+        LOGI(TAG, "  Task Stack High Water Mark: %u\n", task_status_array[i].usStackHighWaterMark);
+        LOGI(TAG, "\n");
+    }
+
+    // Free the allocated memory
+    vPortFree(task_status_array);
+}
+
+void LOG_CURR_TASK() {
+#if 0
+  TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+  TaskStatus_t det;
+
+  if (!xHandle) {
+    LOGW("LOG_CURR_TASK", "Cannot determine current task handle");
+    return;
+  }
+
+  static char cBuffer[512];
+  vTaskGetRunTimeStats(cBuffer);
+  LOGI("LOG_CURR_TASK", "System Task Info:\n\n%s", cBuffer);
+
+  vTaskGetInfo(xHandle, &det, pdTRUE, eInvalid);
+  LOGI(det.pcTaskName, "Name: %s (#%d), Prio: %d (%d), High watermark: %d", 
+      det.pcTaskName, det.xTaskNumber, det.uxCurrentPriority, det.uxBasePriority, det.usStackHighWaterMark);
+#else
+  TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+  //LIST_TASKS();
+
+  LOGI("LOG_CURR_TASK", "Task (%d), memory used: %d", xHandle, uxTaskGetStackHighWaterMark(NULL));
+#endif
+}
+
 #endif
