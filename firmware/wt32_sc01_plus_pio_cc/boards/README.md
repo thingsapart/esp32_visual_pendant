@@ -1,0 +1,1 @@
+Some board configs from OpenHASP and https://github.com/rzeldent/platformio-espressif32-sunton/ .
