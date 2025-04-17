@@ -8,6 +8,7 @@
 #include "ui/tab_jog.h"
 #include "ui/tab_probe.h"
 #include "ui/tab_machine.h"
+#include "ui/tab_status.h"
 #include "ui/modals.h"
 #include "ui_helpers.h"
 
@@ -98,6 +99,9 @@ void interface_deinit(interface_t *interface) {
     if (interface->font_lcd_24) {
         lv_binfont_destroy(interface->font_lcd_24);
     }
+    if (interface->font_kode_20) {
+        lv_binfont_destroy(interface->font_kode_20);
+    }
 #endif
 }
 
@@ -153,6 +157,7 @@ void interface_fs_init(interface_t *interface) {
 
 #ifndef LOAD_BIN_FONT_FS
     LV_FONT_DECLARE(lcd_7_segment_24);
+    LV_FONT_DECLARE(kode_20);
 
     #define LV_FONT_ASSIGN(dest, font) \
         do { const lv_font_t *font_addr = &font; memcpy(&dest, &font_addr, sizeof(lv_font_t *)); } while (0);
@@ -191,8 +196,15 @@ void interface_init_fonts(interface_t *interface) {
     if (!interface->font_lcd_24) {
         LV_LOG_WARN("Failed to load font: %s", font_path);
     }
+
+    snprintf(font_path, sizeof(font_path), "%skode_20.bin", base_path);
+    interface->font_kode_20 = lv_binfont_create(font_path);
+    if (!interface->font_kode_20) {
+        LV_LOG_WARN("Failed to load font: %s", font_path);
+    }
 #else
     LV_FONT_ASSIGN(interface->font_lcd_24, lcd_7_segment_24);
+    LV_FONT_ASSIGN(interface->font_kode_20, kode_20);
 #endif
 }
 
@@ -235,20 +247,21 @@ void interface_init_main_tabs(interface_t *interface) {
     lv_obj_t *tab_jog = lv_tabview_add_tab(tabv, "Jog");
     lv_obj_t *tab_probe = lv_tabview_add_tab(tabv, "Probe");
     lv_obj_t *tab_machine = lv_tabview_add_tab(tabv, "Machine");
-    interface->tab_job_gcode = lv_tabview_add_tab(tabv, "Status");
+    lv_obj_t *tab_status = lv_tabview_add_tab(tabv, "Status");
     interface->tab_tool = lv_tabview_add_tab(tabv, "Tools");
     interface->tab_cam = lv_tabview_add_tab(tabv, "CAM");
 
     _maximize_client_area(tab_jog);
     _maximize_client_area(tab_probe);
     _maximize_client_area(tab_machine);
-    _maximize_client_area(interface->tab_job_gcode);
+    _maximize_client_area(tab_status);
     _maximize_client_area(interface->tab_tool);
     _maximize_client_area(interface->tab_cam);
 
     interface->tab_jog = tab_jog_create(tabv, interface, tab_jog);
     interface->tab_probe = tab_probe_create(tabv, interface, tab_probe);
     interface->tab_machine = tab_machine_create(tabv, interface, tab_machine);
+    interface->tab_job_gcode = tab_status_create(tabv, interface, tab_status);
 
     #ifdef POSIX
         mk_container(NULL, interface->scr,
@@ -357,7 +370,7 @@ void _mach_current_move_axis_changed(machine_interface_t *mach, void *user_data)
     interface->machine_state_udated.current_move_axis_changed = true;
 }
 
-void _mach_files_changed(machine_interface_t *mach, void *user_data, const char *path, const char **files) {
+void _mach_files_changed(machine_interface_t *mach, void *user_data, const char *path, char **files) {
     interface_t *interface = (interface_t *)user_data;
     size_t idx = MAX_FILE_LISTS;
     for (size_t i = 0; i < MAX_FILE_LISTS; i++) {
@@ -580,21 +593,26 @@ void message_box_t_modal(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
     message_box_t *m = (message_box_t *) interface->machine->message_box;
     if (!m) { return; }
-    _df(-1, "UPDATE MBOX %s, %s => %d", m->title, m->text, m->seq);
+    LOGI(TAG, "UPDATE MBOX %s, %s => %d", m->title, m->text, m->seq);
 
     char title[64];
     snprintf(title, sizeof(title), "%s (%d)", m->title, m->seq);
 
     close_curr_modal();
 
+#ifdef RECOLOR_HTML_TEXT
     size_t ftlen = recolor_html_text_len(m->text);
     char ftext[ftlen + 1];
     recolor_html_text(m->text, ftext);
+#else
+    char *ftext = m->text;
+#endif
 
     switch (m->mode) {
     case MESSAGE_INFO:
+    case MESSAGE:
         do {
-            const char *buttons[] = { "OK", NULL };
+            const char *buttons[] = { "Close", NULL };
             const modal_button_cb_t cbs[] = { machine_ok_cb, NULL };
             lv_obj_t * res = button_modal(title, ftext, buttons, cbs, m);
             m->user_data = res;
@@ -641,7 +659,7 @@ void message_box_t_modal(machine_interface_t *mach, void *user_data) {
         } while (0);
         break;
     default:
-        _df(1, "Unsupported message box type: S%d - implementation TODO.", m->mode);
+        LOGW(TAG, "Unsupported message box type: S%d - implementation TODO [M_INFO = %d, M_OK = %d, M_OK_CANCEL = %d, M_CHOICE = %d].", m->mode, MESSAGE_INFO, MESSAGE_OK, MESSAGE_OK_CANCEL, MESSAGE_CHOICE);
         break;
     }
 }

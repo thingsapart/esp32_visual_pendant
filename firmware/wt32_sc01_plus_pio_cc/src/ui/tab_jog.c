@@ -306,8 +306,7 @@ tab_jog_t *tab_jog_create(lv_obj_t *tabv, interface_t *interface, lv_obj_t *tab)
      tj->interface = interface;
      tj->tab = tab;
      tj->jog_dial = jog_dial_create(tab, interface);
-     if(!tj->jog_dial)
-     {
+     if(!tj->jog_dial) {
         LV_LOG_ERROR("Failed to create jog dial");
         free(tj); // clean up!
         return NULL;

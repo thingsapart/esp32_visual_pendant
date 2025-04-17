@@ -1,3 +1,5 @@
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
+
 #include "encoder.hpp"
 
 #include <assert.h>
@@ -62,3 +64,5 @@ void encoder_set_ui_mode() { encoder.setUiMode(); }
 
 void encoder_set_encoder_mode() { encoder.setEncoderMode(); }
 }
+
+#endif

@@ -93,6 +93,12 @@
         "stdbool.h": "c",
         "esp_wifi.h": "c",
         "esp_now.h": "c",
-        "esp_err.h": "c"
+        "esp_err.h": "c",
+        "lv_circle_buf.h": "c",
+        "lv_version.h": "c",
+        "assert.h": "c",
+        "config.h": "c",
+        "lv_vfl.h": "c",
+        "stddef.h": "c"
     }
 }

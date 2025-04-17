@@ -41,7 +41,8 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+//#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
 
 /** Possible values
  * - LV_STDLIB_BUILTIN:     LVGL's built in implementation
@@ -70,10 +71,10 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (128 * 1024U)          /**< [bytes] */
+    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
-    #define LV_MEM_POOL_EXPAND_SIZE (100 * 1024U)
+    #define LV_MEM_POOL_EXPAND_SIZE (64 * 1024U)
 
     /** Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too. */
     #define LV_MEM_ADR 0     /**< 0: unused*/
@@ -437,7 +438,7 @@
 #define LV_COLOR_MIX_ROUND_OFS  0
 
 /** Add 2 x 32-bit variables to each `lv_obj_t` to speed up getting style properties */
-#define LV_OBJ_STYLE_CACHE      0
+#define LV_OBJ_STYLE_CACHE      1
 
 /** Add `id` field to `lv_obj_t` */
 #define LV_USE_OBJ_ID           0
@@ -660,7 +661,7 @@
  * */
 #define LV_WIDGETS_HAS_DEFAULT_VALUE  1
 
-#define LV_USE_ANIMIMG    1
+#define LV_USE_ANIMIMG    0
 
 #define LV_USE_ARC        1
 
@@ -670,7 +671,7 @@
 
 #define LV_USE_BUTTONMATRIX  1
 
-#define LV_USE_CALENDAR   1
+#define LV_USE_CALENDAR   0
 #if LV_USE_CALENDAR
     #define LV_CALENDAR_WEEK_STARTS_MONDAY 0
     #if LV_CALENDAR_WEEK_STARTS_MONDAY
@@ -697,7 +698,7 @@
 
 #define LV_USE_IMAGEBUTTON     1
 
-#define LV_USE_KEYBOARD   1
+#define LV_USE_KEYBOARD   0
 
 #define LV_USE_LABEL      1
 #if LV_USE_LABEL
@@ -706,7 +707,7 @@
     #define LV_LABEL_WAIT_CHAR_COUNT 3  /**< The count of wait chart */
 #endif
 
-#define LV_USE_LED        1
+#define LV_USE_LED        0
 
 #define LV_USE_LINE       1
 
@@ -758,20 +759,20 @@
 #define LV_USE_THEME_DEFAULT 1
 #if LV_USE_THEME_DEFAULT
     /** 0: Light mode; 1: Dark mode */
-    #define LV_THEME_DEFAULT_DARK 0
+    #define LV_THEME_DEFAULT_DARK 1
 
     /** 1: Enable grow on press */
-    #define LV_THEME_DEFAULT_GROW 1
+    #define LV_THEME_DEFAULT_GROW 0
 
     /** Default transition time in ms. */
     #define LV_THEME_DEFAULT_TRANSITION_TIME 80
 #endif /*LV_USE_THEME_DEFAULT*/
 
 /** A very simple theme that is a good starting point for a custom theme */
-#define LV_USE_THEME_SIMPLE 1
+#define LV_USE_THEME_SIMPLE 0
 
 /** A theme designed for monochrome displays */
-#define LV_USE_THEME_MONO 1
+#define LV_USE_THEME_MONO 0
 
 /*==================
  * LAYOUTS

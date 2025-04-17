@@ -131,9 +131,9 @@ void print_mac_address() {
 }
 
 void mcu_setup() {
-  Serial.begin(115200);
 
 #ifndef USB_UART_PIN_TX
+  Serial.begin(115200);
   add_standard_serial();
 #else
   init_standard_serial(115200, CFG_SERIAL_8N1, USB_UART_PIN_RX,

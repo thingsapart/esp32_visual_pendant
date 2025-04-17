@@ -406,7 +406,7 @@ static bool _machine_rrf_parse_m20_response(machine_rrf_t *self, cJSON *json_obj
     int num_files = cJSON_GetArraySize(files);
 
     // Allocate memory for the filenames (array of char*)
-    const char **filenames = (const char **)malloc(num_files * sizeof(char *));
+    char **filenames = (char **)malloc(num_files * sizeof(char *));
     if (!filenames) {
         _d(2,  "Failed to allocate memory for filenames");
         return false;
@@ -559,9 +559,18 @@ static bool _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
             if (seq < self->message_box_last_dismissed_seq) {
                 _machine_rrf_modal_cancel(&self->base, seq);
             }
+            if (self->base.message_box && seq == self->base.message_box->seq) {
+                LOGI(TAG, "MSG BOX: seq %d already seen.", seq);
+                return true;
+            }
+
+            LOGI(TAG, "base.msg_box: %p, base seq: %d, last_seq: %d", self->base.message_box, self->base.message_box ? self->base.message_box->seq : -1, self->message_box_last_dismissed_seq);
+
             if (!self->base.message_box || (self->base.message_box->seq != seq && seq > self->message_box_last_dismissed_seq)) {
                 const char *title = _json_key_str(result_json, "title");
                 const char *message = _json_key_str(result_json, "message");
+                LOGI(TAG, "MSG BOX: %s => %s", title, message);
+
                 int mode = _json_key_int(result_json, "mode");
                 size_t num_choices = _json_key_arr_size(result_json, "choices");
                 char **choices = malloc(sizeof(char *) * num_choices);

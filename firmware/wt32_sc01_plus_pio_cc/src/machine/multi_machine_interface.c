@@ -483,7 +483,7 @@ static void _mach_copy_spindles(multi_machine_interface_t *mm, machine_interface
 
 static void _mach_copy_message_box(multi_machine_interface_t *mm, machine_interface_t *mach) {
     if (mach->message_box) {
-        if (!mm->base.message_box) { 
+        if (mm->base.message_box) { 
             free(mm->base.message_box->title);
             free(mm->base.message_box->text);
             for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
@@ -492,6 +492,7 @@ static void _mach_copy_message_box(multi_machine_interface_t *mm, machine_interf
             free(mm->base.message_box->choices);
         }
         mm->base.message_box = malloc(sizeof(message_box_t));
+        mm->base.message_box->mode = mach->message_box->mode;
         mm->base.message_box->title = strndup(mach->message_box->title, 128);
         mm->base.message_box->text = strndup(mach->message_box->text, 512);
         mm->base.message_box->num_choices = mach->message_box->num_choices;
@@ -597,8 +598,11 @@ void _mach_cb_sensors(machine_interface_t *mach, void *user_data) {
 
 
 void _mach_cb_dialogs(machine_interface_t *mach, void *user_data) {
+    LOGI(TAG, "MESSAGE BOX UPDATED CB");
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
     _mach_copy_message_box(self, mach);
+    LOGI(TAG, "MESSAGE BOX UPDATED: %s / %s", mach->message_box->title, mach->message_box->text);
+
     machine_interface_dialogs_updated(&self->base);
 }
 
@@ -608,7 +612,7 @@ void _mach_cb_spindles(machine_interface_t *mach, void *user_data) {
     machine_interface_spindles_tools_updated(&self->base);
 }
 
-void _mach_cb_files(machine_interface_t *mach, void *user_data, const char *path, const char **files) {
+void _mach_cb_files(machine_interface_t *mach, void *user_data, const char *path, char **files) {
     multi_machine_interface_t *self = (multi_machine_interface_t *) user_data;
 
     _mach_copy_files(self, mach);
@@ -633,6 +637,7 @@ bool multi_machine_add_impl(multi_machine_interface_t *self, machine_interface_t
     machine_interface_add_feed_changed_cb(machine, self, _mach_cb_feed);
     machine_interface_add_sensors_changed_cb(machine, self, _mach_cb_sensors);
     machine_interface_add_spindles_tools_changed_cb(machine, self, _mach_cb_spindles);
+    machine_interface_add_dialogs_changed_cb(machine, self, _mach_cb_dialogs);
     machine_interface_add_files_changed_cb(machine, NULL, self, _mach_cb_files);
 
     ESP_LOGI(TAG, "Added machine interface, total: %u", self->num_machines);

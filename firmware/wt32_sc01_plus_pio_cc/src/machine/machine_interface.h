@@ -109,7 +109,7 @@ typedef struct machine_change_callback_t {
 
 typedef void (*files_changed_callback_cb_t)(machine_interface_t *mach,
                                             void *self, const char *path,
-                                            const char **files);
+                                            char **files);
 typedef struct files_changed_callback_t {
   const char *path;
   void *user_data;
@@ -162,8 +162,8 @@ typedef struct machine_interface_t {
 
 #define MAX_FILE_LISTS 2 // Currently just G-Codes and Macros, extend if needed.
   struct {
-    const char *fdir;
-    const char **files;
+    char *fdir;
+    char **files;
   } filelists[MAX_FILE_LISTS];
 
   probe_t *probes;

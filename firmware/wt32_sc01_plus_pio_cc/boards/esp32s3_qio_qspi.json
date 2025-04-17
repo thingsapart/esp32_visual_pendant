@@ -15,8 +15,7 @@
         "f_flash": "80000000L",
         "flash_mode": "qio",
         "mcu": "esp32s3",
-        "variant": "esp32s3",
-        "partitions": "esp32_partition_app1856k_spiffs320k.csv"
+        "variant": "esp32s3"
     },
     "connectivity": [
         "wifi"
@@ -28,7 +27,7 @@
         "espidf",
         "arduino"
     ],
-    "name": "Espressif Generic ESP32-S3 4M Flash, Tasmota 1856k Code/OTA, 320k FS",
+    "name": "Espressif Generic ESP32-S3 >= 4M Flash",
     "upload": {
         "flash_size": "4MB",
         "maximum_ram_size": 327680,

@@ -408,6 +408,17 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
   return port_data->stream->write(buffer, size);
 }
 
+bool serial_flush(serial_handle_t handle) {
+  serial_port_data_t *port_data = find_port_data(handle);
+  if (!port_data || !port_data->stream || !handle) {
+    return false;
+  }
+
+  port_data->stream->flush();
+
+  return true;
+}
+
 bool serial_register_line_callback(serial_handle_t handle,
                                    serial_line_callback_t callback) {
   serial_port_data_t *port_data = find_port_data(handle);
@@ -534,7 +545,8 @@ serial_handle_t get_serial_handle(int uart_num) {
   if (it != g_uart_num_to_handle.end()) {
     return it->second;
   }
-  _df(2, "get_serial_handle: Handle for UART %d not found.", uart_num);
+  Serial.write("get_serial_handle: Handle for UART not found: ");
+  Serial.write(uart_num);
   return NULL;
 }
 
@@ -542,11 +554,14 @@ void default_serial_write(const uint8_t *buf, size_t len) {
   serial_handle_t handle = get_serial_handle(-1);
   if (handle) {
     serial_write(handle, buf, len);
+    serial_flush(handle);
   } else {
     // Fallback if standard serial wasn't initialized/added
-    printf("%.*s", (int)len, (const char *)buf);
-    _d(0, "default_serial_write: Standard serial handle not found, writing to "
-          "printf.");
+    //printf("%.*s", (int)len, (const char *)buf);
+    Serial.write("Unable to find standard serial");
+    Serial.flush();
+    //_d(0, "default_serial_write: Standard serial handle not found, writing to "
+    //      "printf.");
   }
 }
 

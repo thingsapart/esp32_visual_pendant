@@ -10,8 +10,10 @@
 
 #include "debug.h"
 
-#define FONT_WIDTH 11
-#define FONT_HEIGHT 22
+#define FONT_WIDTH 14
+#define FONT_HEIGHT 32
+
+static const char *TAG = "ui/machine_pos";
 
 // --- Static Data (Coordinate Systems) ---
 // Using pointers to string literals makes this ROM-resident
@@ -121,6 +123,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     if (!parent || !coords || num_coords == 0 || !interface || digits < 3 ||
         !coord_systems || num_coord_systems == 0) {
         LV_LOG_ERROR("Invalid arguments to machine_position_wcs_create");
+        LOGE(TAG, "Invalid arguments to machine_position_wcs_create");
         return NULL;
     }
 
@@ -146,6 +149,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->axis_labels = (lv_obj_t **)malloc(num_coords * sizeof(lv_obj_t *));
     if (!mp->axis_labels) {
         LV_LOG_ERROR("Failed to allocate axis_labels array");
+        LOGE(TAG, "Failed to allocate axis_labels array");
         machine_position_wcs_destroy(mp); // Clean up
         return NULL;
     }
@@ -155,6 +159,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
    mp->coord_sys_labels = (lv_obj_t **)malloc(num_coord_systems * sizeof(lv_obj_t *));
     if (!mp->coord_sys_labels) {
         LV_LOG_ERROR("Failed to allocate coord_sys_labels array");
+        LOGE(TAG, "Failed to allocate coord_sys_labels array");
         machine_position_wcs_destroy(mp); // Clean up
         return NULL;
     }
@@ -164,6 +169,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->coord_val_labels = (lv_obj_t ***)malloc(num_coord_systems * sizeof(lv_obj_t **));
     if (!mp->coord_val_labels) {
         LV_LOG_ERROR("Failed to allocate coord_val_labels array");
+        LOGE(TAG, "Failed to allocate coord_val_labels array");
         machine_position_wcs_destroy(mp);
         return NULL;
     }
@@ -173,6 +179,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         mp->coord_val_labels[i] = (lv_obj_t **)malloc(num_coords * sizeof(lv_obj_t *));
         if (!mp->coord_val_labels[i]) {
             LV_LOG_ERROR("Failed to allocate coord_val_labels[%zu]", i);
+            LOGE(TAG, "Failed to allocate coord_val_labels[%zu]", i);
             machine_position_wcs_destroy(mp); // Clean up
             return NULL;
         }
@@ -183,6 +190,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->coord_vals = (float **)malloc(num_coord_systems * sizeof(float *));
     if (!mp->coord_vals) {
          LV_LOG_ERROR("Failed to allocate coord_vals");
+         LOGE(TAG, "Failed to allocate coord_vals");
         machine_position_wcs_destroy(mp);
         return NULL;
     }
@@ -193,6 +201,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         mp->coord_vals[i] = (float*) malloc(num_coords * sizeof(float));
         if (!mp->coord_vals[i]) {
             LV_LOG_ERROR("Failed to allocate coord_vals[%zu]", i);
+            LOGE(TAG, "Failed to allocate coord_vals[%zu]", i);
             machine_position_wcs_destroy(mp); // Clean up
             return NULL;
         }
@@ -207,6 +216,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->container = lv_obj_create(parent);
     if (!mp->container) {
         LV_LOG_ERROR("Failed to create container");
+        LOGE(TAG, "Failed to create container");
         machine_position_wcs_destroy(mp);
         return NULL;
     }
@@ -229,6 +239,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->col_dsc = (lv_coord_t *)malloc((1 + num_coord_systems + 1) * sizeof(lv_coord_t));
      if (!mp->col_dsc) {
         LV_LOG_ERROR("Failed to allocate col_dsc");
+        LOGE(TAG, "Failed to allocate col_dsc");
         machine_position_wcs_destroy(mp);
         return NULL;
     }
@@ -243,6 +254,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     if (!mp->row_dsc)
     {
         LV_LOG_ERROR("Failed to allocate row_dsc");
+        LOGE(TAG, "Failed to allocate row_dsc");
         free(mp->col_dsc); // clean up col_dsc as well.
         machine_position_wcs_destroy(mp);
         return NULL;
@@ -261,6 +273,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
     mp->axis_label_ids = malloc(num_coords * sizeof(size_t));
      if (!mp->axis_label_ids) {
         LV_LOG_ERROR("Failed to allocate axis_label_ids");
+        LOGE(TAG, "Failed to allocate axis_label_ids");
         machine_position_wcs_destroy(mp);
         return NULL;
     }
@@ -270,6 +283,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         mp->axis_labels[i] = lv_label_create(mp->container);
         if (!mp->axis_labels[i]) {
             LV_LOG_ERROR("axis label alloc failed!");
+            LOGE(TAG, "axis label alloc failed!");
             machine_position_wcs_destroy(mp);
             return NULL;
         }
@@ -292,26 +306,28 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
 
      // Coordinate system labels.
     for (size_t i = 0; i < num_coord_systems; i++) {
-       mp->coord_sys_labels[i] = lv_label_create(mp->container);
-        if (!mp->coord_sys_labels[i]) {
-            LV_LOG_ERROR("Failed to create coord sys labels!");
-             machine_position_wcs_destroy(mp);
+        lv_obj_t *label = lv_label_create(mp->container);
+        mp->coord_sys_labels[i] = label;
+        if (!label) {
+            LV_LOG_ERROR("Failed to create coord sys labels! %p", label);
+            LOGE(TAG, "Failed to create coord sys labels (%p)!", label);
+            machine_position_wcs_destroy(mp);
             return NULL;
         }
-        _label_text(mp->coord_sys_labels[i], coord_systems[i]); // Set text from array
-         _style_local(mp->coord_sys_labels[i], bg_color, LV_PART_MAIN, lv_color_hex(0x0000FF));
-        _style_local(mp->coord_sys_labels[i], bg_opa, LV_PART_MAIN, 100);
-         _style_local(mp->coord_sys_labels[i], margin_all, LV_PART_MAIN, 1);
-        _style_local(mp->coord_sys_labels[i], pad_all, LV_PART_MAIN, 0);
-        _style_local(mp->coord_sys_labels[i], text_align, LV_PART_MAIN, LV_TEXT_ALIGN_CENTER);
+        _label_text(label, coord_systems[i]); // Set text from array
+         _style_local(label, bg_color, LV_PART_MAIN, lv_color_hex(0x0000FF));
+        _style_local(label, bg_opa, LV_PART_MAIN, 100);
+         _style_local(label, margin_all, LV_PART_MAIN, 1);
+        _style_local(label, pad_all, LV_PART_MAIN, 0);
+        _style_local(label, text_align, LV_PART_MAIN, LV_TEXT_ALIGN_CENTER);
 
-        lv_obj_set_grid_cell(mp->coord_sys_labels[i], LV_GRID_ALIGN_STRETCH, i + 1, 1,
+        lv_obj_set_grid_cell(label, LV_GRID_ALIGN_STRETCH, i + 1, 1,
                               LV_GRID_ALIGN_STRETCH, 0, 1);
 
          // Special case: Second entry (index 1) is used to switch WCS.
         if (i == 1) {
-            lv_obj_add_event_cb(mp->coord_sys_labels[i], wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface);
-            _flag(mp->coord_sys_labels[i], LV_OBJ_FLAG_CLICKABLE, true);
+            lv_obj_add_event_cb(label, wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface);
+            _flag(label, LV_OBJ_FLAG_CLICKABLE, true);
         }
     }
 
@@ -321,6 +337,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
             mp->coord_val_labels[i][j] = lv_label_create(mp->container);
              if (!mp->coord_val_labels[i][j]) {
                 LV_LOG_ERROR("failed to create coord val label!");
+                LOGE(TAG, "failed to create coord val label!");
                 machine_position_wcs_destroy(mp);
                 return NULL;
             }

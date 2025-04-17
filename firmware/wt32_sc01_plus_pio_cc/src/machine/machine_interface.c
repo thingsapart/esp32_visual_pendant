@@ -8,7 +8,6 @@
 #include "config.h"
 #include "debug.h"
 
-
 static const char *TAG = "machine_interface"; // Used for logging
 static const char axes[] = {
         'X', 'Y', 'Z', '\0'

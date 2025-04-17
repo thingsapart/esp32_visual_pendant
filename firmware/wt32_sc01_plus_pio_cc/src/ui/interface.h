@@ -24,6 +24,7 @@ typedef struct interface_t interface_t;
 struct tab_probe_t;
 struct tab_jog_t;
 struct tab_machine_t;
+struct tab_status_t;
 
 typedef void (*machine_state_change_cb_t)(machine_interface_t *machine,
                                           void *user_data);
@@ -47,11 +48,12 @@ struct interface_t {
   FONT_CONST lv_font_t *font_lcd;
   FONT_CONST lv_font_t *font_lcd_18;
   FONT_CONST lv_font_t *font_lcd_24;
+  FONT_CONST lv_font_t *font_kode_20;
   lv_obj_t *main_tabs;
   struct tab_jog_t *tab_jog;
   struct tab_probe_t *tab_probe;
   struct tab_machine_t *tab_machine;
-  lv_obj_t *tab_job_gcode;
+  struct tab_status_t *tab_job_gcode;
   lv_obj_t *tab_tool;
   lv_obj_t *tab_cam;
   machine_state_callback_t machine_change_cbs[MAX_MACHINE_STATE_CBS];

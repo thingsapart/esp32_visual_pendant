@@ -42,8 +42,7 @@ static void btn_click_event_handler(lv_event_t *e) {
 }
 
 // --- Callback Functions (from machine_interface) ---
-static void files_changed_cb(machine_interface_t* self, void *user_data, const char* path, const char** files)
-{
+static void files_changed_cb(machine_interface_t* self, void *user_data, const char* path, char** files) {
      file_list_t *fl = (file_list_t *) user_data;
 
     // Check if this update is for this file_list instance
@@ -119,7 +118,7 @@ void file_list_refresh(file_list_t *fl) {
     fl->machine->list_files(fl->machine, fl->path); // list files and trigger callback.
 }
 
-void file_list_show_files(file_list_t *fl, const char **files) {
+void file_list_show_files(file_list_t *fl, char **files) {
     if (!fl || !files) return;
 
      // Clear the existing list

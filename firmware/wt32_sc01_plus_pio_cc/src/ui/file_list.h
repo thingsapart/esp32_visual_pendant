@@ -23,7 +23,7 @@ file_list_t *file_list_create(lv_obj_t *parent, const char *path,
                               file_click_callback_t on_file_click);
 void file_list_destroy(file_list_t *fl);
 void file_list_refresh(file_list_t *fl);
-void file_list_show_files(file_list_t *fl, const char **files);
+void file_list_show_files(file_list_t *fl, char **files);
 void file_list_init_empty(file_list_t *fl);
 
 #endif // FILE_LIST_H

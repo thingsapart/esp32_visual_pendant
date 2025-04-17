@@ -59,6 +59,9 @@
 // Verbose.
 #define LOGV(tag, fmt, ...) _df(-2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 
+// Temporary debug override, always show.
+#define LOGT(tag, fmt, ...) _df(100, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+
 #else
 #include <stdio.h>
 #define _d(lvl, s)                                                             \

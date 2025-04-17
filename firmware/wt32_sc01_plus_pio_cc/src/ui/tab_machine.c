@@ -9,6 +9,8 @@
 
 #include "debug.h"
 
+static const char *TAG = "ui/machine_pos";
+
 // --- Static Data (Chip Load Ranges) ---
 // For now, we'll just define simplified placeholders.  A full implementation
 // would require a more complex data structure to represent the nested dictionaries.
@@ -457,7 +459,7 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
             msm->position = machine_position_wcs_create(outer_obj, axes, num_axes, msm->interface, 6, default_coord_systems, num_default_coord_systems , 40); // exclude "Move"
             if (!msm->position) {
                 LV_LOG_ERROR("Failed to create machine position display");
-                _d(2, "Failed to create machine position display");
+                LOGE(TAG, "Failed to create machine position display");
 
                 return msm;
             }

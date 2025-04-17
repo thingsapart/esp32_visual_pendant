@@ -10,7 +10,7 @@
 #  include "tasks/machine_response_proc_task.h"
 #endif
 
-#define UI_DEBUG_LOG D_ERROR
+#define UI_DEBUG_LOG D_WARN
 #include "debug.h"
 
 static const char *TAG = "machine_remote";
@@ -349,7 +349,7 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self, c
 
     // Process binary message fragments to buffer directly.
     if (data[0] == MSG_TYPE_BINARY) {
-        LOGD(TAG, "Processing binary fragment directly (not buffering).");
+        LOGT(TAG, "Processing binary fragment directly (not buffering).");
         binary_message_fragment_to_buffer(self, data, data_len);
 
         return;
@@ -383,7 +383,7 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self, 
         return;
     }
 
-    LOGV(TAG, "Received Binary Fragment: Seq=%u, Frag=%u/%u, Offset=%u, Len=%u, SubType=%u",
+    LOGT(TAG, "Received Binary Fragment: Seq=%u, Frag=%u/%u, Offset=%u, Len=%u, SubType=%u",
             frag_msg->seq_id, frag_msg->fragment_index, frag_msg->total_fragments,
             frag_msg->fragment_offset, frag_msg->fragment_len, frag_msg->sub_type);
 
@@ -635,6 +635,8 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self, 
             uint8_t *ptr = (uint8_t *) data;
             uint8_t target_slot = data[1];
             binary_payload_buffer_t *target_buffer = &g_binary_payload_buffers[target_slot];
+            LOGT(TAG, "Processsing binary PAYLOAD: slot %d", target_slot);
+            LOGT(TAG, "mach %p, sub_type %d, total_sz %d", &self->base, target_buffer->sub_type, target_buffer->buffer, target_buffer->total_size);
 
             process_binary_payload(&self->base, target_buffer->sub_type, target_buffer->buffer, target_buffer->total_size);
             binary_payload_slot_cleanup(target_slot);
@@ -687,6 +689,15 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr, const uint8
     }
 
 #ifdef ASYNC_RESPONSE_PROCESSING
+
+    // Process binary message fragments to buffer directly.
+    if (data[0] == MSG_TYPE_BINARY) {
+        LOGT(TAG, "Processing binary fragment immediately (not buffering).");
+        binary_message_fragment_to_buffer(self, data, data_len);
+
+        return;
+    }
+
     if (self->proc_task_event_queue != NULL) {
         machine_response_proc_task_data_ready(self->proc_task_event_queue, data, data_len, true);
     } else {
@@ -931,22 +942,62 @@ message_box_t* message_box_t_from_payload(const void *payload, message_box_t *ms
     return msg_box;
 }
 
+void process_binary_msg_file_list(machine_interface_remote_t *mach, uint8_t *data, size_t size) {
+  file_list_payload_t *header = (file_list_payload_t *) data;
+  char *fdir = (char *) header + sizeof(*header);
+  size_t idx = MAX_FILE_LISTS;
+
+  for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+    if (strcmp(fdir, mach->base.filelists[i].fdir) == 0) { idx = i; }
+  }
+  if (idx == MAX_FILE_LISTS) {
+    LOGE(TAG, "Received enexpected file list '%s'... not using.", fdir);
+    return;
+  }
+
+  if (mach->base.filelists[idx].fdir) { free(mach->base.filelists[idx].fdir); }
+  if (mach->base.filelists[idx].files) {
+    for (size_t i = 0; mach->base.filelists[idx].files[i]; ++i) {
+      free(mach->base.filelists[idx].files[i]);
+    }
+    free(mach->base.filelists[idx].files);
+  }
+
+  mach->base.filelists[idx].files = malloc(sizeof(char *) * (header->num_files + 1));
+  mach->base.filelists[idx].fdir = strdup(fdir);
+
+  char *offset = fdir + strlen(fdir) + 1;
+  char *end = ((char *) header) + header->total_size;
+  for (size_t i = 0; i < header->num_files && offset < end; ++i) {
+    const char *fn = offset;
+    const size_t fn_len = strlen(fn) + 1;
+    mach->base.filelists[idx].files[i] = strdup(fn);
+    offset += fn_len;
+  }
+
+  LOGI(TAG, "Received FILELIST => %s:%d files...", fdir, header->num_files);
+  machine_interface_files_updated(&mach->base, mach->base.filelists[idx].fdir);
+}
+
 static void process_binary_payload(machine_interface_t *self, uint8_t sub_type, uint8_t *data, size_t size) {
   machine_interface_remote_t *mach = (machine_interface_remote_t *) self;
+  LOGT(TAG, "PROCESSING BINARY %d (= [%d, %d] ?)", sub_type, MSG_SUB_TYPE_MESSAGE_BOX, MSG_SUB_TYPE_FILE_LIST);
+
   switch (sub_type) {
     case MSG_SUB_TYPE_MESSAGE_BOX:
       if (mach->base.message_box) {
         free_message_box_t(mach->base.message_box);
       }
       mach->base.message_box = message_box_t_from_payload(data, NULL);
+      LOGI(TAG, "UNPACKED MESSAGE BOX: %s / %s", mach->base.message_box->title, mach->base.message_box->text);
       machine_interface_dialogs_updated(&mach->base);
 
       break;
     case MSG_SUB_TYPE_FILE_LIST:
-      // process_binary_msg_file_list(data, size);
+      process_binary_msg_file_list(mach, data, size);
       break;
     default:
-      LOGW(TAG, "Received unknown reassembled payload sub-type: %u", sub_type);
+      LOGT(TAG, "Received unknown reassembled payload sub-type: %u", sub_type);
       break;
   }
 }

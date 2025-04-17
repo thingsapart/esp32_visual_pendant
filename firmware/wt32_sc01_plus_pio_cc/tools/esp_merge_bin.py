@@ -115,7 +115,7 @@ def create_manifest(source, target, env):
     filename = "{}_full_{}_{}.json".format(name, flash_size, long_version)
     output_json ="{}firmware{}{}".format(OUTPUT_DIR, os.path.sep, filename)
 
-    data = {"name":"openHASP", "version": short_version, "home_assistant_domain": "openhasp", "funding_url": "https://ko-fi.com/openhasp", "new_install_prompt_erase": True, "builds": "d"}
+    data = {"name":"esp32_pendant", "version": short_version }
     builds = []
     parts = []
     parts.append({ "path": filename, "offset": 0 })

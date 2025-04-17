@@ -82,6 +82,14 @@ void serial_end(serial_handle_t handle);
 size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size);
 
 /**
+ * @brief Flushes all written data to the serial port.
+ *
+ * @param handle The handle of the serial port.
+ * @return True if succeeded otherwise false.
+ */
+bool serial_flush(serial_handle_t handle);
+
+/**
  * @brief Registers a callback function to be called when a full line (ending in
  * '\n') is received. Multiple callbacks can be registered for the same handle.
  *

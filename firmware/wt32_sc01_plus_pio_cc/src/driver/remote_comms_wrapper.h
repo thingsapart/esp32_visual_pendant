@@ -16,6 +16,8 @@
 #define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
 #endif
 
+#define REMOTE_COMMS_DATA_MAX (ESP_NOW_MAX_DATA_LEN - 1)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -101,6 +103,12 @@ typedef struct {
   uint16_t fragment_len;      // Length of the payload data *in this fragment*
   uint8_t data[];             // Flexible array member for the fragment data
 } binary_fragment_msg_t;
+
+// Header for file list.
+typedef struct {
+    size_t total_size;        // Total size including header.
+    size_t num_files;         // Number of filenames attached.
+} file_list_payload_t;
 
 // Helper macro to get the size of the header part of binary_fragment_msg_t
 #define BINARY_FRAGMENT_MSG_HEADER_SIZE (offsetof(binary_fragment_msg_t, data))
