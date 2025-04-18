@@ -99,7 +99,77 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
 #endif
 }
 
-void lvgl_test() {
+static lv_display_t *lvDisplay;
+static lv_indev_t *lvMouse;
+static lv_indev_t *lvMouseWheel;
+static lv_indev_t *lvKeyboard;
+
+void lvgl_sdl() {
+    lv_init();
+
+    // Workaround for sdl2 `-m32` crash
+    // https://bugs.launchpad.net/ubuntu/+source/libsdl2/+bug/1775067/comments/7
+    #ifndef WIN32
+        setenv("DBUS_FATAL_WARNINGS", "0", 1);
+    #endif
+
+    #if LV_USE_LOG != 0
+    lv_log_register_print_cb(lv_log_print_g_cb);
+    #endif
+
+    /* Add a display
+     * Use the 'monitor' driver which creates window on PC's monitor to simulate a display*/
+    lvDisplay = lv_sdl_window_create(SDL_HOR_RES, SDL_VER_RES);
+    lvMouse = lv_sdl_mouse_create();
+    lvMouseWheel = lv_sdl_mousewheel_create();
+    lvKeyboard = lv_sdl_keyboard_create();
+
+    lv_tick_set_cb(SDL_GetTicks);
+
+    signal(SIGINT, signal_handler);
+
+    int rrf_uart_num = add_rrf_sim_serial();
+    machine = machine_rrf_create(rrf_uart_num, MACHINE_POLL_INTERVAL, 0, 0);
+
+    // start the UI
+    // machine = duet_simulator_create(50);
+
+    interface_init(&interface, &machine->base);
+
+    // test_screen();
+    // interface = new Interface(machine);
+    _d(0, "LOADED..\n");
+
+    bRunning = true;
+    //uint32_t last_tick = SDL_GetTicks();
+    uint32_t lastTick = SDL_GetTicks();
+
+    while (bRunning) {
+      //uint32_t current_tick = SDL_GetTicks();
+      //uint32_t elapsed = current_tick - last_tick;
+      //last_tick = current_tick;
+
+
+      SDL_Delay(5);
+      Uint32 current = SDL_GetTicks();
+      lv_tick_inc(current - lastTick); // Update the tick timer. Tick is new for LVGL 9
+      lastTick = current;
+      lv_timer_handler(); // Update the UI-
+
+      /*
+      // task handler
+      lv_task_handler();
+
+      uint32_t sleep_time = (1000 / 60) - elapsed;
+      if (sleep_time < 0) {
+        usleep(sleep_time * 1000);
+      }*/
+    }
+
+    lv_sdl_quit();
+}
+
+void lvgl_sdl_prev() {
   lv_init();
 
   int screen_width = 640;
@@ -154,7 +224,8 @@ void lvgl_test() {
 }
 
 int main(int argc, char **argv) {
-  lvgl_test();
+  lvgl_sdl();
+
   return 0;
 }
 
