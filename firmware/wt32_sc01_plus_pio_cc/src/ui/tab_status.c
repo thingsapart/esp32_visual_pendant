@@ -26,7 +26,6 @@ tab_status_t *tab_status_create(lv_obj_t *tabv, interface_t *interface, lv_obj_t
     _maximize_client_area(tab);
     __scrollable(tab, false);
  
-    // ... create grid_cont, header, sidebar, content, footer ...
     lv_obj_t *grid_cont = lv_obj_create(tab);
     lv_obj_t * header, *sidebar, *content, *footer;
 

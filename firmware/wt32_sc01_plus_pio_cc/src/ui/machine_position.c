@@ -211,7 +211,6 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         }
     }
 
-
     // --- Create UI Elements ---
     mp->container = lv_obj_create(parent);
     if (!mp->container) {
@@ -326,7 +325,7 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
 
          // Special case: Second entry (index 1) is used to switch WCS.
         if (i == 1) {
-            lv_obj_add_event_cb(label, wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface);
+            lv_obj_add_event_cb(label, wcs_label_clicked_event_handler, LV_EVENT_CLICKED, interface->machine);
             _flag(label, LV_OBJ_FLAG_CLICKABLE, true);
         }
     }

@@ -124,6 +124,8 @@ void lvgl_sdl() {
     lvMouseWheel = lv_sdl_mousewheel_create();
     lvKeyboard = lv_sdl_keyboard_create();
 
+    lv_sdl_window_set_zoom(lvDisplay, 1);
+
     lv_tick_set_cb(SDL_GetTicks);
 
     signal(SIGINT, signal_handler);
