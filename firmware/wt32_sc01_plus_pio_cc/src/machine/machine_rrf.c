@@ -553,7 +553,7 @@ static bool _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
             return true; 
         }
 
-        if (cJSON_HasObjectItem(result_json, "seq") && (cJSON_HasObjectItem(result_json, "title") || cJSON_HasObjectItem(result_json, "message") || cJSON_HasObjectItem)) {
+        if (cJSON_HasObjectItem(result_json, "seq") && (cJSON_HasObjectItem(result_json, "title") || cJSON_HasObjectItem(result_json, "message"))) {
             int seq = _json_key_int(result_json, "seq");
             // If we're seeing an old messageBox somehow, cancel it?
             if (seq < self->message_box_last_dismissed_seq) {

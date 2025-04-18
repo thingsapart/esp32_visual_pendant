@@ -292,8 +292,8 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
         _label_text(mp->axis_labels[i], label_text);
         _style_local(mp->axis_labels[i], bg_opa, LV_PART_MAIN, 100);
         _style_local(mp->axis_labels[i], margin_all, LV_PART_MAIN, 1);
-         _style_local(mp->axis_labels[i], pad_all, LV_PART_MAIN, 0);
-         _style_local(mp->axis_labels[i], text_align, LV_PART_MAIN, LV_TEXT_ALIGN_CENTER);
+        _style_local(mp->axis_labels[i], pad_all, LV_PART_MAIN, 0);
+        _style_local(mp->axis_labels[i], text_align, LV_PART_MAIN, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_grid_cell(mp->axis_labels[i], LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, i + 1, 1);
         lv_obj_add_event_cb(mp->axis_labels[i], label_home_clicked_event_handler, LV_EVENT_CLICKED, mp);
         _flag(mp->axis_labels[i], LV_OBJ_FLAG_CLICKABLE, true);
@@ -315,9 +315,9 @@ machine_position_wcs_t *machine_position_wcs_create(lv_obj_t *parent,
             return NULL;
         }
         _label_text(label, coord_systems[i]); // Set text from array
-         _style_local(label, bg_color, LV_PART_MAIN, lv_color_hex(0x0000FF));
+        _style_local(label, bg_color, LV_PART_MAIN, lv_color_hex(0x0000FF));
         _style_local(label, bg_opa, LV_PART_MAIN, 100);
-         _style_local(label, margin_all, LV_PART_MAIN, 1);
+        _style_local(label, margin_all, LV_PART_MAIN, 1);
         _style_local(label, pad_all, LV_PART_MAIN, 0);
         _style_local(label, text_align, LV_PART_MAIN, LV_TEXT_ALIGN_CENTER);
 

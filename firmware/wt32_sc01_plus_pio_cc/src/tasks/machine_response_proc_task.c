@@ -1,5 +1,7 @@
 #include "machine_response_proc_task.h"
 
+#ifdef ASYNC_RESPONSE_PROCESSING
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -526,3 +528,5 @@ bool machine_response_proc_task_run(const char *task_name, TaskHandle_t *task_ha
 #ifdef __cplusplus
 }
 #endif
+
+#endif // ASYNC_RESPONSE_PROCESSING

@@ -1,7 +1,9 @@
 // machine_remote.c
 
 #include "machine_remote.h"
+
 #include <string.h>
+#include <stdlib.h>
 #include <assert.h>
 
 #include "driver/remote_comms_wrapper.h"  // For ESP-NOW communication
@@ -487,8 +489,12 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self, 
 
             uint8_t msg[2] = { MSG_TYPE_BINARY, target_slot };
 
+#ifdef ASYNC_RESPONSE_PROCESSING
             // Message done - post to task for actual processing.
             machine_response_proc_task_data_ready(self->proc_task_event_queue, msg, sizeof(msg), true);
+#else
+            // TODO:
+#endif
         }
     } else {
         LOGV(TAG, "Received duplicate fragment %u for Seq %u. Ignoring.", frag_msg->fragment_index, frag_msg->seq_id);

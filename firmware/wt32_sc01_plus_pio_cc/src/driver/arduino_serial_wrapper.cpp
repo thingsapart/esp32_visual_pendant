@@ -6,6 +6,7 @@
 #include <vector>
 
 #if defined(ESP32_HW)
+
 #include "Arduino.h"
 #include "HardwareSerial.h"
 #else
@@ -545,8 +546,10 @@ serial_handle_t get_serial_handle(int uart_num) {
   if (it != g_uart_num_to_handle.end()) {
     return it->second;
   }
+#ifdef ESP32_HW
   Serial.write("get_serial_handle: Handle for UART not found: ");
   Serial.write(uart_num);
+#endif
   return NULL;
 }
 
@@ -558,8 +561,10 @@ void default_serial_write(const uint8_t *buf, size_t len) {
   } else {
     // Fallback if standard serial wasn't initialized/added
     //printf("%.*s", (int)len, (const char *)buf);
+#ifdef ESP32_HW
     Serial.write("Unable to find standard serial");
     Serial.flush();
+ #endif
     //_d(0, "default_serial_write: Standard serial handle not found, writing to "
     //      "printf.");
   }

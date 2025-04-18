@@ -147,7 +147,7 @@ void interface_fs_init(interface_t *interface) {
         //lv_fs_arduino_esp_littlefs_init();
     #elif POSIX
         _d(0, "Loading FS...");
-        lv_fs_posix_init();
+        // lv_fs_posix_init();
 
         _d(0, "[done]");
     #endif

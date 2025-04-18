@@ -7,7 +7,12 @@
 #define MACHINE_POLL_EVERY_NTH_INTERVAL 2
 #define MACHINE_SEND_GCODE_INTERVAL_MS 100
 
-// #define RRF_SIM 1
+#ifdef POSIX
+#  define RRF_SIM 1
+#else
+// #  define RRF_SIM 1
+#endif
+
 #define RRF_SERIAL_UART_NUM 0
 // Connect to real RRF controller, but simulate moves via "G92 <AXIS>NN" when motors are not connected to controller.
 // #define CONTROLLER_BENCH_TEST
@@ -15,6 +20,9 @@
 // TOUCH and ENCODER debugging.
 #define DEBUG_TOUCH 0
 #define DEBUG_ENCODER 1
+
+// ESP32-specific settings:
+#ifdef ESP32_HW
 
 #define HUB_MAC_ADDR {0x24, 0xEC, 0x4A, 0x38, 0xF8, 0xE0}
 
@@ -29,3 +37,5 @@
 
 #define TASK_MACHINE_CORE 1            // Machine Task Core.
 #define TASK_MACHINE_STATE_PROC_CORE 1 // Machine State Processing Task Core.
+
+#endif

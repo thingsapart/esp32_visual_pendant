@@ -8,15 +8,24 @@
 
 #include "machine/machine_interface.h"
 
+#ifdef ESP32_HW
+
 #include <esp_now.h>
 #include <esp_wifi.h>
+
+#define REMOTE_COMMS_DATA_MAX (ESP_NOW_MAX_DATA_LEN - 1)
+
+#else
+
+#define REMOTE_COMMS_DATA_MAX (251)
+
+#endif
 
 #ifndef MAC2STR
 #define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
 #define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
 #endif
 
-#define REMOTE_COMMS_DATA_MAX (ESP_NOW_MAX_DATA_LEN - 1)
 
 #ifdef __cplusplus
 extern "C" {

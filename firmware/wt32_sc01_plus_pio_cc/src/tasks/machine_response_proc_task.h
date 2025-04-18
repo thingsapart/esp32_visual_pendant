@@ -1,6 +1,8 @@
 #ifndef __MACHINE_RESPONSE_PROC_TASK_H__
 #define __MACHINE_RESPONSE_PROC_TASK_H__
 
+#ifdef ASYNC_RESPONSE_PROCESSING
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,5 +55,7 @@ void machine_response_proc_task_data_ready(QueueHandle_t task_event_queue,
 #ifdef __cplusplus
 }
 #endif
+
+#endif // ASYNC_RESPONSE_PROCESSING
 
 #endif // __MACHINE_RESPONSE_PROC_TASK_H__

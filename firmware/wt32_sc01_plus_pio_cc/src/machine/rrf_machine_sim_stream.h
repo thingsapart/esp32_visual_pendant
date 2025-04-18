@@ -2,6 +2,10 @@
 #ifndef RRF_MACHINE_SIM_STREAM_H__
 #define RRF_MACHINE_SIM_STREAM_H__
 
+#include "config.h"
+
+#ifdef RRF_SIM
+
 #include <string>
 #include <vector>
 #if defined(ARDUINO) && ARDUINO >= 100
@@ -15,10 +19,14 @@ class RRFMachineSimStream : public Stream {
 #else
 #define override
 
+#include "driver/arduino_string.h"
+
+typedef ArduinoString String;
+
 class RRFMachineSimStream {
 #endif
 
-#if 0
+#ifdef ESP32_HW
 
 public:
     RRFMachineSimStream(int uart_num);
@@ -114,6 +122,10 @@ extern void add_mock_rrf_serial();
 
 #if defined(override)
 #undef override
+#endif
+
+typedef RRFMachineSimStream Stream;
+
 #endif
 
 #endif // RRF_MACHINE_SIM_STREAM_H__

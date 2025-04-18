@@ -1,6 +1,8 @@
 
 #include "machine_response_proc_task.h"
 
+#ifdef ASYNC_GCODE_SENDING
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -69,3 +71,5 @@ bool machine_task_run(const char *task_name, TaskHandle_t *machine_task_handle, 
 #ifdef __cplusplus
 }
 #endif
+
+#endif // ASYNC_GCODE_SENDING

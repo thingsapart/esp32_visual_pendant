@@ -2,6 +2,8 @@
 
 #include "remote_comms_wrapper.h"
 
+#ifdef ESP32_HW
+
 #include <string.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
@@ -247,3 +249,31 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t 
         g_recv_cb(esp_now_info->src_addr, data, data_len, g_user_data);
     }
 }
+
+#else
+bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
+                         remote_wrapper_send_cb_t send_cb, void *user_data) {
+  return true;
+}
+bool remote_wrapper_add_peer(const uint8_t *mac_addr) {
+  return true;
+}
+
+bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
+                                          uint8_t *stored_mac_addr) {
+  return true;
+}
+
+bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                         size_t len) {
+  return true;
+}
+
+bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
+                         size_t len) {
+  return true;
+}
+
+void remote_wrapper_deinit() {}
+
+#endif

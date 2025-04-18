@@ -124,7 +124,6 @@ void _assert(bool condition, const char *desc);
 #define _style(obj, style, selector) lv_obj_add_style(obj, style, selector)
 
 // --- Specific Style Properties ---
-// (These are just examples, add many more based on LVGL's API)
 #define _M LV_PART_MAIN
 #define _text_color(obj, color, part)                                          \
   lv_obj_set_style_text_color(obj, color, part)

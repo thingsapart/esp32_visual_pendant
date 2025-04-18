@@ -39,6 +39,10 @@
 // #  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { char
 // __temp[1024]; snprintf(__temp, 1023, format, ##__VA_ARGS__); _d(lvl, __temp);
 // } }  while (false)
+#else
+#define _d(lvl, s)
+#define _df(lvl, format, ...)
+#endif
 
 #undef ESP_LOGE
 #define LOGE(tag, fmt, ...) _df(2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
@@ -79,10 +83,6 @@
       fflush(stdout);                                                          \
     }                                                                          \
   } while (0)
-#endif
-#else
-#define _d(lvl, s)
-#define _df(lvl, format, ...)
 #endif
 
 void LOG_CURR_TASK();

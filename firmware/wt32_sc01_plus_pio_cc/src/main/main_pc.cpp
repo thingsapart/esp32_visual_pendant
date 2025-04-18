@@ -11,7 +11,7 @@
 #include "SDL2/SDL.h"
 #include "lvgl.h"
 
-#include "Arduino.h"
+// #include "Arduino.h"
 
 volatile sig_atomic_t bRunning = false;
 
@@ -36,7 +36,7 @@ void encoder_set_encoder_mode() {}
 #include "machine/machine_sim.h"
 #include "ui/interface.h"
 
-#include "machine/arduino_serial_wrapper.h"
+#include "driver/arduino_serial_wrapper.h"
 
 // static duet_simulator_t *machine;
 static machine_rrf_t *machine;
@@ -46,7 +46,7 @@ static interface_t interface;
 
 extern "C" {
 
-#include "machine/arduino_serial_wrapper.h"
+#include "driver/arduino_serial_wrapper.h"
 
 #if 0
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {

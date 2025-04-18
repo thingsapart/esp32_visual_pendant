@@ -1,5 +1,9 @@
 // mock_rrf_serial.cpp
+
 #include "rrf_machine_sim_stream.h"
+
+#ifdef RRF_SIM
+
 #include <map>
 #include <mutex>
 
@@ -14,11 +18,15 @@
 #define _df(c, s, ...)
 #endif
 
+static const char *TAG = "rrf_machine_sim_stream";
+
 extern std::map<int, Stream *> serial_instances; // to insert.
 
 std::mutex serial_mtx;
 
-#if 0
+#ifndef ESP32_HW
+
+
 RRFMachineSimStream::RRFMachineSimStream(int uart_num) : uart_num_(uart_num) {
     _d(0, "INIT::RRFMachineSimStream");
 
@@ -196,7 +204,7 @@ void RRFMachineSimStream::process_last_command(String last_command_) {
                 wcs_index = atoi(token + 1) -1; //Duet WCS are 1-indexed, array is 0.
                 if (wcs_index < 0 || wcs_index > 9) {
                     // Invalid WCS index
-                    Serial.printf("Invalid WCS index in G10: %s\n", token);
+                    LOGE(TAG, "Invalid WCS index in G10: %s\n", token);
                     return;
                 }
              }
@@ -324,7 +332,7 @@ void RRFMachineSimStream::generate_response(const char* command, const char** ar
              // add more M409 responses.
             else {
                 // Unknown key, you might want to log this or provide a default response
-                 Serial.printf("Unknown M409 key: %s\n", key.c_str());
+                 LOGW(TAG, "Unknown M409 key: %s\n", key.c_str());
             }
         }
     } else if (strcmp(command, "M20")==0)
@@ -744,4 +752,7 @@ void RRFMachineSimStream::generate_response(const char *command,
 
   _df(0, " >>> RESPONSE: %s", output_buffer_.c_str());
 }
+
+#endif
+
 #endif

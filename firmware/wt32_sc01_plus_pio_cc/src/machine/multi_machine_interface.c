@@ -338,7 +338,7 @@ static char* _multi_machine_debug_print(machine_interface_t *self) {
 multi_machine_interface_t *multi_machine_interface_create() {
     multi_machine_interface_t *self = (multi_machine_interface_t *)malloc(sizeof(multi_machine_interface_t));
     if (!self) {
-        ESP_LOGE(TAG, "Failed to allocate memory for multi_machine_interface");
+        LOGE(TAG, "Failed to allocate memory for multi_machine_interface");
         return NULL;
     }
      return multi_machine_interface_init(self);
@@ -487,7 +487,7 @@ static void _mach_copy_message_box(multi_machine_interface_t *mm, machine_interf
             free(mm->base.message_box->title);
             free(mm->base.message_box->text);
             for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-                mm->base.message_box->choices[i];
+                free(mm->base.message_box->choices[i]);
             }
             free(mm->base.message_box->choices);
         }
@@ -532,7 +532,7 @@ static void _mach_copy_state(multi_machine_interface_t *mm, machine_interface_t 
             free(mm->base.message_box->title);
             free(mm->base.message_box->text);
             for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-                mm->base.message_box->choices[i];
+                free(mm->base.message_box->choices[i]);
             }
             free(mm->base.message_box->choices);
         }
@@ -625,7 +625,7 @@ bool multi_machine_add_impl(multi_machine_interface_t *self, machine_interface_t
         return false;
     }
     if (self->num_machines >= MAX_MACHINES) {
-         ESP_LOGE(TAG, "Maximum number of machines reached");
+         LOGE(TAG, "Maximum number of machines reached");
         return false; // Too many machines
     }
     self->machines[self->num_machines++] = machine;
@@ -640,6 +640,6 @@ bool multi_machine_add_impl(multi_machine_interface_t *self, machine_interface_t
     machine_interface_add_dialogs_changed_cb(machine, self, _mach_cb_dialogs);
     machine_interface_add_files_changed_cb(machine, NULL, self, _mach_cb_files);
 
-    ESP_LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
+    LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
     return true;
 }

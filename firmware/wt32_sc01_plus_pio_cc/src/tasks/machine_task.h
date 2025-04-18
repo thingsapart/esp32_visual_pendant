@@ -1,6 +1,8 @@
 #ifndef __MACHINE_TASK_H__
 #define __MACHINE_TASK_H__
 
+#ifdef ASYNC_GCODE_SENDING
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,5 +29,7 @@ bool machine_task_run(const char *task_name, TaskHandle_t *machine_task_handle,
 #ifdef __cplusplus
 }
 #endif
+
+#endif // ASYNC_GCODE_SENDING
 
 #endif // __MACHINE_TASK_H__

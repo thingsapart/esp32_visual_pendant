@@ -99,6 +99,7 @@
         "assert.h": "c",
         "config.h": "c",
         "lv_vfl.h": "c",
-        "stddef.h": "c"
+        "stddef.h": "c",
+        "lv_views.h": "c"
     }
 }
