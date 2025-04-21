@@ -15,96 +15,10 @@
 // static lv_vfl_view_map_t* _dv_view_map_ptr = NULL;
 // static size_t* _dv_view_map_count_ptr = NULL;
 // static lv_obj_t* _dv_current_widget = NULL;
-// static lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT;
 
-// --- Internal Argument Processing Macros (Recursive) ---
-#define _process_args0()
-#define _process_args1(A) A
-#define _process_args2(A, ...) A _process_args1(__VA_ARGS__)
-#define _process_args3(A, ...) A _process_args2(__VA_ARGS__)
-#define _process_args4(A, ...) A _process_args3(__VA_ARGS__)
-#define _process_args5(A, ...) A _process_args4(__VA_ARGS__)
-#define _process_args6(A, ...) A _process_args5(__VA_ARGS__)
-#define _process_args7(A, ...) A _process_args6(__VA_ARGS__)
-#define _process_args8(A, ...) A _process_args7(__VA_ARGS__)
-#define _process_args9(A, ...) A _process_args8(__VA_ARGS__)
-#define _process_args10(A, ...) A _process_args9(__VA_ARGS__)
-#define _process_args11(A, ...) A _process_args10(__VA_ARGS__)
-#define _process_args12(A, ...) A _process_args11(__VA_ARGS__)
-#define _process_args13(A, ...) A _process_args12(__VA_ARGS__)
-#define _process_args14(A, ...) A _process_args13(__VA_ARGS__)
-#define _process_args15(A, ...) A _process_args14(__VA_ARGS__)
-#define _process_args16(A, ...) A _process_args15(__VA_ARGS__)
-#define _process_args17(A, ...) A _process_args16(__VA_ARGS__)
-#define _process_args18(A, ...) A _process_args17(__VA_ARGS__)
-#define _process_args19(A, ...) A _process_args18(__VA_ARGS__)
-#define _process_args20(A, ...) A _process_args19(__VA_ARGS__)
-#define _process_args21(A, ...) A _process_args20(__VA_ARGS__)
-#define _process_args22(A, ...) A _process_args21(__VA_ARGS__)
-#define _process_args23(A, ...) A _process_args22(__VA_ARGS__)
-#define _process_args24(A, ...) A _process_args23(__VA_ARGS__)
-#define _process_args25(A, ...) A _process_args24(__VA_ARGS__)
-#define _process_args26(A, ...) A _process_args25(__VA_ARGS__)
-#define _process_args27(A, ...) A _process_args26(__VA_ARGS__)
-#define _process_args28(A, ...) A _process_args27(__VA_ARGS__)
-#define _process_args29(A, ...) A _process_args28(__VA_ARGS__)
-#define _process_args30(A, ...) A _process_args29(__VA_ARGS__)
-#define _process_args31(A, ...) A _process_args30(__VA_ARGS__)
-#define _process_args32(A, ...) A _process_args31(__VA_ARGS__)
-#define _process_args33(A, ...) A _process_args32(__VA_ARGS__)
-#define _process_args34(A, ...) A _process_args33(__VA_ARGS__)
-#define _process_args35(A, ...) A _process_args34(__VA_ARGS__)
-#define _process_args36(A, ...) A _process_args35(__VA_ARGS__)
-#define _process_args37(A, ...) A _process_args36(__VA_ARGS__)
-#define _process_args38(A, ...) A _process_args37(__VA_ARGS__)
-#define _process_args39(A, ...) A _process_args38(__VA_ARGS__)
-#define _process_args40(A, ...) A _process_args39(__VA_ARGS__)
-#define _process_args41(A, ...) A _process_args40(__VA_ARGS__)
-#define _process_args42(A, ...) A _process_args41(__VA_ARGS__)
-#define _process_args43(A, ...) A _process_args42(__VA_ARGS__)
-#define _process_args44(A, ...) A _process_args43(__VA_ARGS__)
-#define _process_args45(A, ...) A _process_args44(__VA_ARGS__)
-#define _process_args46(A, ...) A _process_args45(__VA_ARGS__)
-#define _process_args47(A, ...) A _process_args46(__VA_ARGS__)
-#define _process_args48(A, ...) A _process_args47(__VA_ARGS__)
-#define _process_args49(A, ...) A _process_args48(__VA_ARGS__)
-#define _process_args50(A, ...) A _process_args49(__VA_ARGS__)
-#define _process_args51(A, ...) A _process_args50(__VA_ARGS__)
-#define _process_args52(A, ...) A _process_args51(__VA_ARGS__)
-#define _process_args53(A, ...) A _process_args52(__VA_ARGS__)
-#define _process_args54(A, ...) A _process_args53(__VA_ARGS__)
-#define _process_args55(A, ...) A _process_args54(__VA_ARGS__)
-#define _process_args56(A, ...) A _process_args55(__VA_ARGS__)
-#define _process_args57(A, ...) A _process_args56(__VA_ARGS__)
-#define _process_args58(A, ...) A _process_args57(__VA_ARGS__)
-#define _process_args59(A, ...) A _process_args58(__VA_ARGS__)
-#define _process_args60(A, ...) A _process_args59(__VA_ARGS__)
-#define _process_args61(A, ...) A _process_args60(__VA_ARGS__)
-#define _process_args62(A, ...) A _process_args61(__VA_ARGS__)
-#define _process_args63(A, ...) A _process_args62(__VA_ARGS__)
-#define _process_args64(A, ...) A _process_args63(__VA_ARGS__)
+static lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT;
 
-// --- Argument Counting Macro ---
-// --- (Keep the _nargs_seq and _nargs definitions matching the highest N) ---
-#define _nargs_seq( \
-    _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, \
-    _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, \
-    _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, \
-    _31, _32, _33, _34, _35, _36, _37, _38, _39, _40, \
-    _41, _42, _43, _44, _45, _46, _47, _48, _49, _50, \
-    _51, _52, _53, _54, _55, _56, _57, _58, _59, _60, \
-    _61, _62, _63, _64, N, ...) N
-#define _nargs(...) _nargs_seq(__VA_ARGS__, \
-    64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, \
-    49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, \
-    34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, \
-    19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
-
-// --- Dispatcher ---
-#define _process_vargs(N, ...) _process_args##N(__VA_ARGS__)
-#define _process_dispatcher(N, ...) _process_vargs(N, __VA_ARGS__)
-#define _process_args(...) _process_dispatcher(_nargs(__VA_ARGS__), __VA_ARGS__)
-
+#include "meta/macro_helpers.h"
 
 // --- Parent Container Property Macros ---
 // These operate on _dv_parent_obj
@@ -127,12 +41,20 @@
     _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT; /* Reset selector for this widget */ \
     _process_args(__VA_ARGS__) /* Process properties/styles */
 
+#define _place_widget(WidgetType, VarName, ...) \
+    do { \
+      _dv_current_widget = VarName; \
+      _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT; /* Reset selector for this widget */ \
+      _process_args(__VA_ARGS__) /* Process properties/styles */ \
+    } while (0);
+
 #define obj(VarName, ...)     _setup_widget(lv_obj_t, lv_obj_create, VarName, __VA_ARGS__)
-#define div(VarName, ...)     _setup_widget(lv_obj_t, lv_obj_create, VarName, __VA_ARGS__)
 #define label(VarName, Text, ...)   _setup_widget(lv_obj_t, lv_label_create, VarName, _text(Text), __VA_ARGS__)
 #define button(VarName, ...)  _setup_widget(lv_obj_t, lv_btn_create, VarName, __VA_ARGS__)
 #define list(VarName, ...)  _setup_widget(lv_obj_t, lv_list_create, VarName, __VA_ARGS__)
 #define textarea(VarName, ...) _setup_widget(lv_obj_t, lv_textarea_create, VarName, __VA_ARGS__)
+#define sub_view(VarName, ...) _place_widget(lv_obj_t, VarName, __VA_ARGS__)
+
 // ... Add other widget creation macros (switch, slider, image, etc.) following the same pattern.
 // Example:
 // #define switch(VarName, ...) _setup_widget(lv_obj_t, lv_switch_create, VarName, __VA_ARGS__)
@@ -482,7 +404,7 @@
         _process_args(__VA_ARGS__) \
         /* Restore the outer selector once this block's arguments are processed */ \
         _dv_current_selector = _dv_outer_selector; \
-    } while(0)
+    } while(0);
 
 // --- Main Definition Macro ---
 /**
@@ -543,7 +465,7 @@
 #define view(ParentObj, ...) \
     do { \
         lv_obj_t* _dv_parent_obj = (ParentObj); \
-        lv_obj_t* _dv_current_widget = NULL; /* Track the widget being configured */ \
+        lv_obj_t* _dv_current_widget = _dv_parent_obj; /* Track the widget being configured */ \
         lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT; /* Track the selector */ \
         \
         /* Set the initial widget context to the parent for top-level setters */ \
@@ -977,7 +899,7 @@
 // _bg_color(value) -> __bg_color(...)
 #define _APPLY_BG_COLOR(obj, value)     lv_obj_set_style_bg_color(obj, value, _dv_current_selector);
 #define __bg_color_1(value)             _APPLY_BG_COLOR(_dv_current_widget, value)
-#define __bg_color_2(obj, value)        _APPLY_BG_COLOR(obj, value)
+#define __bg_color_2(obj, value)        lv_obj_set_style_bg_color(obj, value, LV_PART_MAIN)
 #define __bg_color(...)                 _PASTE(__bg_color_, _nargs(__VA_ARGS__))(__VA_ARGS__)
 
 // _bg_opa(value) -> __bg_opa(...)
@@ -2169,8 +2091,24 @@
 #define __grid_row_gap_1_(obj)          _GET_GRID_ROW_GAP(obj)
 #define __grid_row_gap_(...)            _PASTE(__grid_row_gap_, _PASTE(_nargs(__VA_ARGS__), _))(__VA_ARGS__)
 
+#define __label_text_align_2_(al, w)    __label_text_align_3_(_dv_current_widget, al, w)
+#define __label_text_align_3_(obj, al, w)  do { lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP); lv_obj_set_width(obj, w); lv_label_(obj, al, 0, 0); } while (0);
+#define __label_text_align(...)         _PASTE(__label_text_align_, _PASTE(_nargs(__VA_ARGS__), _))(__VA_ARGS__)
+
 
 lv_obj_t *_maximize_client_area(lv_obj_t *obj);
+lv_obj_t *_fill_parent(lv_obj_t *obj);
+
+#define _APPLY_MAX_CLIENT_AREA(__obj)   _maximize_client_area(__obj);
+#define __max_client_area_()            _APPLY_MAX_CLIENT_AREA(_dv_current_widget)
+#define __max_client_area_1(obj)        _APPLY_MAX_CLIENT_AREA(obj)
+#define __max_client_area(...)          _PASTE(__max_client_area_, __VA_OPT__(1))(__VA_ARGS__)
+
+#define _APPLY_EXPAND_CLIENT_AREA(__obj)   _fill_parent(__obj);
+#define __expand_client_area_()         _APPLY_EXPAND_CLIENT_AREA(_dv_current_widget)
+#define __expand_client_area_1(obj)     _APPLY_EXPAND_CLIENT_AREA(obj)
+#define __expand_client_area(...)       _PASTE(__expand_client_area_, __VA_OPT__(1))(__VA_ARGS__)
+
 #define __flag(obj, flag, enabled)                                              \
   ((enabled) ? lv_obj_add_flag(obj, flag) : lv_obj_clear_flag(obj, flag))
 #define __hide(obj, hidden)                                                   \
@@ -2179,7 +2117,7 @@ lv_obj_t *_maximize_client_area(lv_obj_t *obj);
 #define __scrollable(obj, enabled) __flag(obj, LV_OBJ_FLAG_SCROLLABLE, enabled)
 #define __use_layout(obj, enabled)                                              \
   __flag(obj, LV_OBJ_FLAG_IGNORE_LAYOUT, !enabled)
-#define __layout(obj, layout) lv_obj_set_layout(obj, layout)
+//#define __layout(obj, layout) lv_obj_set_layout(obj, layout)
 #define __update_layout(obj) lv_obj_update_layout(obj)
 
 #endif // VIEW_DEFINE_MACROS_H

@@ -412,6 +412,7 @@ void _assert(bool condition, const char *desc);
   })
 
 lv_obj_t *_maximize_client_area(lv_obj_t *obj);
+lv_obj_t *_fill_parent(lv_obj_t *obj);
 void dbg_layout(lv_obj_t *obj);
 
 #ifdef __cplusplus

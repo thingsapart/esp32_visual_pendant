@@ -157,7 +157,8 @@ void interface_fs_init(interface_t *interface) {
 
 #ifndef LOAD_BIN_FONT_FS
     LV_FONT_DECLARE(lcd_7_segment_24);
-    LV_FONT_DECLARE(kode_20);
+    LV_FONT_DECLARE(font_kode_20);
+    LV_FONT_DECLARE(font_kode_24);
 
     #define LV_FONT_ASSIGN(dest, font) \
         do { const lv_font_t *font_addr = &font; memcpy(&dest, &font_addr, sizeof(lv_font_t *)); } while (0);
@@ -204,7 +205,8 @@ void interface_init_fonts(interface_t *interface) {
     }
 #else
     LV_FONT_ASSIGN(interface->font_lcd_24, lcd_7_segment_24);
-    LV_FONT_ASSIGN(interface->font_kode_20, kode_20);
+    LV_FONT_ASSIGN(interface->font_kode_20, font_kode_20);
+    LV_FONT_ASSIGN(interface->font_kode_24, font_kode_24);
 #endif
 }
 

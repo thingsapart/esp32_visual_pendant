@@ -78,6 +78,14 @@ lv_obj_t *_maximize_client_area(lv_obj_t *obj) {
     return obj;
 }
 
+lv_obj_t *_fill_parent(lv_obj_t *obj) {
+    _margin(obj, 0);
+    _pad(obj, 0);
+    _border_width(obj, 0, LV_PART_MAIN);
+    _size(obj, lv_pct(100), lv_pct(100));
+    return obj;
+}
+
 void dbg_layout(lv_obj_t *obj) {
     _bg_color(obj, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
     _border_color(obj, lv_palette_main(LV_PALETTE_ORANGE), LV_PART_MAIN);

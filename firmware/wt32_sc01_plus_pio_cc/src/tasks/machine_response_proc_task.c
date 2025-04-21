@@ -1,5 +1,7 @@
 #include "machine_response_proc_task.h"
 
+#include "config.h"
+
 #ifdef ASYNC_RESPONSE_PROCESSING
 
 #ifdef __cplusplus

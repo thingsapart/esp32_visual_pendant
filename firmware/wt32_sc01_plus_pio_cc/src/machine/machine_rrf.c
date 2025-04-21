@@ -508,7 +508,9 @@ static bool _machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_ob
         bool spindle_updated = false;
         cJSON_ArrayForEach(spindle_json, result_json) {
             if (cJSON_HasObjectItem(result_json, "current")) {
-                self->base.spindles[i].name = NULL;
+                char buf[128] = { 0 };
+                snprintf(buf, 127, "Spindle%d", i);
+                self->base.spindles[i].name = strdup(buf);
                 self->base.spindles[i].rpm = _json_key_int(spindle_json, "current");
                 self->base.spindles[i].max_rpm = _json_key_int(spindle_json, "max");
                 self->base.spindles[i].min_rpm = _json_key_int(spindle_json, "min");

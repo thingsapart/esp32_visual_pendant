@@ -101,6 +101,15 @@
         "lv_vfl.h": "c",
         "stddef.h": "c",
         "lv_views.h": "c",
-        "lv_refr.h": "c"
+        "lv_refr.h": "c",
+        "lv_axis_position_display.h": "c",
+        "lv_obj_class_private.h": "c",
+        "lv_view_impl.h": "c",
+        "bar_value_view.h": "c",
+        "macro_helpers.h": "c",
+        "lv_view_def.h": "c",
+        "bar_value_view.def.h": "c",
+        "lv_view_def_cons.h": "c",
+        "lv_view_def_end.h": "c"
     }
 }

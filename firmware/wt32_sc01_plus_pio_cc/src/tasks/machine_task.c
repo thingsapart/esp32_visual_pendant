@@ -1,6 +1,8 @@
 
 #include "machine_response_proc_task.h"
 
+#include "config.h"
+
 #ifdef ASYNC_GCODE_SENDING
 
 #ifdef __cplusplus

@@ -49,6 +49,7 @@ struct interface_t {
   FONT_CONST lv_font_t *font_lcd_18;
   FONT_CONST lv_font_t *font_lcd_24;
   FONT_CONST lv_font_t *font_kode_20;
+  FONT_CONST lv_font_t *font_kode_24;
   lv_obj_t *main_tabs;
   struct tab_jog_t *tab_jog;
   struct tab_probe_t *tab_probe;

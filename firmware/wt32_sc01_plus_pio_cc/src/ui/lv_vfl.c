@@ -214,3 +214,7 @@ void _vfl_place_grid_items(lv_obj_t *parent, ...) {
 
     va_end(args);
 }
+
+void lv_vfl_set_grid_cell(lv_obj_t *obj, int32_t col, int32_t row, __cell_args_t opt) {
+    lv_obj_set_grid_cell(obj, opt.col_align, col, opt.col_span == 0 ? 1 : opt.col_span, opt.row_align, row, opt.row_span == 0 ? 1 : opt.row_span);
+}

@@ -57,6 +57,7 @@ typedef struct {
 // Sentinel for terminating variadic grid item list
 #define _VFL_GRID_ITEM_SENTINEL ((_vfl_grid_item_placement_t){.obj=NULL}) // Internal
 
+#include "meta/macro_helpers.h"
 
 //------------------------------------------------------------------------------
 // Public Macros for Layout Definition (User-Facing API)
@@ -80,71 +81,32 @@ typedef struct {
  *      _space(10)
  *  );
  */
-#define _layout_h(PARENT, ALIGN, ...) \
-    do { \
-        lv_obj_t* _vfl_parent_h = (PARENT); \
-        _vfl_linear_item_t _vfl_items_h[] = { __VA_ARGS__ }; \
-        size_t _vfl_item_count_h = sizeof(_vfl_items_h) / sizeof(_vfl_items_h[0]); \
-        _vfl_do_linear_layout(_vfl_parent_h, _vfl_items_h, _vfl_item_count_h, true, ALIGN); \
-    } while (0)
+#define __layout_size(obj, w, w_across) lv_obj_set_size(obj, __layout_vert__ ? w : w_across, __layout_vert__ ? w_across : w);
+#define _spacer(w) do { lv_obj_t *__spcr = lv_obj_create(_vfl_parent_v); __layout_size(__spcr, w, 1); } while (0);
+#define _flex(obj, fr) do { lv_obj_set_parent(obj, _vfl_parent_v); lv_obj_set_flex_grow(obj, fr); } while (0);
+#define _fixed(obj, sz) do { lv_obj_set_parent(obj, _vfl_parent_v); __layout_size(obj, sz, LV_SIZE_CONTENT); } while (0);
+#define _content(obj) do { lv_obj_set_parent(obj, _vfl_parent_v); __size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT); } while (0);
+#define _sized(obj, w, h) do { lv_obj_set_parent(obj, _vfl_parent_v); __size(obj, w, h); } while (0);
 
-/**
- * @brief Defines a vertical layout.
- * @param PARENT The parent lv_obj_t* container.
- * @param ALIGN Default cross-axis alignment (e.g., LV_ALIGN_LEFT_MID, LV_ALIGN_CENTER).
- * @param ... Sequence of layout items (_obj, _space).
- */
 #define _layout_v(PARENT, ALIGN, ...) \
     do { \
+        bool __layout_vert__ = true; \
         lv_obj_t* _vfl_parent_v = (PARENT); \
-        _vfl_linear_item_t _vfl_items_v[] = { __VA_ARGS__ }; \
-        size_t _vfl_item_count_v = sizeof(_vfl_items_v) / sizeof(_vfl_items_v[0]); \
-        _vfl_do_linear_layout(_vfl_parent_v, _vfl_items_v, _vfl_item_count_v, false, ALIGN); \
-    } while (0)
+        lv_obj_set_layout(PARENT, LV_LAYOUT_FLEX); \
+        lv_obj_set_flex_flow(PARENT, LV_FLEX_FLOW_COLUMN); \
+        lv_obj_set_flex_align(PARENT, ALIGN, ALIGN, ALIGN); \
+        _process_args(__VA_ARGS__); \
+    } while (0);
 
-
-// --- Linear Item Specification Macros ---
-
-/**
- * @brief Represents an object in the linear layout sequence.
- * @param lobj Pointer to the lv_obj_t object.
- * @param size_spec_result The result of _fixed, _content, or _flex macro.
- * @param ... Optional: Alignment override for this object (e.g., LV_ALIGN_TOP_LEFT).
- * Example: _obj(my_button, _fixed(100))
- * Example: _obj(my_label, _content(), LV_ALIGN_BOTTOM_MID)
- */
-#define _obj(lobj, size_spec_result, ...) \
-    { \
-        .item_type = _VFL_ITEM_OBJ, \
-        .obj = (lobj), \
-        size_spec_result, /* Expands to .size_type=..., .value=... */ \
-        .cross_align = _VFL_ALIGN_INHERIT __VA_OPT__(, __VA_ARGS__) /* Override default if arg provided */ \
-    }
-
-/** @brief Specifies a fixed size (width for H layout, height for V layout). */
-#define _fixed(v)   .size_type = _VFL_SIZE_FIXED,   .value = (lv_coord_t)(v)
-
-/** @brief Specifies that the object's size should be determined by its content. */
-#define _content()  .size_type = _VFL_SIZE_CONTENT, .value = 0 /* Value calculated later */
-
-/** @brief Specifies flexible size based on a factor. */
-#define _flex(factor) .size_type = _VFL_SIZE_FLEX,    .value = (lv_coord_t)((factor) > 0 ? (factor) : 1)
-
-/**
- * @brief Represents spacing in the layout sequence.
- * @param ... Optional: Fixed spacing value in pixels. If omitted, uses parent's default spacing.
- * Example: _space() // Default space (pad_row/pad_column)
- * Example: _space(10) // Fixed 10px space
- */
-#define _space(...) \
-    { \
-        .item_type = _VFL_ITEM_SPACE, \
-        .value = -1 __VA_OPT__(, __VA_ARGS__), /* Default -1, overridden by arg if present */ \
-        .size_type = 0, /* Unused */ \
-        .obj = NULL,    /* Not an object */ \
-        .cross_align = _VFL_ALIGN_INHERIT /* Unused */ \
-    }
-
+#define _layout_h(PARENT, ALIGN, ...) \
+    do { \
+        bool __layout_vert__ = false; \
+        lv_obj_t* _vfl_parent_v = (PARENT); \
+        lv_obj_set_layout(PARENT, LV_LAYOUT_FLEX); \
+        lv_obj_set_flex_flow(PARENT, LV_FLEX_FLOW_ROW); \
+        lv_obj_set_flex_align(PARENT, ALIGN, ALIGN, ALIGN); \
+        _process_args(__VA_ARGS__); \
+    } while (0);
 
 // --- Grid Layout ---
 
@@ -168,52 +130,40 @@ typedef struct {
         lv_obj_t* _vfl_grid_parent = (PARENT); \
         if(!_vfl_grid_parent) { LV_LOG_WARN("_layout_grid: NULL parent"); break; } \
         lv_obj_set_layout(_vfl_grid_parent, LV_LAYOUT_GRID); \
-        const lv_coord_t _vfl_grid_cols[] = COLS_DEF; \
-        const lv_coord_t _vfl_grid_rows[] = ROWS_DEF; \
+        static const lv_coord_t _vfl_grid_cols[] = COLS_DEF; \
+        static const lv_coord_t _vfl_grid_rows[] = ROWS_DEF; \
         lv_obj_set_grid_dsc_array(_vfl_grid_parent, _vfl_grid_cols, _vfl_grid_rows); \
-        _vfl_place_grid_items(_vfl_grid_parent, ##__VA_ARGS__, _VFL_GRID_ITEM_SENTINEL); \
+        _process_args(__VA_ARGS__); \
         lv_obj_update_layout(_vfl_grid_parent); \
-    } while(0)
+    } while(0);
+
+typedef struct {
+    int32_t col_span;
+    int32_t row_span;
+    int32_t col_align;
+    int32_t row_align;
+} __cell_args_t;
+
+void lv_vfl_set_grid_cell(lv_obj_t *obj, int32_t col, int32_t row, __cell_args_t opt);
+
+#define _cell_opts(...) ((__cell_args_t) { .col_align = LV_GRID_ALIGN_STRETCH, .row_align = LV_GRID_ALIGN_STRETCH, __VA_ARGS__ })
+#define _cell_4_(obj, col, row, opt) lv_vfl_set_grid_cell(obj, col, row, opt);
+#define _cell_3_(obj, col, row) lv_obj_set_grid_cell(obj, LV_GRID_ALIGN_STRETCH, col, 1, LV_GRID_ALIGN_CENTER, row, 1);
+#define _cell(...) _PASTE(_cell_, _PASTE(_nargs(__VA_ARGS__), _))(__VA_ARGS__)
 
 // --- Grid Definition Helpers ---
 
-/** @brief Defines column track sizes for _layout_grid. Use _px, _fr, _content inside. */
+/** Defines column track sizes for _layout_grid. Use _px, _fr, _content inside. */
 #define _cols(...) { __VA_ARGS__, LV_GRID_TEMPLATE_LAST }
-/** @brief Defines row track sizes for _layout_grid. Use _px, _fr, _content inside. */
+/* Defines row track sizes for _layout_grid. Use _px, _fr, _content inside. */
 #define _rows(...) { __VA_ARGS__, LV_GRID_TEMPLATE_LAST }
 
 // --- Grid Track Size Constants ---
-/** @brief Fixed pixel size for grid track. */
+/** Fixed pixel size for grid track. */
 #define _px(x)     (x)
-/** @brief Fractional unit size for grid track. */
+/** Fractional unit size for grid track. */
 #define _fr(x)     LV_GRID_FR(x)
 /* Note: _content() macro already defined for linear layout is reused for grid tracks */
-
-
-// --- Grid Item Placement Macro ---
-
-/**
- * @brief Specifies placement and properties of an object within the grid.
- *        Use C99 designated initializers.
- * @param ... Designated initializers for _vfl_grid_item_placement_t struct:
- *            .obj = (lv_obj_t*) [REQUIRED]
- *            .row = (uint16_t) [REQUIRED]
- *            .col = (uint16_t) [REQUIRED]
- *            .row_span = (uint8_t) [Optional, default=1]
- *            .col_span = (uint8_t) [Optional, default=1]
- *            .h_align = (lv_grid_align_t) [Optional, default=LV_GRID_ALIGN_STRETCH]
- *            .v_align = (lv_grid_align_t) [Optional, default=LV_GRID_ALIGN_STRETCH]
- * Example: _grid_item(.obj=my_button, .row=1, .col=2)
- * Example: _grid_item(.obj=my_img, .row=0, .col=0, .row_span=2, .h_align=LV_GRID_ALIGN_CENTER)
- */
-#define _grid_item(...) \
-    ((_vfl_grid_item_placement_t){ \
-        .obj=NULL, .row=0, .col=0, /* Defaults for safety */ \
-        .row_span=1, .col_span=1, \
-        .h_align=LV_GRID_ALIGN_STRETCH, .v_align=LV_GRID_ALIGN_STRETCH, \
-        __VA_ARGS__ /* Apply user-provided initializers */ \
-    })
-
 
 //------------------------------------------------------------------------------
 // Internal Core Layout Function Prototypes (Implementation in lv_vfl.c)
@@ -229,6 +179,10 @@ void _vfl_do_linear_layout(lv_obj_t *parent,
 /** @brief Internal: Places items onto the LVGL grid. */
 void _vfl_place_grid_items(lv_obj_t *parent, ...);
 
+
+//------------------------------------------------------------------------------
+// View def
+//------------------------------------------------------------------------------
 
 #ifdef __cplusplus
 } /* extern "C" */

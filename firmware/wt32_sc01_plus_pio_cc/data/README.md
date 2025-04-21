@@ -1,3 +1,7 @@
+General Font Range used in conversion: 0x20-0xff
+
+
+
 LCD 7-Segment font:
 
 https://torinak.com/font/7-segment

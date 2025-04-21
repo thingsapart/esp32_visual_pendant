@@ -59,7 +59,7 @@ public:
       cfg.dummy_read_pixel = 8;
       cfg.dummy_read_bits = 1;
       cfg.readable = true; // was false
-      cfg.invert = false;
+      cfg.invert = true;
       cfg.rgb_order = false;
       cfg.dlen_16bit = false;
       cfg.bus_shared = true; // was false something to do with SD?
