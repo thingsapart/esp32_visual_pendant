@@ -1,6 +1,6 @@
-// #include "ui/layout/lv_view_def_cons.h"
+def_view(
+    bar_value_view,
 
-def_view(bar_value_view,
     components(
         container(header_cont,
             component(caption, label, style(header_cont, __text_color(lv_color_white()))),
@@ -8,8 +8,8 @@ def_view(bar_value_view,
         container(main_cont,
             component(abbreviation, label, style(header_cont, __text_color(lv_color_white()))),
             container(div_val_bars,
-                component(value, label),
-                component(bar_utilization, bar),
+                component(value, label, style(value, __label_text("0000")),
+                component(bar_utilization, bar, style(bar_utilization, __val),
                 component(scale_utilization, scale),
             ),
             container(div_status,

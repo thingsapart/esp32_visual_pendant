@@ -75,6 +75,7 @@ lv_obj_t *_maximize_client_area(lv_obj_t *obj) {
     _margin(obj, 0);
     _pad(obj, 0);
     _border_width(obj, 0, LV_PART_MAIN);
+    _radius(obj, 0, LV_PART_MAIN);
     return obj;
 }
 
@@ -83,6 +84,7 @@ lv_obj_t *_fill_parent(lv_obj_t *obj) {
     _pad(obj, 0);
     _border_width(obj, 0, LV_PART_MAIN);
     _size(obj, lv_pct(100), lv_pct(100));
+    _radius(obj, 0, LV_PART_MAIN);
     return obj;
 }
 

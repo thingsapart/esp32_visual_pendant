@@ -1,3 +1,12 @@
+#define HASH #
+#define SLASH //
+#define __F(x) x
+#define STR(x) #x
+#define INCLUDE(a) __F(HASH)include STR(a)
+
+#define _PASTE_IMPL(a, b) a##b
+#define _PASTE(a, b) _PASTE_IMPL(a, b)
+
 // --- Internal Argument Processing Macros (Recursive) ---
 
 #define _process_args0()

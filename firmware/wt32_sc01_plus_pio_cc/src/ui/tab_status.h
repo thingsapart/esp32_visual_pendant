@@ -5,6 +5,7 @@
 #include "lvgl.h"
 #include "ui/interface.h"
 #include "ui/components/lv_axis_position_display.h"
+#include "ui/gen_views/feed_rate_view.h"
 
 struct tab_status_t {
   lv_obj_t *tabv;
@@ -14,6 +15,9 @@ struct tab_status_t {
   lv_obj_t *x_axis_display;
   lv_obj_t *y_axis_display;
   lv_obj_t *z_axis_display;
+
+  feed_rate_view_t *spindle_bar_view;
+  feed_rate_view_t *feed_bar_view;
 };
 
 typedef struct tab_status_t tab_status_t;

@@ -5,12 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ui/lv_vfl.h"
-#include "ui/lv_views.h"
+#include "ui/layout/lv_vfl.h"
+#include "ui/layout/lv_views.h"
 
 #include "interface.h"
 #include "debug.h"
 #include "ui/components/lv_axis_position_display.h"
+#include "ui/components/feed_rate_view.h"
 
 static const char *TAG = "ui/tab_status";
 
@@ -41,36 +42,72 @@ tab_status_t *tab_status_create(lv_obj_t *tabv, interface_t *interface, lv_obj_t
 
         sub_view(ts->x_axis_display,
             __pad_left(20),
-            __pad_right(20),
+            __pad_right(10),
             selector(LV_PART_POSITION, __text_font(interface->font_kode_24)),
             selector(LV_PART_AXIS_LABEL, __text_font(interface->font_kode_24))
         ),
         sub_view(ts->y_axis_display,
             __pad_left(20),
-            __pad_right(20)
+            __pad_right(10)
             selector(LV_PART_POSITION, __text_font(interface->font_kode_24)),
             selector(LV_PART_AXIS_LABEL, __text_font(interface->font_kode_24))
         ),
         sub_view(ts->z_axis_display,
             __pad_left(20),
-            __pad_right(20),
+            __pad_right(10),
             selector(LV_PART_POSITION, __text_font(interface->font_kode_24)),
             selector(LV_PART_AXIS_LABEL, __text_font(interface->font_kode_24))
         )
     );
 
     _layout_v(grid_cont, LV_FLEX_ALIGN_CENTER,
-        __width(grid_cont, lv_pct(50)), // Set width of the container holding the axis displays
+        //__width(grid_cont, lv_pct(50)), // Set width of the container holding the axis displays
 
         _sized(ts->x_axis_display, lv_pct(100), LV_SIZE_CONTENT),
         _sized(ts->y_axis_display, lv_pct(100), LV_SIZE_CONTENT),
         _sized(ts->z_axis_display, lv_pct(100), LV_SIZE_CONTENT)
     );
 
+    lv_obj_t *feed_rpm_view_container = lv_obj_create(tab);
+    //__size(feed_rpm_view_container, lv_pct(100), lv_pct(100));
+    __height(feed_rpm_view_container, lv_pct(100));
+    _layout_v(feed_rpm_view_container, LV_FLEX_ALIGN_START);
+    _maximize_client_area(feed_rpm_view_container);
+
+    /*ts->feed_bar_view = bar_value_view_create(feed_rpm_view_container);
+    ts->spindle_bar_view = bar_value_view_create(feed_rpm_view_container);
+
+    _layout_v(feed_rpm_view_container, LV_FLEX_ALIGN_START,
+        __expand_client_area(feed_rpm_view_container),
+
+        _sized(ts->feed_bar_view->main, lv_pct(100), LV_SIZE_CONTENT), 
+        _sized(ts->spindle_bar_view->main, lv_pct(100), LV_SIZE_CONTENT)
+    )
+    */
+  
+    ts->feed_bar_view = feed_rate_view_create(feed_rpm_view_container);
+    ts->spindle_bar_view = feed_rate_view_create(feed_rpm_view_container);
+
+    _layout_v(feed_rpm_view_container, LV_FLEX_ALIGN_START,
+        _flex(ts->feed_bar_view->main, 1),
+        _flex(ts->spindle_bar_view->main, 1),
+    );
+
+    _layout_h(tab, LV_FLEX_ALIGN_SPACE_EVENLY,
+        _flex(grid_cont, 1),
+        _flex(feed_rpm_view_container, 1)
+    )
+
+    lv_obj_update_layout(tab);
+    lv_obj_update_layout(grid_cont);
+    lv_obj_update_layout(feed_rpm_view_container);
+
     return ts;
 }
 
 void tab_status_destroy(tab_status_t *ts) {
+    free(ts->spindle_bar_view);
+    free(ts->feed_bar_view);
     free(ts);
 }
 

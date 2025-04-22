@@ -95,7 +95,11 @@ typedef struct {
         lv_obj_set_layout(PARENT, LV_LAYOUT_FLEX); \
         lv_obj_set_flex_flow(PARENT, LV_FLEX_FLOW_COLUMN); \
         lv_obj_set_flex_align(PARENT, ALIGN, ALIGN, ALIGN); \
+        __scrollable(PARENT, false); \
+        __max_client_area(PARENT); \
+        lv_obj_update_layout(PARENT); \
         _process_args(__VA_ARGS__); \
+        lv_obj_update_layout(PARENT); \
     } while (0);
 
 #define _layout_h(PARENT, ALIGN, ...) \
@@ -105,7 +109,11 @@ typedef struct {
         lv_obj_set_layout(PARENT, LV_LAYOUT_FLEX); \
         lv_obj_set_flex_flow(PARENT, LV_FLEX_FLOW_ROW); \
         lv_obj_set_flex_align(PARENT, ALIGN, ALIGN, ALIGN); \
+        __scrollable(PARENT, false); \
+        __max_client_area(PARENT); \
+        lv_obj_update_layout(PARENT); \
         _process_args(__VA_ARGS__); \
+        lv_obj_update_layout(PARENT); \
     } while (0);
 
 // --- Grid Layout ---
@@ -133,6 +141,9 @@ typedef struct {
         static const lv_coord_t _vfl_grid_cols[] = COLS_DEF; \
         static const lv_coord_t _vfl_grid_rows[] = ROWS_DEF; \
         lv_obj_set_grid_dsc_array(_vfl_grid_parent, _vfl_grid_cols, _vfl_grid_rows); \
+        __expand_client_area(PARENT); \
+        __scrollable(PARENT, false); \
+        lv_obj_update_layout(_vfl_grid_parent); \
         _process_args(__VA_ARGS__); \
         lv_obj_update_layout(_vfl_grid_parent); \
     } while(0);
@@ -146,7 +157,7 @@ typedef struct {
 
 void lv_vfl_set_grid_cell(lv_obj_t *obj, int32_t col, int32_t row, __cell_args_t opt);
 
-#define _cell_opts(...) ((__cell_args_t) { .col_align = LV_GRID_ALIGN_STRETCH, .row_align = LV_GRID_ALIGN_STRETCH, __VA_ARGS__ })
+#define _cell_opts(...) ((__cell_args_t) { .col_align = LV_GRID_ALIGN_START, .row_align = LV_GRID_ALIGN_START, __VA_ARGS__ })
 #define _cell_4_(obj, col, row, opt) lv_vfl_set_grid_cell(obj, col, row, opt);
 #define _cell_3_(obj, col, row) lv_obj_set_grid_cell(obj, LV_GRID_ALIGN_STRETCH, col, 1, LV_GRID_ALIGN_CENTER, row, 1);
 #define _cell(...) _PASTE(_cell_, _PASTE(_nargs(__VA_ARGS__), _))(__VA_ARGS__)

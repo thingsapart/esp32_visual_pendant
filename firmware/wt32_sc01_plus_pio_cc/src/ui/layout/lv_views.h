@@ -39,17 +39,19 @@ static lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAUL
     VarName = CreateFunc(_dv_parent_obj); \
     _dv_current_widget = VarName; \
     _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT; /* Reset selector for this widget */ \
+    __max_client_area(); \
     _process_args(__VA_ARGS__) /* Process properties/styles */
 
 #define _place_widget(WidgetType, VarName, ...) \
     do { \
       _dv_current_widget = VarName; \
       _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAULT; /* Reset selector for this widget */ \
+      __max_client_area(); \
       _process_args(__VA_ARGS__) /* Process properties/styles */ \
     } while (0);
 
 #define obj(VarName, ...)     _setup_widget(lv_obj_t, lv_obj_create, VarName, __VA_ARGS__)
-#define label(VarName, Text, ...)   _setup_widget(lv_obj_t, lv_label_create, VarName, _text(Text), __VA_ARGS__)
+#define label(VarName, Text, ...)   _setup_widget(lv_obj_t, lv_label_create, VarName, _text(Text), __text_align(LV_TEXT_ALIGN_LEFT), __VA_ARGS__)
 #define button(VarName, ...)  _setup_widget(lv_obj_t, lv_btn_create, VarName, __VA_ARGS__)
 #define list(VarName, ...)  _setup_widget(lv_obj_t, lv_list_create, VarName, __VA_ARGS__)
 #define textarea(VarName, ...) _setup_widget(lv_obj_t, lv_textarea_create, VarName, __VA_ARGS__)
@@ -902,6 +904,11 @@ static lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAUL
 #define __bg_color_2(obj, value)        lv_obj_set_style_bg_color(obj, value, LV_PART_MAIN)
 #define __bg_color(...)                 _PASTE(__bg_color_, _nargs(__VA_ARGS__))(__VA_ARGS__)
 
+#define _APPLY_BG_COLOR_HEX(obj, value)     lv_obj_set_style_bg_color(obj, lv_color_hex(value), _dv_current_selector);
+#define __bg_color_hex_1(value)             _APPLY_BG_COLOR_HEX(_dv_current_widget, value)
+#define __bg_color_hex_2(obj, value)        lv_obj_set_style_bg_color(obj, lv_color_hex(value), LV_PART_MAIN)
+#define __bg_color_hex(...)                 _PASTE(__bg_color_hex_, _nargs(__VA_ARGS__))(__VA_ARGS__)
+
 // _bg_opa(value) -> __bg_opa(...)
 #define _APPLY_BG_OPA(obj, value)       lv_obj_set_style_bg_opa(obj, value, _dv_current_selector);
 #define __bg_opa_1(value)               _APPLY_BG_OPA(_dv_current_widget, value)
@@ -1408,6 +1415,45 @@ static lv_style_selector_t _dv_current_selector = LV_PART_MAIN | LV_STATE_DEFAUL
 #define __grid_row_gap_2(obj, value)    _APPLY_GRID_ROW_GAP(obj, value)
 #define __grid_row_gap(...)             _PASTE(__grid_row_gap_, _nargs(__VA_ARGS__))(__VA_ARGS__)
 
+// Add near other widget creation macros like label, button...
+#define bar(VarName, ...)  _setup_widget(lv_obj_t, lv_bar_create, VarName, __VA_ARGS__)
+
+// Add near other widget-specific direct property setters like _label_text...
+#define _bar_range(min, max)       lv_bar_set_range(_dv_current_widget, min, max);
+#define _bar_value(val, anim)      lv_bar_set_value(_dv_current_widget, val, anim);
+#define _bar_mode(mode)            lv_bar_set_mode(_dv_current_widget, mode);
+
+// Add near other widget-specific direct property getters like label_text_...
+#define bar_min_value_()           lv_bar_get_min_value(_dv_current_widget)
+#define bar_max_value_()           lv_bar_get_max_value(_dv_current_widget)
+#define bar_value_()               lv_bar_get_value(_dv_current_widget)
+#define bar_mode_()                lv_bar_get_mode(_dv_current_widget)
+
+// Add overloaded versions near __label_text, etc.
+// _bar_range(min, max) -> __bar_range(...)
+#define _APPLY_BAR_RANGE(obj, min, max) lv_bar_set_range(obj, min, max);
+#define __bar_range_2(min, max)         _APPLY_BAR_RANGE(_dv_current_widget, min, max)
+#define __bar_range_3(obj, min, max)    _APPLY_BAR_RANGE(obj, min, max)
+#define __bar_range(...)                _PASTE(__bar_range_, _nargs(__VA_ARGS__))(__VA_ARGS__)
+
+// _bar_value(val, anim) -> __bar_value(...)
+#define _APPLY_BAR_VALUE(obj, val, anim) lv_bar_set_value(obj, val, anim);
+#define __bar_value_2(val, anim)        _APPLY_BAR_VALUE(_dv_current_widget, val, anim)
+#define __bar_value_3(obj, val, anim)   _APPLY_BAR_VALUE(obj, val, anim)
+#define __bar_value(...)                _PASTE(__bar_value_, _nargs(__VA_ARGS__))(__VA_ARGS__)
+
+// _bar_mode(mode) -> __bar_mode(...)
+#define _APPLY_BAR_MODE(obj, mode)      lv_bar_set_mode(obj, mode);
+#define __bar_mode_1(mode)              _APPLY_BAR_MODE(_dv_current_widget, mode)
+#define __bar_mode_2(obj, mode)         _APPLY_BAR_MODE(obj, mode)
+#define __bar_mode(...)                 _PASTE(__bar_mode_, _nargs(__VA_ARGS__))(__VA_ARGS__)
+
+// Add overloaded getters
+#define _GET_BAR_MIN_VALUE(obj)         lv_bar_get_min_value(obj)
+#define __bar_min_value_0_()            _GET_BAR_MIN_VALUE(_dv_current_widget)
+#define __bar_min_value_1_(obj)         _GET_BAR_MIN_VALUE(obj)
+#define __bar_min_value_(...)           _PASTE(__bar_min_value_, _PASTE(_nargs(__VA_ARGS__), _))(__VA_ARGS__)
+// ... add similar for max_value, value, mode ...
 
 // --- Overloaded Widget Style Getters ---
 // (These use _dv_current_selector implicitly via the _GET macro)

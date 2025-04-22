@@ -3,8 +3,8 @@
 
 #include <stdio.h> // For snprintf
 
-#include "ui/lv_vfl.h"
-#include "ui/lv_views.h"
+#include "ui/layout/lv_vfl.h"
+#include "ui/layout/lv_views.h"
 
 #include "../../lvgl/src/core/lv_obj_class_private.h"
 
