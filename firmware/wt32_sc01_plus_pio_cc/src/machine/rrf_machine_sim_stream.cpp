@@ -6,6 +6,7 @@
 
 #include <map>
 #include <mutex>
+#include <cmath>
 #include <cstring> // For strncpy, strcmp, strtok_r, strlen
 #include <cstdlib> // For atof, atoi
 #include <cstdio>  // For snprintf
@@ -369,18 +370,18 @@ void RRFMachineSimStream::process_last_command(std::string command_str) {
 
         if (!relative) { // Absolute mode (G90)
             // Only update axes that were specified in the command
-            if (!isnan(x)) pos_[0] = x - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][0]); // Target user pos -> convert to machine pos
-            if (!isnan(y)) pos_[1] = y - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][1]);
-            if (!isnan(z)) pos_[2] = z - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][2]);
+            if (!std::isnan(x)) pos_[0] = x - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][0]); // Target user pos -> convert to machine pos
+            if (!std::isnan(y)) pos_[1] = y - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][1]);
+            if (!std::isnan(z)) pos_[2] = z - (wcs_ == 0 ? 0 : wcs_offsets_[wcs_ -1][2]);
         } else { // Relative mode (G91)
             // Add specified offset to current machine position
-            if (!isnan(x)) pos_[0] += x;
-            if (!isnan(y)) pos_[1] += y;
-            if (!isnan(z)) pos_[2] += z;
+            if (!std::isnan(x)) pos_[0] += x;
+            if (!std::isnan(y)) pos_[1] += y;
+            if (!std::isnan(z)) pos_[2] += z;
         }
         _df(0, ">> G0/G1 %s (%s) => X:%.3f Y:%.3f Z:%.3f | Machine Pos: %.3f, %.3f, %.3f",
             command_str.c_str(), relative ? "Rel" : "Abs",
-            isnan(x) ? NAN : x, isnan(y) ? NAN : y, isnan(z) ? NAN : z,
+            std::isnan(x) ? NAN : x, std::isnan(y) ? NAN : y, std::isnan(z) ? NAN : z,
             pos_[0], pos_[1], pos_[2]);
 
     } else if (command_str == "G90") {
