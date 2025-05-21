@@ -227,7 +227,7 @@ feed_rate_view_t *feed_rate_view_create(lv_obj_t *parent) {
         lv_obj_t *_dv_current_widget = override_lbl;
         lv_style_selector_t _dv_current_selector =
             LV_PART_MAIN | LV_STATE_DEFAULT;
-        __text("Over");
+        __text("Override");
       } while (0);
       ;
     } while (0);
@@ -277,15 +277,14 @@ feed_rate_view_t *feed_rate_view_create(lv_obj_t *parent) {
         lv_obj_t *_dv_current_widget = self->main_cont;
         lv_style_selector_t _dv_current_selector =
             LV_PART_MAIN | LV_STATE_DEFAULT;
-        __max_client_area() __bg_color_hex(0xff0000) __height(lv_pct(100))
-            __bg_opa(LV_OPA_100);
+        __max_client_area() __height(lv_pct(100)) __bg_opa(LV_OPA_0);
       } while (0);
       ,
       do {
         lv_obj_t *_dv_current_widget = self->identifier;
         lv_style_selector_t _dv_current_selector =
             LV_PART_MAIN | LV_STATE_DEFAULT;
-        __bg_color_hex(0xff00ff) __bg_opa(LV_OPA_100);
+        __bg_opa(LV_OPA_0);
       } while (0);
       ,
       do {
@@ -299,8 +298,7 @@ feed_rate_view_t *feed_rate_view_create(lv_obj_t *parent) {
         lv_obj_t *_dv_current_widget = self->bars;
         lv_style_selector_t _dv_current_selector =
             LV_PART_MAIN | LV_STATE_DEFAULT;
-        __bg_color_hex(0xff2255) __bg_opa(LV_OPA_100) __min_width(20)
-            __min_height(30);
+        __bg_opa(LV_OPA_0) __min_width(20) __min_height(30);
       } while (0);
       ,
       do {
@@ -336,7 +334,7 @@ feed_rate_view_t *feed_rate_view_create(lv_obj_t *parent) {
                 lv_obj_t *_dv_current_widget = self->left_mid;
                 lv_style_selector_t _dv_current_selector =
                     LV_PART_MAIN | LV_STATE_DEFAULT;
-                __bg_color_hex(0x00ffff) __bg_opa(LV_OPA_100);
+                __bg_opa(LV_OPA_0);
               } while (0);)
               _layout_grid(self->main, _rows(LV_GRID_FR(1), LV_GRID_CONTENT),
                            _cols(LV_GRID_CONTENT), _cell(self->left_mid, 0, 0),
