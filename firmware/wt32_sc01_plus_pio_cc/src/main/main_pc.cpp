@@ -120,6 +120,7 @@ void lvgl_sdl() {
     /* Add a display
      * Use the 'monitor' driver which creates window on PC's monitor to simulate a display*/
     lvDisplay = lv_sdl_window_create(SDL_HOR_RES, SDL_VER_RES);
+    lv_sdl_window_set_title(lvDisplay, "Pendant Simulator");
     lvMouse = lv_sdl_mouse_create();
     lvMouseWheel = lv_sdl_mousewheel_create();
     lvKeyboard = lv_sdl_keyboard_create();
@@ -152,10 +153,11 @@ void lvgl_sdl() {
       //last_tick = current_tick;
 
 
-      SDL_Delay(5);
-      Uint32 current = SDL_GetTicks();
-      lv_tick_inc(current - lastTick); // Update the tick timer. Tick is new for LVGL 9
-      lastTick = current;
+      // SDL_Delay(5);
+      // Uint32 current = SDL_GetTicks();
+      // lv_tick_inc(current - lastTick); // Update the tick timer. Tick is new for LVGL 9
+      // lastTick = current;
+      lv_tick_set_cb(SDL_GetTicks);
       lv_timer_handler(); // Update the UI-
 
       /*
@@ -171,6 +173,7 @@ void lvgl_sdl() {
     lv_sdl_quit();
 }
 
+// Not used this is here still for reference of a simulator loop with sdl
 void lvgl_sdl_prev() {
   lv_init();
 
