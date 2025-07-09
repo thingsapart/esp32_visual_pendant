@@ -322,54 +322,54 @@ void interface_update_machine_state(interface_t *interface, machine_interface_t 
 void _mach_state_changed(machine_interface_t *mach, void *user_data) {
     _d(-1, "STATE CHANGED");
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.state_changed = true;
+    interface->machine_state_updated.state_changed = true;
 }
 
 void _mach_pos_changed(machine_interface_t *mach, void *user_data) {
     LOGI(TAG, "POS CHANGED");
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.pos_changed = true;
+    interface->machine_state_updated.pos_changed = true;
 }
 
 void _mach_home_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.home_changed = true;
+    interface->machine_state_updated.home_changed = true;
 }
 
 void _mach_wcs_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.wcs_changed = true;
+    interface->machine_state_updated.wcs_changed = true;
 }
 
 void _mach_feed_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.feed_changed = true;
+    interface->machine_state_updated.feed_changed = true;
 }
 
 void _mach_sensors_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.sensors_changed = true;
+    interface->machine_state_updated.sensors_changed = true;
 }
 
 void _mach_dialogs_changed(machine_interface_t *mach, void *user_data) {
     _d(-1, "STATE CHANGED");
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.dialogs_changed = true;
+    interface->machine_state_updated.dialogs_changed = true;
 }
 
 void _mach_spindles_tools_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.spindles_tools_changed = true;
+    interface->machine_state_updated.spindles_tools_changed = true;
 }
 
 void _mach_connected_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.connected_changed = true;
+    interface->machine_state_updated.connected_changed = true;
 }
 
 void _mach_current_move_axis_changed(machine_interface_t *mach, void *user_data) {
     interface_t *interface = (interface_t *)user_data;
-    interface->machine_state_udated.current_move_axis_changed = true;
+    interface->machine_state_updated.current_move_axis_changed = true;
 }
 
 void _mach_files_changed(machine_interface_t *mach, void *user_data, const char *path, char **files) {
@@ -390,7 +390,7 @@ void _mach_files_changed(machine_interface_t *mach, void *user_data, const char 
 #define CHECK_AND_CALL_CBS(cb_name) \
   do { \
     _d(-1, #cb_name " CHECK/CALL:"); \
-    if (interface->machine_state_udated.cb_name##_changed) { \
+    if (interface->machine_state_updated.cb_name##_changed) { \
         for (size_t i = 0; i < sizeof(interface->cb_name##_changed_cb) / sizeof(interface->cb_name##_changed_cb[0]); ++i) { \
              _df(-1, #cb_name " CHECKING %d (%p)", i, interface->cb_name##_changed_cb[i].cb_fn); \
             if (interface->cb_name##_changed_cb[i].cb_fn) { \
@@ -398,7 +398,7 @@ void _mach_files_changed(machine_interface_t *mach, void *user_data, const char 
                interface->cb_name##_changed_cb[i].cb_fn(interface->machine, interface->cb_name##_changed_cb[i].user_data); \
             } \
         } \
-        interface->machine_state_udated.cb_name##_changed = false; \
+        interface->machine_state_updated.cb_name##_changed = false; \
     } \
   } while (0)
 

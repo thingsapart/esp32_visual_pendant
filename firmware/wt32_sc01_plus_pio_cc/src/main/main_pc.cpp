@@ -10,43 +10,55 @@
 
 #include "SDL2/SDL.h"
 #include "lvgl.h"
+#include "tasks/machine_task.h"
 
 // #include "Arduino.h"
 
 volatile sig_atomic_t bRunning = false;
 
-void signal_handler(int interrupt) {
+void signal_handler(int interrupt)
+{
   printf("captured interrupt %d\r\n", interrupt);
-  if (interrupt == SIGINT) {
+  if (interrupt == SIGINT)
+  {
     bRunning = false;
   }
 }
 
-extern "C" {
-void encoder_set_ui_mode() {}
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+  void encoder_set_ui_mode() {}
 
-void encoder_set_encoder_mode() {}
+  void encoder_set_encoder_mode() {}
+#ifdef __cplusplus
 }
+#endif
 
 #define RRF_SIM 1
 
+#include "config.h"
 #include "debug.h"
 #include "machine/machine_interface.h"
-#include "machine/machine_rrf.h"
 #include "machine/machine_sim.h"
 #include "ui/interface.h"
 
 #include "driver/arduino_serial_wrapper.h"
 
-// static duet_simulator_t *machine;
-static machine_rrf_t *machine;
+static duet_simulator_t *machine;
 static interface_t interface;
 
-#include <map>
+thrd_t machine_sim_task;
 
-extern "C" {
+#include <map>
+#ifdef __cplusplus
+extern "C"
+{
+#endif
 
 #include "driver/arduino_serial_wrapper.h"
+#include <tasks/machine_task.h>
 
 #if 0
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
@@ -97,84 +109,78 @@ size_t serial_read_line_buf(serial_handle_t handle, char *buf, size_t len, long 
 }
 
 #endif
+#ifdef __cplusplus
 }
+#endif
 
 static lv_display_t *lvDisplay;
 static lv_indev_t *lvMouse;
 static lv_indev_t *lvMouseWheel;
 static lv_indev_t *lvKeyboard;
 
-void lvgl_sdl() {
-    lv_init();
+void lvgl_sdl()
+{
+  lv_init();
 
-    // Workaround for sdl2 `-m32` crash
-    // https://bugs.launchpad.net/ubuntu/+source/libsdl2/+bug/1775067/comments/7
-    #ifndef WIN32
-        setenv("DBUS_FATAL_WARNINGS", "0", 1);
-    #endif
+// Workaround for sdl2 `-m32` crash
+// https://bugs.launchpad.net/ubuntu/+source/libsdl2/+bug/1775067/comments/7
+#ifndef WIN32
+  setenv("DBUS_FATAL_WARNINGS", "0", 1);
+#endif
 
-    #if LV_USE_LOG != 0
-    lv_log_register_print_cb(lv_log_print_g_cb);
-    #endif
+#if LV_USE_LOG != 0
+  lv_log_register_print_cb(lv_log_print_g_cb);
+#endif
 
-    /* Add a display
-     * Use the 'monitor' driver which creates window on PC's monitor to simulate a display*/
-    lvDisplay = lv_sdl_window_create(SDL_HOR_RES, SDL_VER_RES);
-    lv_sdl_window_set_title(lvDisplay, "Pendant Simulator");
-    lvMouse = lv_sdl_mouse_create();
-    lvMouseWheel = lv_sdl_mousewheel_create();
-    lvKeyboard = lv_sdl_keyboard_create();
+  /* Add a display
+   * Use the 'monitor' driver which creates window on PC's monitor to simulate a display*/
+  lvDisplay = lv_sdl_window_create(SDL_HOR_RES, SDL_VER_RES);
+  lv_sdl_window_set_title(lvDisplay, "Pendant Simulator");
+  lvMouse = lv_sdl_mouse_create();
+  lvMouseWheel = lv_sdl_mousewheel_create();
+  lvKeyboard = lv_sdl_keyboard_create();
 
-    lv_sdl_window_set_zoom(lvDisplay, 1);
+  lv_sdl_window_set_zoom(lvDisplay, 1);
 
-    lv_tick_set_cb(SDL_GetTicks);
+  lv_tick_set_cb(SDL_GetTicks);
 
-    signal(SIGINT, signal_handler);
+  signal(SIGINT, signal_handler);
 
-    int rrf_uart_num = add_rrf_sim_serial();
-    machine = machine_rrf_create(rrf_uart_num, MACHINE_POLL_INTERVAL, 0, 0);
+  // start the UI
+  machine = duet_simulator_create(MACHINE_POLL_INTERVAL);
 
-    // start the UI
-    // machine = duet_simulator_create(50);
+  interface_init(&interface, &machine->base);
 
-    interface_init(&interface, &machine->base);
+  // test_screen();
+  // interface = new Interface(machine);
+  _d(0, "LOADED..\n");
 
-    // test_screen();
-    // interface = new Interface(machine);
-    _d(0, "LOADED..\n");
+  bRunning = true;
 
-    bRunning = true;
-    //uint32_t last_tick = SDL_GetTicks();
-    uint32_t lastTick = SDL_GetTicks();
+  lv_tick_set_cb(SDL_GetTicks);
+  if (!machine_task_run("MachineSim", &machine->base, &machine_sim_task))
+  {
+    bRunning = false;
+    printf("Failed to create machine sim task");
+  }
 
-    while (bRunning) {
-      //uint32_t current_tick = SDL_GetTicks();
-      //uint32_t elapsed = current_tick - last_tick;
-      //last_tick = current_tick;
+  while (bRunning)
+  {
+    lv_timer_handler(); // Update the UI-
 
+    // task handler
+    lv_task_handler();
 
-      // SDL_Delay(5);
-      // Uint32 current = SDL_GetTicks();
-      // lv_tick_inc(current - lastTick); // Update the tick timer. Tick is new for LVGL 9
-      // lastTick = current;
-      lv_tick_set_cb(SDL_GetTicks);
-      lv_timer_handler(); // Update the UI-
+    // Update display
+    interface_tick(&interface);
+  }
 
-      /*
-      // task handler
-      lv_task_handler();
-
-      uint32_t sleep_time = (1000 / 60) - elapsed;
-      if (sleep_time < 0) {
-        usleep(sleep_time * 1000);
-      }*/
-    }
-
-    lv_sdl_quit();
+  lv_sdl_quit();
 }
 
 // Not used this is here still for reference of a simulator loop with sdl
-void lvgl_sdl_prev() {
+void lvgl_sdl_prev()
+{
   lv_init();
 
   int screen_width = 640;
@@ -197,8 +203,7 @@ void lvgl_sdl_prev() {
 
   signal(SIGINT, signal_handler);
 
-  int rrf_uart_num = add_rrf_sim_serial();
-  machine = machine_rrf_create(rrf_uart_num, MACHINE_POLL_INTERVAL, 0, 0);
+  machine = duet_simulator_create(MACHINE_POLL_INTERVAL);
 
   // start the UI
   // machine = duet_simulator_create(50);
@@ -211,7 +216,8 @@ void lvgl_sdl_prev() {
 
   bRunning = true;
   uint32_t last_tick = SDL_GetTicks();
-  while (bRunning) {
+  while (bRunning)
+  {
     uint32_t current_tick = SDL_GetTicks();
     uint32_t elapsed = current_tick - last_tick;
     last_tick = current_tick;
@@ -220,7 +226,8 @@ void lvgl_sdl_prev() {
     lv_task_handler();
 
     uint32_t sleep_time = (1000 / 60) - elapsed;
-    if (sleep_time < 0) {
+    if (sleep_time < 0)
+    {
       usleep(sleep_time * 1000);
     }
   }
@@ -228,7 +235,8 @@ void lvgl_sdl_prev() {
   lv_sdl_quit();
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
   lvgl_sdl();
 
   return 0;

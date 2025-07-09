@@ -1,0 +1,16 @@
+{
+    "name": "esp32_pendant",
+    "version": "v0.0.1",
+    "builds": [
+        {
+            "chipFamily": "ESP32-S3",
+            "improv": false,
+            "parts": [
+                {
+                    "path": "hub-esp32s3-devkit_16mb_full_16MB_v0.0.1_e49255c.json",
+                    "offset": 0
+                }
+            ]
+        }
+    ]
+}

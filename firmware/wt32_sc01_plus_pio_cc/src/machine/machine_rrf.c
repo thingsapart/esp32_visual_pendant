@@ -10,7 +10,7 @@
 #include "debug.h"
 
 #ifdef ASYNC_RESPONSE_PROCESSING
-#  include "tasks/machine_response_proc_task.h"
+#include "tasks/machine_response_proc_task.h"
 #endif
 
 static const char *TAG = "machine_rrf";
@@ -849,11 +849,19 @@ void machine_rrf_task_loop_iter(machine_rrf_t *self) {
 
 static struct {
     serial_handle_t serial;
+#ifdef ESP32_HW
     QueueHandle_t queue;
+#else
+    gcode_queue_t *queue;
+#endif
 } queue_serial_map[MAX_SERIAL_PROC_TASKS] = { NULL };
 
 static void serial_line_received_callback(serial_handle_t handle, const char *line, size_t len) {
+#ifdef ESP32_HW
     QueueHandle_t task_event_queue = NULL;
+#else
+    gcode_queue_t *task_event_queue = NULL; 
+#endif
     size_t found = 9999;
     for (size_t i = 0; i < MAX_SERIAL_PROC_TASKS; ++i) {
         if (queue_serial_map[i].serial == handle) {
@@ -870,10 +878,15 @@ static void serial_line_received_callback(serial_handle_t handle, const char *li
     machine_response_proc_task_data_ready(task_event_queue, line, len, true);
 }
 
-bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, QueueHandle_t task_event_queue) {
+bool machine_rrf_setup_response_processing_task(machine_rrf_t *self, 
+#ifdef ESP32_HW
+    QueueHandle_t task_event_queue
+#else
+    gcode_queue_t *task_event_queue
+#endif
+) {
     if (!serial_register_line_callback(self->uart, serial_line_received_callback)) {
         LOGE(TAG, "Failed to register serial line callback!");
-        vQueueDelete(task_event_queue);      // Clean up queue
         return false;
     } else {
         LOGI(TAG, "Registered serial response processing for uart %p.", self->uart);

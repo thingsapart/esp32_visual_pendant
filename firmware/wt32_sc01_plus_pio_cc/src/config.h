@@ -7,6 +7,9 @@
 #define MACHINE_POLL_EVERY_NTH_INTERVAL 2
 #define MACHINE_SEND_GCODE_INTERVAL_MS 100
 
+// --- G-code Queue ---
+#define MAX_GCODE_STR_LEN 128
+
 #ifdef POSIX
 #  define RRF_SIM 1
 #else
@@ -21,6 +24,9 @@
 #define DEBUG_TOUCH 0
 #define DEBUG_ENCODER 1
 
+#define ASYNC_RESPONSE_PROCESSING 1    // Use Tasks to process serial/esp32 state.
+#define ASYNC_GCODE_SENDING 1          // Use Tasks to process serial/esp32 state.
+
 // ESP32-specific settings:
 #ifdef ESP32_HW
 
@@ -31,9 +37,6 @@
 
 // Broadcast:
 #define DISPLAY_MAC_ADDR {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
-
-#define ASYNC_RESPONSE_PROCESSING 1    // Use Tasks to process serial/esp32 state.
-#define ASYNC_GCODE_SENDING 1          // Use Tasks to process serial/esp32 state.
 
 #define TASK_MACHINE_CORE 1            // Machine Task Core.
 #define TASK_MACHINE_STATE_PROC_CORE 1 // Machine State Processing Task Core.
