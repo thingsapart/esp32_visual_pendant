@@ -12,11 +12,13 @@ extern "C" {
 #endif
 
 #ifdef ASYNC_RESPONSE_PROCESSING
-
+#ifdef ESP32_HW
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-
+#else
+#include "compat/queue.h"
+#endif
 #endif
 
 #define MAX_MSG_BUFFERED 10
@@ -30,9 +32,12 @@ typedef struct {
   remote_msg_t msg_buffer[MAX_MSG_BUFFERED];
   size_t msg_buffer_msg_len[MAX_MSG_BUFFERED];
   size_t msg_buf_len;
-
 #ifdef ASYNC_RESPONSE_PROCESSING
+#ifdef ESP32_HW
   QueueHandle_t proc_task_event_queue;
+#else
+  gcode_queue_t *proc_task_event_queue;
+#endif
 #endif
 
 } machine_interface_remote_t;
@@ -50,7 +55,13 @@ void machine_interface_remote_process_messages(
 
 #ifdef ASYNC_RESPONSE_PROCESSING
 bool machine_remote_setup_response_processing_task(
-    machine_interface_remote_t *self, QueueHandle_t task_event_queue);
+    machine_interface_remote_t *self, 
+#ifdef ESP32_HW
+    QueueHandle_t task_event_queue
+#else
+    gcode_queue_t *task_event_queue
+#endif
+  );
 #endif
 
 void* message_box_t_to_payload(const message_box_t *msg_box, size_t *out_size);

@@ -17,6 +17,21 @@ if sys.platform.startswith("darwin"):
         env.Append(
             LIBPATH=os.path.dirname(sdl_lib[0])
         )
+
+if sys.platform == "linux":
+    sdl_include = glob.glob("/usr/include/SDL2")
+    if sdl_include:
+        print(f"Found SDL include path {sdl_include[0]}")
+        env.Append(
+            CPPPATH=sdl_include[0]
+        )
+    sdl_lib = glob.glob("/usr/lib/**/*SDL*")
+    if sdl_lib:
+        print(f"Found SDL lib path {sdl_include[0]}")
+        env.Append(
+            CPPPATH=sdl_include[0]
+        )
+
     
     
 #breakpoint()

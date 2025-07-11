@@ -268,7 +268,7 @@ void setup() {
   }
 
   LOGI(TAG, "Creating RRF Machine Task... ");
-  if (!abort && machine_task_run("MachineRRF", &machine_rrf_task, &machine.base,
+  if (!abort && machine_task_run("MachineRRF", &machine.base, &machine_rrf_task,
                                  TASK_MACHINE_CORE)) {
     LOGI(TAG, "DONE\n");
   } else {
@@ -277,8 +277,8 @@ void setup() {
   }
 
   LOGI(TAG, "Creating Remote Machine Task... ");
-  if (!abort && machine_task_run("MachineRemote", &machine_remote_task,
-                                 &machine.base, TASK_MACHINE_CORE)) {
+  if (!abort && machine_task_run("MachineRemote", &machine.base, &machine_remote_task,
+                                  TASK_MACHINE_CORE)) {
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
@@ -288,8 +288,8 @@ void setup() {
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
       machine_response_proc_task_run(
-          "MachineRRFProc", &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, &machine_rrf.base, TASK_MACHINE_CORE)) {
+          "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
+          &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
     if (!machine_rrf_setup_response_processing_task(&machine_rrf,
                                                     machine_rrf_proc_queue)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
@@ -302,9 +302,8 @@ void setup() {
 
   LOGI(TAG, "Creating Remote Machine State Processing Task... ");
   if (!abort && machine_response_proc_task_run(
-                    "MachineRemoteProc", &machine_remote_proc_task_handle,
-                    &machine_remote_proc_queue, &machine_remote.base,
-                    TASK_MACHINE_CORE)) {
+                    "MachineRemoteProc", &machine_remote.base, &machine_remote_proc_task_handle,
+                    &machine_remote_proc_queue, TASK_MACHINE_CORE)) {
     if (!machine_remote_setup_response_processing_task(
             &machine_remote, machine_remote_proc_queue)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
@@ -320,8 +319,8 @@ void setup() {
 #ifdef ASYNC_GCODE_SENDING
   LOGI(TAG, "Creating Machine GCode Sending Task... ");
   if (!abort && machine_send_task_run(
-                    "MachineSendTask", &machine_send_task_handle,
-                    &machine_send_queue, &machine_rrf.base,
+                    "MachineSendTask", &machine_rrf.base, &machine_send_task_handle,
+                    &machine_send_queue,
                     TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 5)) {
     machine_rrf.base.gcode_queue = machine_send_queue;
     LOGI(TAG, "DONE\n");

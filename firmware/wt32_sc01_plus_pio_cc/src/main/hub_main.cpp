@@ -814,8 +814,8 @@ void setup() {
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
       machine_response_proc_task_run(
-          "MachineRRFProc", &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, g_machine_base, TASK_MACHINE_CORE)) {
+          "MachineRRFProc", g_machine_base, &machine_rrf_proc_task_handle,
+          &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
     if (!machine_rrf_setup_response_processing_task(g_machine,
                                                     machine_rrf_proc_queue)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
@@ -830,8 +830,8 @@ void setup() {
 #ifdef ASYNC_GCODE_SENDING
   LOGI(TAG, "Creating Machine GCode Sending Task... ");
   if (!abort && machine_send_task_run(
-                    "MachineSendTask", &machine_send_task_handle,
-                    &machine_send_queue, g_machine_base,
+                    "MachineSendTask", g_machine_base, 
+                    &machine_send_task_handle, &machine_send_queue,
                     TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 1)) {
     g_machine->base.gcode_queue = machine_send_queue;
     LOGI(TAG, "DONE\n");

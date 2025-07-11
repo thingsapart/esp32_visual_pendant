@@ -63,7 +63,7 @@ struct interface_t {
   // The machine-related state processing is happening in a different
   // thread that can lead to races and crashes when updating UI.
   // Replicate the machine_interface callbacks here, let UI code register
-  // here and have machine_interfac callbacks just set dirty flags here
+  // here and have machine_interface callbacks just set dirty flags here
   // so that interface_t can call the UI callbacks.
   machine_change_callback_t state_changed_cb[MAX_CALLBACKS];
   machine_change_callback_t pos_changed_cb[MAX_CALLBACKS];
@@ -88,7 +88,7 @@ struct interface_t {
     unsigned int spindles_tools_changed : 1;
     unsigned int connected_changed : 1;
     unsigned int current_move_axis_changed : 1;
-  } machine_state_udated;
+  } machine_state_updated;
   bool files_changed[MAX_FILE_LISTS];
 };
 

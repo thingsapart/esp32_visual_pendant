@@ -10,13 +10,11 @@
 extern "C" {
 #endif
 
-typedef struct duet_simulator_t duet_simulator_t;
-
-struct duet_simulator_t {
+typedef struct duet_simulator_t {
   machine_interface_t base; // Inheritance-like structure
                             // Add any Duet-specific state here
   float wcs_offsets[10][3]; // Simulate up to 10 WCS (G54-G59.3)
-};
+} duet_simulator_t;
 
 duet_simulator_t *duet_simulator_create(uint16_t sleep_ms);
 void duet_simulator_destroy(duet_simulator_t *sim);

@@ -13,13 +13,17 @@ static const char axes[] = {
         'X', 'Y', 'Z', '\0'
     };
 
-#ifdef POSIX
+#ifdef ESP32_HW
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/portmacro.h"
+#else
 # include <unistd.h>
 # define vTaskDelay(ms) usleep(ms * 1000)
 # define pdMS_TO_TICKS(ms) (ms)
-#else
-# include "freertos/FreeRTOS.h"
-# include "freertos/task.h"
+#ifdef ASYNC_GCODE_SENDING
+#include "compat/queue.h"
+#endif
 #endif
 
 #define call_callbacks(cbs_name) do { \
@@ -38,65 +42,14 @@ static const char axes[] = {
     } \
 } while (0)
 
-#ifndef ASYNC_GCODE_SENDING
-
-// Initialize the G-code queue
-void gcode_queue_init(gcode_queue_t *queue) {
-    queue->head = 0;
-    queue->tail = 0;
-    queue->count = 0;
-}
-
-// Add a G-code command to the queue (FIFO).  Handles wraparound.
-bool gcode_queue_push(gcode_queue_t *queue, const char *gcode) {
-    if (queue->count >= MAX_GCODE_Q_LEN) {
-        _d(2, "G-code queue overflow!");
-        return false; // Indicate failure
-    }
-
-    size_t len = strlen(gcode);
-    if (len >= sizeof(queue->buffer[0])) {
-        _df(2, "G-code command too long: %s", gcode);
-        return false; // Command too long for buffer
-    }
-
-    strcpy(queue->buffer[queue->head], gcode);
-    queue->head = (queue->head + 1) % MAX_GCODE_Q_LEN;
-    queue->count++;
-    return true;
-}
-
-// Retrieve a G-code command from the queue (FIFO).  Handles wraparound.
-bool gcode_queue_pop(gcode_queue_t *queue, char *gcode) {
-    if (queue->count == 0) {
-        return false; // Queue is empty
-    }
-
-    strcpy(gcode, queue->buffer[queue->tail]);
-    queue->tail = (queue->tail + 1) % MAX_GCODE_Q_LEN;
-    queue->count--;
-    return true;
-}
-
-// Peek at the next G-code command without removing it.
-bool gcode_queue_peek(const gcode_queue_t *queue, char *gcode) {
-    if (queue->count == 0) {
-        return false; // Queue is empty
-    }
-    strcpy(gcode, queue->buffer[queue->tail]);
-    return true;
-}
-
-size_t gcode_queue_count(const gcode_queue_t *queue) {
-    return queue->count;
-}
-
+#ifdef ASYNC_GCODE_SENDING
+#ifndef ESP32_HW
 static void machinte_interface_send_gcode(machine_interface_t *self, const char *gcode, poll_state_t poll_state) {
-    gcode_queue_push(&self->gcode_queue, gcode);
+    gcode_queue_push(self->gcode_queue, gcode);
     self->poll_state = (uint32_t) self->poll_state | poll_state;
     _df(-1, "gcode queued: %s", gcode);
 }
-
+#endif
 #endif
 
 // --- Default "Virtual" Method Implementations ---
@@ -208,8 +161,8 @@ static char* _default_debug_print(machine_interface_t *self) {
         self->tool ? self->tool : "None", // Handle NULL tool
         self->feed_multiplier,
         self->z_offs,
-#ifndef ASYNC_GCODE_SENDING
-        gcode_queue_count(&self->gcode_queue),
+#if defined(ASYNC_GCODE_SENDING) && !defined(ESP32_HW)
+        gcode_queue_count(self->gcode_queue),
 #else
         0,
 #endif
@@ -260,10 +213,12 @@ machine_interface_t* machine_interface_init(machine_interface_t *self, uint16_t 
     self->spindles = NULL;
     self->num_spindles = 0;
 
-#ifndef ASYNC_GCODE_SENDING
-    gcode_queue_init(&self->gcode_queue);
+#ifdef ASYNC_GCODE_SENDING
+#ifdef ESP32_HW 
+    self->gcode_queue = NULL;
 #else
     self->gcode_queue = NULL;
+#endif
 #endif
 
     // Set default "virtual" method implementations
@@ -425,10 +380,17 @@ void machine_interface_send_gcode(machine_interface_t *self, const char *gcode, 
     memcpy(buf, gcode, len + 1);
     buf[len] = '\0';
 
+#ifdef ESP32_HW
     BaseType_t result = xQueueSend(self->gcode_queue, buf, 0);
     if (result != pdTRUE) {
          LOGW(TAG, "Failed to add gcode to the queue: %s", gcode);
     }
+#else
+    bool result = gcode_queue_push(self->gcode_queue, buf);
+    if (!result) {
+         LOGW(TAG, "Failed to add gcode to the queue: %s", gcode);
+    }
+#endif
 
     self->poll_state = (uint32_t) self->poll_state | poll_state;
     LOGV(TAG, "gcode queued: %s", gcode);
@@ -545,6 +507,10 @@ void machine_interface_home_updated(machine_interface_t *self) {
     call_callbacks(home_changed_cb);
 }
 
+void machine_interface_state_updated(machine_interface_t *self) {
+    call_callbacks(state_change_cb);
+}
+
 void machine_interface_wcs_updated(machine_interface_t *self) {
     // Clear target positions
     for (int i = 0; i < 3; i++) {
@@ -573,7 +539,7 @@ void machine_interface_spindles_tools_updated(machine_interface_t *self) {
 
 void machine_interface_files_updated(machine_interface_t *self, const char *fdir) {
     for (int i = 0; i < MAX_CALLBACKS; i++) {
-        if (strcmp(fdir, self->files_changed_cb[i].path) == 0) {
+        if (self->files_changed_cb[0].path != NULL && strcmp(fdir, self->files_changed_cb[i].path) == 0) {
            self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data, fdir, self->filelists[i].files);
         }
     }

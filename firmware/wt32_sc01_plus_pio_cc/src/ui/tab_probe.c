@@ -48,8 +48,8 @@ static probe_setting_t probe_settings[] = {
 };
 static const size_t num_probe_settings = sizeof(probe_settings) / sizeof(probe_settings[0]);
 
-#define IMG_USE_FS 0
-// #define IMG_USE_FS (POSIX != 1)
+// #define IMG_USE_FS 0
+#define IMG_USE_FS (POSIX == 1)
 
 #if IMG_USE_FS
 // Placeholder image paths. Replace with your actual paths.

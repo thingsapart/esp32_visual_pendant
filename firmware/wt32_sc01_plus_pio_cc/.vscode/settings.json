@@ -112,6 +112,7 @@
         "lv_view_def_cons.h": "c",
         "lv_view_def_end.h": "c",
         "lv_view_def_header_comment.h": "c",
-        "feed_rate_view.h": "c"
+        "feed_rate_view.h": "c",
+        "task.h": "c"
     }
 }

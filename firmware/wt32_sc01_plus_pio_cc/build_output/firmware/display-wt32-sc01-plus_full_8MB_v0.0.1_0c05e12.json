@@ -1,0 +1,16 @@
+{
+    "name": "esp32_pendant",
+    "version": "v0.0.1",
+    "builds": [
+        {
+            "chipFamily": "ESP32-S3",
+            "improv": false,
+            "parts": [
+                {
+                    "path": "display-wt32-sc01-plus_full_8MB_v0.0.1_0c05e12.json",
+                    "offset": 0
+                }
+            ]
+        }
+    ]
+}

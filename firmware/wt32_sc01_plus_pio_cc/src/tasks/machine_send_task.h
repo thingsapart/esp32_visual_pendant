@@ -1,25 +1,38 @@
 #ifndef __MACHINE_SEND_TASK_H__
 #define __MACHINE_SEND_TASK_H__
 
+#include "config.h"
 #ifdef ASYNC_GCODE_SENDING
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
+#ifdef ESP32_HW
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#else
+#include "compat/queue.h"
+#include <threads.h>
+#endif
 
 #include "driver/arduino_serial_wrapper.h"
 #include "machine/machine_interface.h"
 
-bool machine_send_task_run(const char *task_name, 
-                           TaskHandle_t *machine_task_handle,
-                           QueueHandle_t *queue,
-                           machine_interface_t *machine,
-                           BaseType_t pinned_core,
-                           BaseType_t freertos_task_stack_size,
-                           BaseType_t freertos_task_prio);
+    bool machine_send_task_run(const char *task_name,
+                               machine_interface_t *machine,
+#ifdef ESP32_HW
+                               TaskHandle_t *machine_task_handle,
+                               QueueHandle_t *queue,
+                               BaseType_t pinned_core,
+                               BaseType_t freertos_task_stack_size,
+                               BaseType_t freertos_task_prio
+#else
+                                thrd_t *machine_task_handle,
+                                gcode_queue_t *queue
+#endif
+    );
 
 #ifdef __cplusplus
 }
