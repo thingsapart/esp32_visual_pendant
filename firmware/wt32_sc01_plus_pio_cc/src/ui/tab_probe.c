@@ -109,7 +109,7 @@ LV_IMG_DECLARE(img_ctr_bore)  // Inside Bore
 #define img_arr_e_data &img_arr_e
 #define img_arr_w_data &img_arr_w
 #define img_arr_n_data &img_arr_n
-//#define img_ref_sfc_data &img_ref_sfc
+                              //#define img_ref_sfc_data &img_ref_sfc
 #define img_arr_se_data &img_arr_se       // Back-left
 #define img_arr_sw_data &img_arr_sw       // Back-right
 #define img_arr_ne_data &img_arr_ne       // Front-Left

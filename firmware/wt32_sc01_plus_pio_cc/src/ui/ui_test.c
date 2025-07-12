@@ -19,7 +19,7 @@ void test_ui(lv_obj_t *screen) {
     snprintf(btn_id, sizeof(btn_id), "flex_btn_%d", i);
     BTN(btn_id, flex_cont, _size(obj, 80, 40);
         //_flex_grow(obj, 1); // Example: Make items grow equally (commented
-        //out)
+        // out)
         _bg_color(obj, lv_palette_main(LV_PALETTE_BLUE), LV_PART_MAIN);
         lv_obj_t *btn_label = lv_label_create(obj);
         _label_text(btn_label, "Btn"); lv_obj_center(btn_label););

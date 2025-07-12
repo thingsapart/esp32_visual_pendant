@@ -321,8 +321,8 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
               _pads(obj, 5, 18, 5, 18); _size(obj, lv_pct(100), 18);
               lv_bar_set_value(obj, 5000, LV_ANIM_ON);
               //_bar_indicator(obj, bar_feed, LV_OPA_COVER,
-              //lv_color_hex(0x00DD00), lv_color_hex(0x0000DD), LV_GRAD_DIR_HOR,
-              //175, 3);
+              // lv_color_hex(0x00DD00), lv_color_hex(0x0000DD),
+              // LV_GRAD_DIR_HOR, 175, 3);
               _flag(obj, LV_OBJ_FLAG_ADV_HITTEST, true););
           msm->scale_feed = mk_scale(
               NULL, outer_obj, _maximize_client_area(obj);

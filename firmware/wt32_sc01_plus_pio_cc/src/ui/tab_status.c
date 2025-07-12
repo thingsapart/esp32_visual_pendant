@@ -59,7 +59,7 @@ tab_status_t *tab_status_create(lv_obj_t *tabv, interface_t *interface,
 
   _layout_v(grid_cont, LV_FLEX_ALIGN_CENTER,
             //__width(grid_cont, lv_pct(50)), // Set width of the container
-            //holding the axis displays
+            // holding the axis displays
 
             _sized(ts->x_axis_display, lv_pct(100), LV_SIZE_CONTENT),
             _sized(ts->y_axis_display, lv_pct(100), LV_SIZE_CONTENT),
