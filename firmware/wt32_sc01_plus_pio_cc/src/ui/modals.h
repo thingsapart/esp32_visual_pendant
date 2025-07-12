@@ -2,7 +2,6 @@
 #define __MODALS_H__
 
 #include "lvgl.h"
-
 #include "machine/machine_interface.h"
 
 typedef void (*modal_button_cb_t)(lv_event_t *e);
@@ -23,4 +22,4 @@ lv_obj_t *message_modal(const char *title, const char *text);
 
 void modal_close_handler(lv_event_t *e);
 
-#endif // __MODALS_H__
+#endif  // __MODALS_H__

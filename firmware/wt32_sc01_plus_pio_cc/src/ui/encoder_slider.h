@@ -8,4 +8,4 @@ extern void encoder_set_encoder_mode();
 
 lv_obj_t *encoder_slider_create(lv_obj_t *parent);
 
-#endif // __UI_ENCODER_SLIDER_H__
+#endif  // __UI_ENCODER_SLIDER_H__

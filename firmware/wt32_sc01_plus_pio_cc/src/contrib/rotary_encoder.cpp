@@ -78,4 +78,4 @@ void RotaryEncoderPCNT::setPosition(int pos) {
 
 void RotaryEncoderPCNT::zero() { pcnt_unit_clear_count(unit); }
 
-#endif // ESP32
+#endif  // ESP32

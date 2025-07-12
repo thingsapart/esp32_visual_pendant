@@ -4,33 +4,29 @@
 
 #ifdef ESP_NOW_HUB
 
-#include <assert.h>
-#include <string.h>
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
 #include <WiFi.h>
+#include <assert.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
-
-#include "driver/driver_interface.hpp"
-#include "driver/remote_comms_wrapper.h"
-
-#include "machine/machine_interface.h"
-#include "machine/machine_rrf.h"
-#include "machine/machine_remote.h" // for message_box_t_to_payload function.
-
-#include "tasks/machine_send_task.h"
-#include "tasks/machine_response_proc_task.h"
+#include <string.h>
 
 #include "debug.h"
+#include "driver/driver_interface.hpp"
+#include "driver/remote_comms_wrapper.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "machine/machine_interface.h"
+#include "machine/machine_remote.h"  // for message_box_t_to_payload function.
+#include "machine/machine_rrf.h"
+#include "tasks/machine_response_proc_task.h"
+#include "tasks/machine_send_task.h"
 
 static const char *TAG = "hub_main";
 
 // --- Configuration ---
 #define HUB_POLL_INTERVAL_MS 200
-#define FULL_STATE_INTERVAL 20 // Send full state every nth poll (every n * interval secs)
+#define FULL_STATE_INTERVAL \
+  20  // Send full state every nth poll (every n * interval secs)
 
 // Replace with the display's MAC address
 static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
@@ -39,7 +35,8 @@ static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
 static machine_rrf_t *g_machine = NULL;
 static machine_interface_t *g_machine_base = NULL;
 static int g_full_state_counter = 0;
-static uint16_t g_binary_seq_id = 0; // Sequence ID counter for sending binary payloads
+static uint16_t g_binary_seq_id =
+    0;  // Sequence ID counter for sending binary payloads
 
 #define PAYLOAD_MAX (ESP_NOW_MAX_DATA_LEN + 1)
 
@@ -63,85 +60,97 @@ static size_t *message_lens;
 static size_t message_buffer_len;
 #endif
 
-bool send_binary_payload(const void* payload, const size_t data_len, binary_payload_sub_type_t payload_type) {
-    if (!payload || data_len == 0) {
-        LOGE(TAG, "send_binary_payload: Invalid payload or zero length.");
-        return false;
+bool send_binary_payload(const void *payload, const size_t data_len,
+                         binary_payload_sub_type_t payload_type) {
+  if (!payload || data_len == 0) {
+    LOGE(TAG, "send_binary_payload: Invalid payload or zero length.");
+    return false;
+  }
+
+  const uint8_t *payload_bytes = (const uint8_t *)payload;
+  uint16_t current_seq_id = g_binary_seq_id;
+
+  // Calculate maximum data bytes per fragment
+  const size_t max_frag_data_len =
+      REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
+  if (max_frag_data_len <= 0) {
+    LOGE(TAG, "send_binary_payload: PAYLOAD_MAX too small for header.");
+    return false;  // Should not happen with standard ESP_NOW_MAX_DATA_LEN
+  }
+
+  // Calculate total number of fragments needed
+  const uint16_t total_fragments =
+      (data_len + max_frag_data_len - 1) / max_frag_data_len;
+
+  LOGI(TAG,
+       "Sending binary payload: Seq=%d, Type=%d, TotalSize=%d, Fragments=%d, "
+       "MaxFragData=%d",
+       current_seq_id, payload_type, data_len, total_fragments,
+       max_frag_data_len);
+
+  // Use a stack buffer for the fragment message (header + max data)
+  uint8_t frag_buffer[REMOTE_COMMS_DATA_MAX];  // Max possible size for one
+                                               // ESP-NOW message
+  binary_fragment_msg_t *frag_msg = (binary_fragment_msg_t *)frag_buffer;
+
+  size_t bytes_sent = 0;
+  bool all_sent_ok = true;
+
+  for (uint16_t i = 0; i < total_fragments; ++i) {
+    uint32_t current_offset = bytes_sent;
+    uint16_t current_len =
+        std::min((size_t)max_frag_data_len, data_len - bytes_sent);
+
+    // Fill the header
+    frag_msg->type = MSG_TYPE_BINARY;
+    frag_msg->sub_type = payload_type;
+    frag_msg->seq_id = current_seq_id;
+    frag_msg->total_payload_size = data_len;
+    frag_msg->total_fragments = total_fragments;
+    frag_msg->fragment_index = i;
+    frag_msg->fragment_offset = current_offset;
+    frag_msg->fragment_len = current_len;
+
+    // Copy the data chunk into the buffer right after the header
+    memcpy(frag_msg->data, payload_bytes + current_offset, current_len);
+
+    // Calculate the total size of this specific fragment message
+    size_t total_frag_msg_size = BINARY_FRAGMENT_MSG_HEADER_SIZE + current_len;
+
+    LOGD(TAG, "  Sending Frag %u/%u: Offset=%u, Len=%u, TotalMsgSize=%u", i,
+         total_fragments, current_offset, current_len, total_frag_msg_size);
+
+    // Send the fragment (using the broadcast address)
+    if (!remote_wrapper_send(display_mac_address, frag_buffer,
+                             total_frag_msg_size)) {
+      LOGW(TAG, "Failed to queue fragment %u for sending.", i);
+      all_sent_ok = false;
+      break;
     }
 
-    const uint8_t* payload_bytes = (const uint8_t*)payload;
-    uint16_t current_seq_id = g_binary_seq_id;
+    bytes_sent += current_len;
 
-    // Calculate maximum data bytes per fragment
-    const size_t max_frag_data_len = REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
-    if (max_frag_data_len <= 0) {
-        LOGE(TAG, "send_binary_payload: PAYLOAD_MAX too small for header.");
-        return false; // Should not happen with standard ESP_NOW_MAX_DATA_LEN
-    }
+    // Add small delay between fragments if experiencing issues
+    // vTaskDelay(pdMS_TO_TICKS(5));
+  }
 
-    // Calculate total number of fragments needed
-    const uint16_t total_fragments = (data_len + max_frag_data_len - 1) / max_frag_data_len;
+  if (bytes_sent != data_len) {
+    LOGE(TAG, "Logic error in fragmentation: bytes_sent (%u) != data_len (%u)",
+         bytes_sent, data_len);
+    all_sent_ok = false;  // Indicate an internal error
+  }
 
-    LOGI(TAG, "Sending binary payload: Seq=%d, Type=%d, TotalSize=%d, Fragments=%d, MaxFragData=%d",
-         current_seq_id, payload_type, data_len, total_fragments, max_frag_data_len);
+  // Increment the global sequence ID for the *next* binary message
+  if (all_sent_ok) {  // Or increment even if sending failed? Decide based on
+                      // recovery strategy.
+    g_binary_seq_id++;
+    LOGI(TAG, "Binary payload seq %u queued.", current_seq_id);
+  } else {
+    LOGW(TAG, "Failed to queue all fragments for binary payload seq %u.",
+         current_seq_id);
+  }
 
-    // Use a stack buffer for the fragment message (header + max data)
-    uint8_t frag_buffer[REMOTE_COMMS_DATA_MAX]; // Max possible size for one ESP-NOW message
-    binary_fragment_msg_t* frag_msg = (binary_fragment_msg_t*)frag_buffer;
-
-    size_t bytes_sent = 0;
-    bool all_sent_ok = true;
-
-    for (uint16_t i = 0; i < total_fragments; ++i) {
-        uint32_t current_offset = bytes_sent;
-        uint16_t current_len = std::min((size_t)max_frag_data_len, data_len - bytes_sent);
-
-        // Fill the header
-        frag_msg->type = MSG_TYPE_BINARY;
-        frag_msg->sub_type = payload_type;
-        frag_msg->seq_id = current_seq_id;
-        frag_msg->total_payload_size = data_len;
-        frag_msg->total_fragments = total_fragments;
-        frag_msg->fragment_index = i;
-        frag_msg->fragment_offset = current_offset;
-        frag_msg->fragment_len = current_len;
-
-        // Copy the data chunk into the buffer right after the header
-        memcpy(frag_msg->data, payload_bytes + current_offset, current_len);
-
-        // Calculate the total size of this specific fragment message
-        size_t total_frag_msg_size = BINARY_FRAGMENT_MSG_HEADER_SIZE + current_len;
-
-        LOGD(TAG, "  Sending Frag %u/%u: Offset=%u, Len=%u, TotalMsgSize=%u",
-             i, total_fragments, current_offset, current_len, total_frag_msg_size);
-
-        // Send the fragment (using the broadcast address)
-        if (!remote_wrapper_send(display_mac_address, frag_buffer, total_frag_msg_size)) {
-            LOGW(TAG, "Failed to queue fragment %u for sending.", i);
-            all_sent_ok = false;
-            break;
-        }
-
-        bytes_sent += current_len;
-
-        // Add small delay between fragments if experiencing issues
-        // vTaskDelay(pdMS_TO_TICKS(5));
-    }
-
-    if (bytes_sent != data_len) {
-         LOGE(TAG, "Logic error in fragmentation: bytes_sent (%u) != data_len (%u)", bytes_sent, data_len);
-         all_sent_ok = false; // Indicate an internal error
-    }
-
-    // Increment the global sequence ID for the *next* binary message
-    if (all_sent_ok) { // Or increment even if sending failed? Decide based on recovery strategy.
-        g_binary_seq_id++;
-        LOGI(TAG, "Binary payload seq %u queued.", current_seq_id);
-    } else {
-        LOGW(TAG, "Failed to queue all fragments for binary payload seq %u.", current_seq_id);
-    }
-
-    return all_sent_ok;
+  return all_sent_ok;
 }
 
 // --- Callback Functions (for machine interface) ---
@@ -215,10 +224,12 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
 
     LOGI(TAG, "Message box present, attempting to serialize and send.");
     size_t payload_size;
-    void* msg_box_payload = message_box_t_to_payload(machine->message_box, &payload_size);
+    void *msg_box_payload =
+        message_box_t_to_payload(machine->message_box, &payload_size);
     if (msg_box_payload) {
       LOGI(TAG, "Serialized message box to %u bytes.", payload_size);
-      send_binary_payload(msg_box_payload, payload_size, MSG_SUB_TYPE_MESSAGE_BOX);
+      send_binary_payload(msg_box_payload, payload_size,
+                          MSG_SUB_TYPE_MESSAGE_BOX);
       free(msg_box_payload);
     } else {
       LOGE(TAG, "Failed to serialize message box.");
@@ -234,29 +245,30 @@ void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
   } else {
     msg.rpm = 0;
   }
-  msg.tool = ""; // machine->tool;
+  msg.tool = "";  // machine->tool;
   // we should not send string data directly over the air, it's inefficient.
   // so we're sending only the length, for this example.
-  remote_wrapper_send(display_mac_address, (uint8_t *)&msg,
-                      sizeof(msg.type) + sizeof(msg.rpm) +
-                          sizeof(size_t) /* tool len */);
+  remote_wrapper_send(
+      display_mac_address, (uint8_t *)&msg,
+      sizeof(msg.type) + sizeof(msg.rpm) + sizeof(size_t) /* tool len */);
   LOGI(TAG, "Sending tool/spindle changed: rpm %d / %s", msg.rpm, msg.tool);
 }
 
-void on_files_changed(machine_interface_t *mach, void *user_data, const char *path, const char **files) {
+void on_files_changed(machine_interface_t *mach, void *user_data,
+                      const char *path, const char **files) {
   LOGI(TAG, "Files change detected.");
 
   size_t idx = MAX_FILE_LISTS;
   for (size_t i = 0; i < MAX_FILE_LISTS; i++) {
-      if (strcmp(mach->filelists[i].fdir, path) == 0) {
-          idx = i;
-          break;
-      }
+    if (strcmp(mach->filelists[i].fdir, path) == 0) {
+      idx = i;
+      break;
+    }
   }
 
-  if (idx >= MAX_FILE_LISTS) { 
+  if (idx >= MAX_FILE_LISTS) {
     LOGE(TAG, "Cannot find file list for directory %s.", path);
-    return; 
+    return;
   }
 
   LOGI(TAG, "Files present, attempting to serialize and send.");
@@ -275,10 +287,10 @@ void on_files_changed(machine_interface_t *mach, void *user_data, const char *pa
   uint8_t buf[total_size];
   memset(buf, 0, sizeof(buf));
 
-  header = (file_list_payload_t *) buf;
+  header = (file_list_payload_t *)buf;
   header->total_size = total_size;
   header->num_files = num_files;
-  char *offset = (char *) header + sizeof(*header);
+  char *offset = (char *)header + sizeof(*header);
   memcpy(offset, path, strlen(path) + 1);
   offset += strlen(path) + 1;
 
@@ -309,17 +321,17 @@ static void process_send_gcode_cmd(const uint8_t *data, int data_len) {
   }
   send_gcode_cmd_t *cmd = (send_gcode_cmd_t *)data;
   if (data_len <
-      sizeof(send_gcode_cmd_t) + cmd->len) { // Check for complete data
+      sizeof(send_gcode_cmd_t) + cmd->len) {  // Check for complete data
     LOGE(TAG, "Invalid gcode command length 2");
     return;
   }
   // Ensure null termination of the G-code string, even with flexible array
   // member
-  char gcode[cmd->len + 1]; // temporary buffer on the stack.
+  char gcode[cmd->len + 1];  // temporary buffer on the stack.
   memcpy(gcode, cmd->gcode, cmd->len);
   gcode[cmd->len] = '\0';
   LOGI(TAG, "Received G-code command: %s", gcode);
-  machine_interface_send_gcode(g_machine_base, gcode, 0); // Pass gcode string
+  machine_interface_send_gcode(g_machine_base, gcode, 0);  // Pass gcode string
 }
 
 static void process_move_cont_cmd(const uint8_t *data, int data_len) {
@@ -360,14 +372,14 @@ static void process_home_all_cmd(const uint8_t *data, int data_len) {
 }
 
 static void process_home_cmd(const uint8_t *data, int data_len) {
-  if (data_len < sizeof(home_cmd_t)) { // at least
+  if (data_len < sizeof(home_cmd_t)) {  // at least
     LOGE(TAG, "Invalid home command length");
     return;
   }
   home_cmd_t *cmd = (home_cmd_t *)data;
 
   if (data_len <
-      sizeof(home_cmd_t) + cmd->axes_len) { // Check for complete data
+      sizeof(home_cmd_t) + cmd->axes_len) {  // Check for complete data
     LOGE(TAG, "Invalid home command length. incomplete data.");
     return;
   }
@@ -398,7 +410,7 @@ static void process_set_wcs_zero_cmd(const uint8_t *data, int data_len) {
   }
   set_wcs_zero_cmd_t *cmd = (set_wcs_zero_cmd_t *)data;
   if (data_len <
-      sizeof(set_wcs_zero_cmd_t) + cmd->axes_len) { // Check for complete data
+      sizeof(set_wcs_zero_cmd_t) + cmd->axes_len) {  // Check for complete data
     LOGE(TAG, "Invalid set_wcs_zero command length. incomplete data.");
     return;
   }
@@ -426,7 +438,7 @@ static void process_run_macro_cmd(const uint8_t *data, int data_len) {
   }
   run_macro_cmd_t *cmd = (run_macro_cmd_t *)data;
   if (data_len <
-      sizeof(run_macro_cmd_t) + cmd->len) { // Check for complete data
+      sizeof(run_macro_cmd_t) + cmd->len) {  // Check for complete data
     LOGE(TAG, "Invalid run_macro command length. incomplete data.");
     return;
   }
@@ -444,7 +456,7 @@ static void process_start_job_cmd(const uint8_t *data, int data_len) {
   }
   start_job_cmd_t *cmd = (start_job_cmd_t *)data;
   if (data_len <
-      sizeof(start_job_cmd_t) + cmd->len) { // Check for complete data
+      sizeof(start_job_cmd_t) + cmd->len) {  // Check for complete data
     LOGE(TAG, "Invalid start_job command length. incomplete data.");
     return;
   }
@@ -464,7 +476,7 @@ static void process_list_files_cmd(const uint8_t *data, int data_len) {
   list_files_cmd_t *cmd = (list_files_cmd_t *)data;
 
   if (data_len <
-      sizeof(list_files_cmd_t) + cmd->len) { // Check for complete data
+      sizeof(list_files_cmd_t) + cmd->len) {  // Check for complete data
     LOGE(TAG, "Invalid list_files command length.  incomplete data.");
     return;
   }
@@ -482,7 +494,7 @@ static void process_probe_cmd(const uint8_t *data, int data_len) {
   }
   probe_cmd_t *cmd = (probe_cmd_t *)data;
 
-  if (data_len < sizeof(probe_cmd_t) + cmd->len) { // Check for complete data.
+  if (data_len < sizeof(probe_cmd_t) + cmd->len) {  // Check for complete data.
     LOGE(TAG, "Invalid probe command length. incomplete data.");
     return;
   }
@@ -499,13 +511,15 @@ static void process_probe_cmd(const uint8_t *data, int data_len) {
 
 void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
   LOGV(TAG, "ESP-NOW send status: %s", status == 0 ? "success" : "fail");
-  if (status != 0) { LOGW(TAG, "ESP-NOW send status: fail"); }
+  if (status != 0) {
+    LOGW(TAG, "ESP-NOW send status: fail");
+  }
 }
 
 void process_message(const uint8_t *data, const size_t data_len) {
   // Process incoming commands from the display
-    uint8_t command_type = data[0]; // get the command type
-    switch (command_type) {
+  uint8_t command_type = data[0];  // get the command type
+  switch (command_type) {
     case CMD_TYPE_SEND_GCODE:
       LOGI(TAG, "<SEND GCODE>");
       process_send_gcode_cmd(data, data_len);
@@ -570,7 +584,7 @@ void process_message(const uint8_t *data, const size_t data_len) {
 void process_buffered_messages() {
   // Execute remote commands.
   size_t msgbuf_len = message_buffer_len;
-  uint8_t (*buf)[PAYLOAD_MAX][MAX_MSG_BUFFER] = message_buffer;
+  uint8_t(*buf)[PAYLOAD_MAX][MAX_MSG_BUFFER] = message_buffer;
   size_t *lens = message_lens;
 
   message_buffer_len = 0;
@@ -621,59 +635,66 @@ void remote_recv_task(void *args) {
 
   uint8_t msg[PAYLOAD_MAX + 2];
 
-   while (!abort) {
-        // Block indefinitely waiting for a notification from the queue
-        if (xQueueReceive(recv_queue, msg, portMAX_DELAY) == pdTRUE) {
-            const uint8_t *data_buf = &msg[1];
-            const uint8_t data_len = msg[0];
+  while (!abort) {
+    // Block indefinitely waiting for a notification from the queue
+    if (xQueueReceive(recv_queue, msg, portMAX_DELAY) == pdTRUE) {
+      const uint8_t *data_buf = &msg[1];
+      const uint8_t data_len = msg[0];
 
-            LOGI(TAG, "Processing buffered message: %d", data_len);
-            LOGI(TAG, "Q MSG: %u:%u:%u:%u:%u", msg[0], msg[1], msg[2], msg[3], msg[5]);
-            process_message(data_buf, data_len);
-        }
-        // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop continues
+      LOGI(TAG, "Processing buffered message: %d", data_len);
+      LOGI(TAG, "Q MSG: %u:%u:%u:%u:%u", msg[0], msg[1], msg[2], msg[3],
+           msg[5]);
+      process_message(data_buf, data_len);
     }
-    LOGI(TAG, "<< Machine Task Loop Ended?");
+    // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop
+    // continues
+  }
+  LOGI(TAG, "<< Machine Task Loop Ended?");
 
-    // Should never reach here, but good practice to include
-    LOGE(TAG, "Machine task unexpectedly exiting");
+  // Should never reach here, but good practice to include
+  LOGE(TAG, "Machine task unexpectedly exiting");
 
-    vTaskDelete(NULL);
+  vTaskDelete(NULL);
 }
 
-void process_buffered_messages() {
-}
+void process_buffered_messages() {}
 
 void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
                          int data_len, void *user_data) {
-    uint8_t buf[PAYLOAD_MAX + 2];
+  uint8_t buf[PAYLOAD_MAX + 2];
 
-    memset(buf, 0, PAYLOAD_MAX + 2);
-    buf[0] = data_len;
-    memcpy(buf + 1, data, data_len);
-    LOGI(TAG, "MSG: %d/%u, %u:%u:%u:%u:%u => %u:%u:%u:%u:%u:%u", data_len, data_len, data[0], data[1], data[2], data[3], data[4], buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
+  memset(buf, 0, PAYLOAD_MAX + 2);
+  buf[0] = data_len;
+  memcpy(buf + 1, data, data_len);
+  LOGI(TAG, "MSG: %d/%u, %u:%u:%u:%u:%u => %u:%u:%u:%u:%u:%u", data_len,
+       data_len, data[0], data[1], data[2], data[3], data[4], buf[0], buf[1],
+       buf[2], buf[3], buf[4], buf[5]);
 
-    if (recv_queue != NULL) {
-      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-      //BaseType_t result = xQueueSendToBackFromISR(recv_queue, buf, &xHigherPriorityTaskWoken);
-      BaseType_t result = xQueueSendToBack(recv_queue, buf, 0);
-      if (result != pdTRUE) {
-            LOGW(TAG, "Remote recv task queue full.");
-      }
-      if(xHigherPriorityTaskWoken) { portYIELD_FROM_ISR(); }
-    } else {
-        LOGW(TAG, "Cannot queue from on_remote_data_recv => queue NULL");
+  if (recv_queue != NULL) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    // BaseType_t result = xQueueSendToBackFromISR(recv_queue, buf,
+    // &xHigherPriorityTaskWoken);
+    BaseType_t result = xQueueSendToBack(recv_queue, buf, 0);
+    if (result != pdTRUE) {
+      LOGW(TAG, "Remote recv task queue full.");
     }
+    if (xHigherPriorityTaskWoken) {
+      portYIELD_FROM_ISR();
+    }
+  } else {
+    LOGW(TAG, "Cannot queue from on_remote_data_recv => queue NULL");
+  }
 }
 
 void remote_recv_task_run() {
   recv_queue = xQueueCreate(RECV_QUEUE_LENGTH, PAYLOAD_MAX);
   if (recv_queue == NULL) {
-      LOGE(TAG, "Failed to create remote command received task queue!");
-      return;
+    LOGE(TAG, "Failed to create remote command received task queue!");
+    return;
   }
 
-  xTaskCreatePinnedToCore(remote_recv_task, "remote_recv_task", 6 * 1024, NULL, 5, &recv_task_handle, TASK_MACHINE_STATE_PROC_CORE);
+  xTaskCreatePinnedToCore(remote_recv_task, "remote_recv_task", 6 * 1024, NULL,
+                          5, &recv_task_handle, TASK_MACHINE_STATE_PROC_CORE);
 }
 
 #endif
@@ -751,7 +772,7 @@ void hub_task(void *pvParameters) {
 void setup_machine_interface() {
   // Initialize the machine interface
   g_machine = machine_rrf_create(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
-                                 MACH_UART_PIN_RX); // Use UART 0
+                                 MACH_UART_PIN_RX);  // Use UART 0
   if (!g_machine) {
     _df(2, "[%s] Failed to create machine interface", TAG);
     vTaskDelete(NULL);
@@ -781,7 +802,8 @@ void setup_machine_interface() {
 TaskHandle_t hub_task_handle = NULL;
 
 void setup_hub_tasks() {
-  xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL, HUB_TASK_PRIORITY, &hub_task_handle, 0);
+  xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL,
+                          HUB_TASK_PRIORITY, &hub_task_handle, 0);
 }
 
 TaskHandle_t machine_rrf_proc_task_handle = NULL;
@@ -799,23 +821,20 @@ void setup() {
   bool abort = false;
 
 #ifdef ASYNC_RESPONSE_PROCESSING
-  /* 
+  /*
    * Currently also handled by hub_task.
   LOGI(TAG, "Creating RRF Machine Task... ");
-  if (!abort && machine_task_run("MachineRRF", &machine_rrf_task, &g_machine_base,
-                                 TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
+  if (!abort && machine_task_run("MachineRRF", &machine_rrf_task,
+  &g_machine_base, TASK_MACHINE_CORE)) { LOGI(TAG, "DONE\n"); } else { LOGE(TAG,
+  "\nFAIL: Could not create Machine Task: error"); abort = true;
   }
   */
 
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
-  if (!abort &&
-      machine_response_proc_task_run(
-          "MachineRRFProc", g_machine_base, &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
+  if (!abort && machine_response_proc_task_run("MachineRRFProc", g_machine_base,
+                                               &machine_rrf_proc_task_handle,
+                                               &machine_rrf_proc_queue,
+                                               TASK_MACHINE_CORE)) {
     if (!machine_rrf_setup_response_processing_task(g_machine,
                                                     machine_rrf_proc_queue)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");
@@ -829,33 +848,39 @@ void setup() {
 
 #ifdef ASYNC_GCODE_SENDING
   LOGI(TAG, "Creating Machine GCode Sending Task... ");
-  if (!abort && machine_send_task_run(
-                    "MachineSendTask", g_machine_base, 
-                    &machine_send_task_handle, &machine_send_queue,
-                    TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 1)) {
+  if (!abort && machine_send_task_run("MachineSendTask", g_machine_base,
+                                      &machine_send_task_handle,
+                                      &machine_send_queue, TASK_MACHINE_CORE,
+                                      2 * 1024, tskIDLE_PRIORITY + 1)) {
     g_machine->base.gcode_queue = machine_send_queue;
     LOGI(TAG, "DONE\n");
   } else {
-    LOGE(TAG,
-         "FAIL: Could not create Machine GCode Sending Task: error");
+    LOGE(TAG, "FAIL: Could not create Machine GCode Sending Task: error");
     abort = true;
   }
 
   LOGI(TAG, "Creating Remote Receive Processing Task... ");
   if (!abort) {
-
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
     abort = true;
   }
 
-  LOGI(TAG, "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n", recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle, hub_task_handle);
+  LOGI(
+      TAG,
+      "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n",
+      recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle,
+      hub_task_handle);
 #endif
 
 #ifndef USE_ARDINO_SETUP_LOOP
   setup_hub_tasks();
-  LOGI(TAG, "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n", recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle, hub_task_handle);
+  LOGI(
+      TAG,
+      "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n",
+      recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle,
+      hub_task_handle);
 #else
   LOGI(TAG, "Machine loaded..\n");
 #endif

@@ -3,7 +3,6 @@
 #define TAB_MACHINE_H
 
 #include "lvgl.h"
-
 #include "ui/file_list.h"
 #include "ui/interface.h"
 #include "ui/machine_position.h"
@@ -21,7 +20,7 @@ struct tab_machine_t {
   lv_obj_t *tab_jobs;
   lv_obj_t *float_btn;
   machine_status_meter_t *mach_meter;
-  file_list_t *jobs_list; // will need to define this
+  file_list_t *jobs_list;  // will need to define this
   file_list_t *macro_list;
 };
 
@@ -35,7 +34,7 @@ struct machine_status_meter_t {
   lv_obj_t *bar_feed;
   lv_obj_t *scale_feed;
   lv_obj_t *spindle_rpm;
-  lv_obj_t *bar_cl; // Chip load
+  lv_obj_t *bar_cl;  // Chip load
   lv_obj_t *scale_spindle_rpm;
   lv_obj_t *scale_spindle_chipload;
   lv_obj_t *material_dd;
@@ -58,4 +57,4 @@ machine_status_meter_t *machine_status_meter_create(lv_obj_t *parent,
                                                     int max_feed);
 void machine_status_meter_destroy(machine_status_meter_t *msm);
 
-#endif // TAB_MACHINE_H
+#endif  // TAB_MACHINE_H

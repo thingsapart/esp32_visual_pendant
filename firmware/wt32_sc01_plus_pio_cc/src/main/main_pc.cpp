@@ -5,7 +5,6 @@
 
 #include <signal.h>
 #include <stdio.h>
-
 #include <unistd.h>
 
 #include "SDL2/SDL.h"
@@ -16,22 +15,19 @@
 
 volatile sig_atomic_t bRunning = false;
 
-void signal_handler(int interrupt)
-{
+void signal_handler(int interrupt) {
   printf("captured interrupt %d\r\n", interrupt);
-  if (interrupt == SIGINT)
-  {
+  if (interrupt == SIGINT) {
     bRunning = false;
   }
 }
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
-  void encoder_set_ui_mode() {}
+void encoder_set_ui_mode() {}
 
-  void encoder_set_encoder_mode() {}
+void encoder_set_encoder_mode() {}
 #ifdef __cplusplus
 }
 #endif
@@ -40,11 +36,10 @@ extern "C"
 
 #include "config.h"
 #include "debug.h"
+#include "driver/arduino_serial_wrapper.h"
 #include "machine/machine_interface.h"
 #include "machine/machine_sim.h"
 #include "ui/interface.h"
-
-#include "driver/arduino_serial_wrapper.h"
 
 static duet_simulator_t *machine;
 static interface_t interface;
@@ -53,12 +48,12 @@ thrd_t machine_sim_task;
 
 #include <map>
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
-#include "driver/arduino_serial_wrapper.h"
 #include <tasks/machine_task.h>
+
+#include "driver/arduino_serial_wrapper.h"
 
 #if 0
 serial_handle_t serial_init(uint8_t uart_num, unsigned long baud, serial_config_t config, int8_t rx_pin, int8_t tx_pin) {
@@ -118,8 +113,7 @@ static lv_indev_t *lvMouse;
 static lv_indev_t *lvMouseWheel;
 static lv_indev_t *lvKeyboard;
 
-void lvgl_sdl()
-{
+void lvgl_sdl() {
   lv_init();
 
 // Workaround for sdl2 `-m32` crash
@@ -133,7 +127,8 @@ void lvgl_sdl()
 #endif
 
   /* Add a display
-   * Use the 'monitor' driver which creates window on PC's monitor to simulate a display*/
+   * Use the 'monitor' driver which creates window on PC's monitor to simulate a
+   * display*/
   lvDisplay = lv_sdl_window_create(SDL_HOR_RES, SDL_VER_RES);
   lv_sdl_window_set_title(lvDisplay, "Pendant Simulator");
   lvMouse = lv_sdl_mouse_create();
@@ -158,15 +153,13 @@ void lvgl_sdl()
   bRunning = true;
 
   lv_tick_set_cb(SDL_GetTicks);
-  if (!machine_task_run("MachineSim", &machine->base, &machine_sim_task))
-  {
+  if (!machine_task_run("MachineSim", &machine->base, &machine_sim_task)) {
     bRunning = false;
     printf("Failed to create machine sim task");
   }
 
-  while (bRunning)
-  {
-    lv_timer_handler(); // Update the UI-
+  while (bRunning) {
+    lv_timer_handler();  // Update the UI-
 
     // task handler
     lv_task_handler();
@@ -179,8 +172,7 @@ void lvgl_sdl()
 }
 
 // Not used this is here still for reference of a simulator loop with sdl
-void lvgl_sdl_prev()
-{
+void lvgl_sdl_prev() {
   lv_init();
 
   int screen_width = 640;
@@ -216,8 +208,7 @@ void lvgl_sdl_prev()
 
   bRunning = true;
   uint32_t last_tick = SDL_GetTicks();
-  while (bRunning)
-  {
+  while (bRunning) {
     uint32_t current_tick = SDL_GetTicks();
     uint32_t elapsed = current_tick - last_tick;
     last_tick = current_tick;
@@ -226,8 +217,7 @@ void lvgl_sdl_prev()
     lv_task_handler();
 
     uint32_t sleep_time = (1000 / 60) - elapsed;
-    if (sleep_time < 0)
-    {
+    if (sleep_time < 0) {
       usleep(sleep_time * 1000);
     }
   }
@@ -235,8 +225,7 @@ void lvgl_sdl_prev()
   lv_sdl_quit();
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
   lvgl_sdl();
 
   return 0;

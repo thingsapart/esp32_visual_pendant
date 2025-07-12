@@ -7,4 +7,4 @@
 #include "freertos/task.h"
 #endif
 
-#endif /// __TASK_UTIL_H__
+#endif  /// __TASK_UTIL_H__

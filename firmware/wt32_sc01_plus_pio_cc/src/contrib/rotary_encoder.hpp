@@ -1,11 +1,15 @@
 /**
  * https://github.com/vickash/RotaryEncoderPCNT/blob/main/src/RotaryEncoderPCNT.h
- * 
- * RotaryEncoderPCNT
- * 
- * This is a 2-channel rotary (quadrature) encoder implementation, for the ESP32, on the Arduino platform. It uses the ESP32's built in pulse counter (PCNT) peripheral. The PCNT unit is set up to keep the encoder object updated in the background, handling interrupts, internal counter overflow, etc. for you.
  *
- * https://github.com/vickash/RotaryEncoderPCNT/blob/main/LICENSE 
+ * RotaryEncoderPCNT
+ *
+ * This is a 2-channel rotary (quadrature) encoder implementation, for the
+ * ESP32, on the Arduino platform. It uses the ESP32's built in pulse counter
+ * (PCNT) peripheral. The PCNT unit is set up to keep the encoder object updated
+ * in the background, handling interrupts, internal counter overflow, etc. for
+ * you.
+ *
+ * https://github.com/vickash/RotaryEncoderPCNT/blob/main/LICENSE
  */
 
 #ifndef ROTARY_ENCODER_PCNT_H
@@ -19,54 +23,51 @@
 #define GLITCH_NS_DEFAULT 1000
 
 class RotaryEncoderPCNT {
-  public:
-    RotaryEncoderPCNT(int a, int b, int start_pos, uint16_t glitch_ns){
-      glitch_time = glitch_ns;
-      offset = start_pos;
-      pin_a = a;
-      pin_b = b;
-      init();
-    }
+ public:
+  RotaryEncoderPCNT(int a, int b, int start_pos, uint16_t glitch_ns) {
+    glitch_time = glitch_ns;
+    offset = start_pos;
+    pin_a = a;
+    pin_b = b;
+    init();
+  }
 
-    RotaryEncoderPCNT(int a, int b, int start_pos){
-      offset = start_pos;
-      pin_a = a;
-      pin_b = b;
-      init();
-    }
+  RotaryEncoderPCNT(int a, int b, int start_pos) {
+    offset = start_pos;
+    pin_a = a;
+    pin_b = b;
+    init();
+  }
 
-    RotaryEncoderPCNT(int a, int b){
-      pin_a = a;
-      pin_b = b;
-      init();
-    }
+  RotaryEncoderPCNT(int a, int b) {
+    pin_a = a;
+    pin_b = b;
+    init();
+  }
 
-    RotaryEncoderPCNT(){
-    }
+  RotaryEncoderPCNT() {}
 
-    ~RotaryEncoderPCNT(){
-      deinit();
-    }
-    
-    void init();
-    void deinit();
-    int  position();
-    void setPosition(int pos);
-    void zero();
-    uint8_t  pin_a = 255;
-    uint8_t  pin_b = 255;
-    uint16_t glitch_time = GLITCH_NS_DEFAULT;
+  ~RotaryEncoderPCNT() { deinit(); }
 
-  private:
-    pcnt_unit_handle_t unit;
-    pcnt_channel_handle_t chan_a;
-    pcnt_channel_handle_t chan_b;
-    int16_t low_limit = INT16_MIN;
-    int16_t high_limit = INT16_MAX;
-    int count = 0;
-    int offset = START_POS_DEFAULT;
+  void init();
+  void deinit();
+  int position();
+  void setPosition(int pos);
+  void zero();
+  uint8_t pin_a = 255;
+  uint8_t pin_b = 255;
+  uint16_t glitch_time = GLITCH_NS_DEFAULT;
+
+ private:
+  pcnt_unit_handle_t unit;
+  pcnt_channel_handle_t chan_a;
+  pcnt_channel_handle_t chan_b;
+  int16_t low_limit = INT16_MIN;
+  int16_t high_limit = INT16_MAX;
+  int count = 0;
+  int offset = START_POS_DEFAULT;
 };
 
-#endif // ESP32
+#endif  // ESP32
 
-#endif // ROTARY_ENCODER_PCNT_H
+#endif  // ROTARY_ENCODER_PCNT_H

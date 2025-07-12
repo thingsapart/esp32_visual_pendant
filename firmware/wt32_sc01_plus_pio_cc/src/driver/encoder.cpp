@@ -9,8 +9,12 @@
 Encoder encoder(ENCODER_PIN_X, ENCODER_PIN_Y, 4);
 
 Encoder::Encoder(uint8_t pin_x, uint8_t pin_y, int divisor)
-    : enc(pin_x, pin_y), uiMode(false), uiModeCount(0), encModeCount(0),
-      divisor(divisor), encModePosition(0) {}
+    : enc(pin_x, pin_y),
+      uiMode(false),
+      uiModeCount(0),
+      encModeCount(0),
+      divisor(divisor),
+      encModePosition(0) {}
 
 int ::Encoder::readAndReset() {
   int val = enc.position() + (uiMode ? uiModeCount : encModeCount);

@@ -1,14 +1,13 @@
 #ifdef ESP32_HW
 
-#include "Arduino.h"
-#include "WiFi.h"
-
-#include "sdkconfig.h"
 #include <esp_task_wdt.h>
 #include <esp_wifi.h>
 
+#include "Arduino.h"
+#include "WiFi.h"
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
+#include "sdkconfig.h"
 
 #if (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF)
 #define HAS_CORE_DUMP
@@ -26,41 +25,41 @@ void print_reset_reason() {
   Serial.println(reason);
 
   switch (reason) {
-  case ESP_RST_POWERON:
-    Serial.println("Power ON");
-    break;
-  case ESP_RST_SW:
-    Serial.println("Reset ESPrestart()");
-    break;
-  case ESP_RST_PANIC:
-    Serial.println("Reset por exception/panic");
-    break;
-  case ESP_RST_UNKNOWN:
-    Serial.println("Reset UNKNOW");
-    break;
-  case ESP_RST_EXT:
-    Serial.println("Reset by external pin (not applicable for ESP32)");
-    break;
-  case ESP_RST_INT_WDT:
-    Serial.println("Reset (software or hardware) por interrupção WATCHDOG");
-    break;
-  case ESP_RST_TASK_WDT:
-    Serial.println("Reset WATCHDOG");
-    break;
-  case ESP_RST_WDT:
-    Serial.println("Reset others WATCHDOG´s");
-    break;
-  case ESP_RST_DEEPSLEEP:
-    Serial.println("Reset DEEP SLEEP MODE");
-    break;
-  case ESP_RST_BROWNOUT:
-    Serial.println("Brownout reset (software or hardware)");
-    break;
-  case ESP_RST_SDIO:
-    Serial.println("Reset over SDIO");
-    break;
-  default:
-    break;
+    case ESP_RST_POWERON:
+      Serial.println("Power ON");
+      break;
+    case ESP_RST_SW:
+      Serial.println("Reset ESPrestart()");
+      break;
+    case ESP_RST_PANIC:
+      Serial.println("Reset por exception/panic");
+      break;
+    case ESP_RST_UNKNOWN:
+      Serial.println("Reset UNKNOW");
+      break;
+    case ESP_RST_EXT:
+      Serial.println("Reset by external pin (not applicable for ESP32)");
+      break;
+    case ESP_RST_INT_WDT:
+      Serial.println("Reset (software or hardware) por interrupção WATCHDOG");
+      break;
+    case ESP_RST_TASK_WDT:
+      Serial.println("Reset WATCHDOG");
+      break;
+    case ESP_RST_WDT:
+      Serial.println("Reset others WATCHDOG´s");
+      break;
+    case ESP_RST_DEEPSLEEP:
+      Serial.println("Reset DEEP SLEEP MODE");
+      break;
+    case ESP_RST_BROWNOUT:
+      Serial.println("Brownout reset (software or hardware)");
+      break;
+    case ESP_RST_SDIO:
+      Serial.println("Reset over SDIO");
+      break;
+    default:
+      break;
   }
 }
 
@@ -70,19 +69,19 @@ void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
   if (coredump_summary != NULL) {
     esp_core_dump_bt_info_t bt_info = coredump_summary->exc_bt_info;
 
-    char results[512]; // Assuming a maximum of 512 characters for the backtrace
-                       // string
+    char results[512];  // Assuming a maximum of 512 characters for the
+                        // backtrace string
     int offset = snprintf(results, sizeof(results), "Traceback:\n\n");
 
     // for (int i = 0; i < bt_info.depth; i++)
     for (int i = bt_info.depth - 1; i >= 0; i--) {
-      uintptr_t pc = bt_info.bt[i]; // Program Counter (PC)
+      uintptr_t pc = bt_info.bt[i];  // Program Counter (PC)
       int len =
           snprintf(results + offset, sizeof(results) - offset, " 0x%08X", pc);
       if (len >= 0 && offset + len < sizeof(results)) {
         offset += len;
       } else {
-        break; // Reached the limit of the results buffer
+        break;  // Reached the limit of the results buffer
       }
     }
 
@@ -131,7 +130,6 @@ void print_mac_address() {
 }
 
 void mcu_setup() {
-
 #ifndef USB_UART_PIN_TX
   Serial.begin(115200);
   add_standard_serial();
@@ -158,44 +156,53 @@ void mcu_startup() {
 }
 
 void LIST_TASKS() {
-    const char *TAG = "LIST_TASKS";
+  const char *TAG = "LIST_TASKS";
 
-    // Get the number of tasks
-    size_t num_tasks = uxTaskGetNumberOfTasks();
+  // Get the number of tasks
+  size_t num_tasks = uxTaskGetNumberOfTasks();
 
-    // Allocate memory for TaskStatus_t structures
-    TaskStatus_t *task_status_array = (TaskStatus_t *)pvPortMalloc(num_tasks * sizeof(TaskStatus_t));
+  // Allocate memory for TaskStatus_t structures
+  TaskStatus_t *task_status_array =
+      (TaskStatus_t *)pvPortMalloc(num_tasks * sizeof(TaskStatus_t));
 
-    // Check if memory allocation was successful
-    if (task_status_array == NULL) {
-        LOGI(TAG, "Memory allocation failed!\n");
-        return;
-    }
+  // Check if memory allocation was successful
+  if (task_status_array == NULL) {
+    LOGI(TAG, "Memory allocation failed!\n");
+    return;
+  }
 
-    // Get the system state
-    size_t num_tasks_populated = uxTaskGetSystemState(task_status_array, num_tasks, NULL);
+  // Get the system state
+  size_t num_tasks_populated =
+      uxTaskGetSystemState(task_status_array, num_tasks, NULL);
 
-    // Check if the function returned the correct number of tasks
-    if (num_tasks_populated != num_tasks) {
-        LOGI(TAG, "Error: uxTaskGetSystemState returned %zu tasks, expected %zu\n", num_tasks_populated, num_tasks);
-        vPortFree(task_status_array);
-        return;
-    }
-
-    // Print task information
-    printf("FreeRTOS Task List:\n");
-    for (size_t i = 0; i < num_tasks; i++) {
-        LOGI(TAG, "  Task Name: %s\n", task_status_array[i].pcTaskName);
-        LOGI(TAG, "  Task Priority: %u\n", task_status_array[i].uxCurrentPriority);
-        LOGI(TAG, "  Task Base Priority: %u\n", task_status_array[i].uxBasePriority);
-        LOGI(TAG, "  Task State: %s\n", (task_status_array[i].eCurrentState == eRunning) ? "Running" : (task_status_array[i].eCurrentState == eReady) ? "Ready" : (task_status_array[i].eCurrentState == eBlocked) ? "Blocked" : "Other");
-        LOGI(TAG, "  Task Handle: 0x%X\n", task_status_array[i].xHandle);
-        LOGI(TAG, "  Task Stack High Water Mark: %u\n", task_status_array[i].usStackHighWaterMark);
-        LOGI(TAG, "\n");
-    }
-
-    // Free the allocated memory
+  // Check if the function returned the correct number of tasks
+  if (num_tasks_populated != num_tasks) {
+    LOGI(TAG, "Error: uxTaskGetSystemState returned %zu tasks, expected %zu\n",
+         num_tasks_populated, num_tasks);
     vPortFree(task_status_array);
+    return;
+  }
+
+  // Print task information
+  printf("FreeRTOS Task List:\n");
+  for (size_t i = 0; i < num_tasks; i++) {
+    LOGI(TAG, "  Task Name: %s\n", task_status_array[i].pcTaskName);
+    LOGI(TAG, "  Task Priority: %u\n", task_status_array[i].uxCurrentPriority);
+    LOGI(TAG, "  Task Base Priority: %u\n",
+         task_status_array[i].uxBasePriority);
+    LOGI(TAG, "  Task State: %s\n",
+         (task_status_array[i].eCurrentState == eRunning)   ? "Running"
+         : (task_status_array[i].eCurrentState == eReady)   ? "Ready"
+         : (task_status_array[i].eCurrentState == eBlocked) ? "Blocked"
+                                                            : "Other");
+    LOGI(TAG, "  Task Handle: 0x%X\n", task_status_array[i].xHandle);
+    LOGI(TAG, "  Task Stack High Water Mark: %u\n",
+         task_status_array[i].usStackHighWaterMark);
+    LOGI(TAG, "\n");
+  }
+
+  // Free the allocated memory
+  vPortFree(task_status_array);
 }
 
 void LOG_CURR_TASK() {
@@ -217,9 +224,10 @@ void LOG_CURR_TASK() {
       det.pcTaskName, det.xTaskNumber, det.uxCurrentPriority, det.uxBasePriority, det.usStackHighWaterMark);
 #else
   TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
-  //LIST_TASKS();
+  // LIST_TASKS();
 
-  LOGI("LOG_CURR_TASK", "Task (%d), memory used: %d", xHandle, uxTaskGetStackHighWaterMark(NULL));
+  LOGI("LOG_CURR_TASK", "Task (%d), memory used: %d", xHandle,
+       uxTaskGetStackHighWaterMark(NULL));
 #endif
 }
 

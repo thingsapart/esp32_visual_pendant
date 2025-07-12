@@ -3,16 +3,15 @@
 // Already defined in ini.
 // #define LGFX_USE_V1
 
-#include <LovyanGFX.hpp>
-
 #include <driver/i2c.h>
+#include <lvgl.h>
+
+#include <LovyanGFX.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 
-#include <lvgl.h>
-
 class LGFX_GUITION4848S040 : public lgfx::LGFX_Device {
-public:
+ public:
   lgfx::Bus_RGB _bus_instance;
   lgfx::Panel_ST7701_guition_esp32_4848S040 _panel_instance;
   lgfx::Touch_GT911 _touch_instance;
@@ -33,11 +32,11 @@ public:
       // >>
       cfg.dummy_read_pixel = 8;
       cfg.dummy_read_bits = 1;
-      cfg.readable = true; // was false
+      cfg.readable = true;  // was false
       cfg.invert = false;
       // cfg.rgb_order = false;
       cfg.dlen_16bit = false;
-      cfg.bus_shared = true; // was false something to do with SD?
+      cfg.bus_shared = true;  // was false something to do with SD?
       // <<
 
       _panel_instance.config(cfg);
@@ -48,7 +47,7 @@ public:
 
       cfg.pin_cs = 39;
       cfg.pin_sclk = 48;
-      cfg.pin_mosi = 47; // SDA
+      cfg.pin_mosi = 47;  // SDA
 
       _panel_instance.config_detail(cfg);
     }
@@ -56,22 +55,22 @@ public:
     {
       auto cfg = _bus_instance.config();
       cfg.panel = &_panel_instance;
-      cfg.pin_d0 = GPIO_NUM_4;   // B0
-      cfg.pin_d1 = GPIO_NUM_5;   // B1
-      cfg.pin_d2 = GPIO_NUM_6;   // B2
-      cfg.pin_d3 = GPIO_NUM_7;   // B3
-      cfg.pin_d4 = GPIO_NUM_15;  // B4
-      cfg.pin_d5 = GPIO_NUM_8;   // G0
-      cfg.pin_d6 = GPIO_NUM_20;  // G1
-      cfg.pin_d7 = GPIO_NUM_3;   // G2
-      cfg.pin_d8 = GPIO_NUM_46;  // G3
-      cfg.pin_d9 = GPIO_NUM_9;   // G4
-      cfg.pin_d10 = GPIO_NUM_10; // G5
-      cfg.pin_d11 = GPIO_NUM_11; // R0
-      cfg.pin_d12 = GPIO_NUM_12; // R1
-      cfg.pin_d13 = GPIO_NUM_13; // R2
-      cfg.pin_d14 = GPIO_NUM_14; // R3
-      cfg.pin_d15 = GPIO_NUM_0;  // R4
+      cfg.pin_d0 = GPIO_NUM_4;    // B0
+      cfg.pin_d1 = GPIO_NUM_5;    // B1
+      cfg.pin_d2 = GPIO_NUM_6;    // B2
+      cfg.pin_d3 = GPIO_NUM_7;    // B3
+      cfg.pin_d4 = GPIO_NUM_15;   // B4
+      cfg.pin_d5 = GPIO_NUM_8;    // G0
+      cfg.pin_d6 = GPIO_NUM_20;   // G1
+      cfg.pin_d7 = GPIO_NUM_3;    // G2
+      cfg.pin_d8 = GPIO_NUM_46;   // G3
+      cfg.pin_d9 = GPIO_NUM_9;    // G4
+      cfg.pin_d10 = GPIO_NUM_10;  // G5
+      cfg.pin_d11 = GPIO_NUM_11;  // R0
+      cfg.pin_d12 = GPIO_NUM_12;  // R1
+      cfg.pin_d13 = GPIO_NUM_13;  // R2
+      cfg.pin_d14 = GPIO_NUM_14;  // R3
+      cfg.pin_d15 = GPIO_NUM_0;   // R4
 
       cfg.pin_henable = GPIO_NUM_18;
       cfg.pin_vsync = GPIO_NUM_17;
@@ -148,8 +147,8 @@ void lvgl_log(const char *buf) {
 /* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
 #define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL)
-static uint8_t buf1[DRAW_BUF_SIZE]; // IRAM_ATTR;
-static uint8_t buf2[DRAW_BUF_SIZE]; // IRAM_ATTR;
+static uint8_t buf1[DRAW_BUF_SIZE];  // IRAM_ATTR;
+static uint8_t buf2[DRAW_BUF_SIZE];  // IRAM_ATTR;
 
 /* Display flushing */
 #define DISPLAY_DMA

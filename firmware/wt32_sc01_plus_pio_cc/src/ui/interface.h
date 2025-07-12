@@ -2,9 +2,9 @@
 #ifndef INTERFACE_H
 #define INTERFACE_H
 
-#include "lvgl.h"
 #include <stdbool.h>
 
+#include "lvgl.h"
 #include "machine/machine_interface.h"
 // #include "ui/tab_jog.h"
 // #include "ui/tab_probe.h"
@@ -13,7 +13,7 @@
 
 #define TAB_HEIGHT 30
 #define TAB_WIDTH 70
-#define MAX_PATH_LEN 256 // Or whatever size you need
+#define MAX_PATH_LEN 256  // Or whatever size you need
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,7 +43,7 @@ typedef struct machine_state_callback_t {
 
 struct interface_t {
   lv_obj_t *scr;
-  machine_interface_t *machine; // Pointer to your machine control object
+  machine_interface_t *machine;  // Pointer to your machine control object
   lv_fs_drv_t fs_drv;
   FONT_CONST lv_font_t *font_lcd;
   FONT_CONST lv_font_t *font_lcd_18;
@@ -121,12 +121,12 @@ add_callback_proto(interface, dialogs_changed);
 add_callback_proto(interface, spindles_tools_changed);
 add_callback_proto(interface, connected_changed);
 add_callback_proto(interface, current_move_axis_changed);
-bool interface_add_files_changed_cb(
-  interface_t *self, const char *path, void *user_data,
-  files_changed_callback_cb_t cb);
+bool interface_add_files_changed_cb(interface_t *self, const char *path,
+                                    void *user_data,
+                                    files_changed_callback_cb_t cb);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // INTERFACE_H
+#endif  // INTERFACE_H

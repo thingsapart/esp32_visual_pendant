@@ -2,9 +2,8 @@
 #define JOG_UI_H
 
 #include "lvgl.h"
-#include "ui_helpers.h"
-
 #include "machine_position.h"
+#include "ui_helpers.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,4 +87,4 @@ void machine_position_wcs_coords_undefined(machine_position_wcs_t *mp);
 }
 #endif
 
-#endif // JOG_UI_H
+#endif  // JOG_UI_H

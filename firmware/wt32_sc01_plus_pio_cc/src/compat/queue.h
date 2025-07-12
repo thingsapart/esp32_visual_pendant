@@ -1,6 +1,6 @@
-#include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "config.h"
@@ -11,8 +11,8 @@
 
 typedef struct {
   char buffer[MAX_GCODE_Q_LEN]
-             [MAX_GCODE_STR_LEN]; // Fixed-size buffer for G-code commands.
-                                  // Adjust size as needed.
+             [MAX_GCODE_STR_LEN];  // Fixed-size buffer for G-code commands.
+                                   // Adjust size as needed.
   size_t head;
   size_t tail;
   size_t count;

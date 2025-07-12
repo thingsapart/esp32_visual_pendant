@@ -16,4 +16,4 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev);
 
 #endif
 
-#endif // __DRIVER_DRIVER_INTERFACE_HPP__
+#endif  // __DRIVER_DRIVER_INTERFACE_HPP__

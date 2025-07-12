@@ -1,7 +1,7 @@
 #include "arduino_serial_wrapper.h"
 
-#include <cstdlib> // For malloc, free (if used, prefer new/delete in C++)
-#include <cstring> // For memcpy, memset
+#include <cstdlib>  // For malloc, free (if used, prefer new/delete in C++)
+#include <cstring>  // For memcpy, memset
 #include <map>
 #include <vector>
 
@@ -13,7 +13,7 @@
 // Provide dummy types/stubs for non-ESP32 builds if needed
 // Or include the RRF Sim stream header
 #include "machine/rrf_machine_sim_stream.h"
-typedef RRFMachineSimStream Stream; // Use the simulator stream
+typedef RRFMachineSimStream Stream;  // Use the simulator stream
 #endif
 
 #include "debug.h"
@@ -21,12 +21,12 @@ typedef RRFMachineSimStream Stream; // Use the simulator stream
 static const char *TAG = "arduino_serial_wrapper";
 
 // --- Configuration ---
-#define RING_BUFFER_SIZE                                                       \
-  4096 // Size of the ring buffer for incoming serial data
-#define MAX_LINE_LENGTH                                                        \
-  (256 * 6) // Maximum length of a line to buffer before calling callback
-#define MAX_CALLBACKS 5     // Maximum number of callbacks per serial port
-#define RRF_SIM_UART_NUM 99 // Logical UART number for the RRF simulator
+#define RING_BUFFER_SIZE \
+  4096  // Size of the ring buffer for incoming serial data
+#define MAX_LINE_LENGTH \
+  (256 * 6)  // Maximum length of a line to buffer before calling callback
+#define MAX_CALLBACKS 5      // Maximum number of callbacks per serial port
+#define RRF_SIM_UART_NUM 99  // Logical UART number for the RRF simulator
 
 // --- Ring Buffer Implementation ---
 typedef struct {
@@ -39,8 +39,7 @@ typedef struct {
 
 static bool rb_init(ring_buffer_t *rb, size_t size) {
   rb->buffer = (uint8_t *)malloc(size);
-  if (!rb->buffer)
-    return false;
+  if (!rb->buffer) return false;
   rb->size = size;
   rb->head = 0;
   rb->tail = 0;
@@ -62,8 +61,7 @@ static bool rb_is_full(const ring_buffer_t *rb) {
 static bool rb_is_empty(const ring_buffer_t *rb) { return rb->count == 0; }
 
 static bool rb_push(ring_buffer_t *rb, uint8_t data) {
-  if (rb_is_full(rb))
-    return false; // Buffer full
+  if (rb_is_full(rb)) return false;  // Buffer full
   rb->buffer[rb->head] = data;
   rb->head = (rb->head + 1) % rb->size;
   rb->count++;
@@ -71,8 +69,7 @@ static bool rb_push(ring_buffer_t *rb, uint8_t data) {
 }
 
 static bool rb_pop(ring_buffer_t *rb, uint8_t *data) {
-  if (rb_is_empty(rb))
-    return false; // Buffer empty
+  if (rb_is_empty(rb)) return false;  // Buffer empty
   *data = rb->buffer[rb->tail];
   rb->tail = (rb->tail + 1) % rb->size;
   rb->count--;
@@ -81,13 +78,13 @@ static bool rb_pop(ring_buffer_t *rb, uint8_t *data) {
 
 // --- Serial Port Data Structure ---
 typedef struct {
-  Stream *stream; // Underlying Arduino Stream object (HardwareSerial*,
-                  // RRFMachineSimStream*, etc.)
-  int uart_num;   // Original UART number (-1 for Serial, RRF_SIM_UART_NUM for
-                  // sim)
-  bool is_hw_serial; // Flag to indicate if it's a HardwareSerial instance
-  bool owns_stream;  // Flag to indicate if we need to delete the stream object
-                     // in serial_end
+  Stream *stream;  // Underlying Arduino Stream object (HardwareSerial*,
+                   // RRFMachineSimStream*, etc.)
+  int uart_num;    // Original UART number (-1 for Serial, RRF_SIM_UART_NUM for
+                   // sim)
+  bool is_hw_serial;  // Flag to indicate if it's a HardwareSerial instance
+  bool owns_stream;   // Flag to indicate if we need to delete the stream object
+                      // in serial_end
 
   ring_buffer_t rx_buffer;
   char line_buffer[MAX_LINE_LENGTH];
@@ -106,8 +103,8 @@ static std::map<int, serial_handle_t> g_uart_num_to_handle;
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t *port_data);
 #if defined(ESP32_HW)
-static void
-onReceiveGeneric(void *arg); // Remove IRAM_ATTR from forward declaration
+static void onReceiveGeneric(
+    void *arg);  // Remove IRAM_ATTR from forward declaration
 #endif
 
 // --- Internal Helper Functions ---
@@ -123,8 +120,7 @@ static serial_port_data_t *find_port_data(serial_handle_t handle) {
 
 // Processes data from the ring buffer, assembling lines and calling callbacks
 static void process_received_data(serial_port_data_t *port_data) {
-  if (!port_data)
-    return;
+  if (!port_data) return;
 
   uint8_t byte;
   while (rb_pop(&port_data->rx_buffer, &byte)) {
@@ -136,15 +132,15 @@ static void process_received_data(serial_port_data_t *port_data) {
       // Optionally, add the current byte if it's not part of the overflowed
       // line This depends on desired behavior: discard whole long line vs.
       // split it. Let's discard the partial long line for simplicity.
-      continue; // Skip processing this byte as part of a new line yet
+      continue;  // Skip processing this byte as part of a new line yet
     }
 
     port_data->line_buffer[port_data->line_pos++] = (char)byte;
 
     if (byte == '\n') {
-      port_data->line_buffer[port_data->line_pos] = '\0'; // Null-terminate
+      port_data->line_buffer[port_data->line_pos] = '\0';  // Null-terminate
       //_df(3, "RX Line (UART %d): %s", port_data->uart_num,
-      //port_data->line_buffer); // Debug print
+      // port_data->line_buffer); // Debug print
 
       // Call registered callbacks
       for (size_t i = 0; i < port_data->num_callbacks; ++i) {
@@ -153,7 +149,7 @@ static void process_received_data(serial_port_data_t *port_data) {
                                   port_data->line_buffer, port_data->line_pos);
         }
       }
-      port_data->line_pos = 0; // Reset line buffer
+      port_data->line_pos = 0;  // Reset line buffer
     }
   }
 }
@@ -162,10 +158,9 @@ static void process_received_data(serial_port_data_t *port_data) {
 // Generic onReceive callback for HardwareSerial
 // IMPORTANT: This runs in ISR context on ESP32. Keep it short and fast.
 // Avoid blocking calls, memory allocation, or complex logic.
-static void onReceiveGeneric(void *arg) { // Removed IRAM_ATTR
+static void onReceiveGeneric(void *arg) {  // Removed IRAM_ATTR
   serial_port_data_t *port_data = (serial_port_data_t *)arg;
-  if (!port_data || !port_data->is_hw_serial)
-    return; // Should not happen
+  if (!port_data || !port_data->is_hw_serial) return;  // Should not happen
 
   HardwareSerial *hw_serial = static_cast<HardwareSerial *>(port_data->stream);
   LOGV(TAG, "=> RECV/READ hw serial %p", hw_serial);
@@ -192,11 +187,11 @@ static void onReceiveGeneric(void *arg) { // Removed IRAM_ATTR
   process_received_data(port_data);
 }
 
-#define ONRECV(N)                                                              \
-  void onReceive##N(void) {                                                    \
-    serial_handle_t handle = get_serial_handle(N);                             \
-    serial_port_data_t *arg = find_port_data(handle);                          \
-    onReceiveGeneric(arg);                                                     \
+#define ONRECV(N)                                     \
+  void onReceive##N(void) {                           \
+    serial_handle_t handle = get_serial_handle(N);    \
+    serial_port_data_t *arg = find_port_data(handle); \
+    onReceiveGeneric(arg);                            \
   }
 
 void onReceiveM1(void) {
@@ -210,7 +205,7 @@ ONRECV(2)
 ONRECV(3)
 ONRECV(4)
 
-#endif // ESP32_HW
+#endif  // ESP32_HW
 
 // --- Public C Functions ---
 extern "C" {
@@ -220,7 +215,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
                             int8_t tx_pin) {
   Stream *serial_stream = NULL;
   bool is_hw = false;
-  bool owns_stream = false; // Do we need to delete the stream later?
+  bool owns_stream = false;  // Do we need to delete the stream later?
 
   // Check if already initialized
   if (g_uart_num_to_handle.count(uart_num)) {
@@ -229,19 +224,19 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   }
 
 #if defined(ESP32_HW)
-  if (uart_num == -1) { // Standard Serial (usually UART0)
+  if (uart_num == -1) {  // Standard Serial (usually UART0)
     serial_stream = &Serial;
-    is_hw = false; // Serial is typically HardwareSerial
+    is_hw = false;  // Serial is typically HardwareSerial
     // Check if Serial was already begun externally
-    if (!Serial) { // Heuristic: Check if Serial object is valid (might not be
-                   // perfect)
-                   // If Serial.begin() wasn't called, call it now.
+    if (!Serial) {  // Heuristic: Check if Serial object is valid (might not be
+                    // perfect)
+                    // If Serial.begin() wasn't called, call it now.
       // Note: Standard Serial pins might be fixed or configured elsewhere.
       // Using provided pins might conflict if they differ from default
       // USB/UART0 pins. Be cautious when re-initializing Serial.
       // Serial.begin(baud, config, rx_pin, tx_pin);
       Serial.setRxBufferSize(RING_BUFFER_SIZE /
-                             2); // Increase buffer if possible
+                             2);  // Increase buffer if possible
       Serial.begin(baud);
       _d(0, "Standard Serial initialized internally.");
     } else {
@@ -249,24 +244,24 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
       // Consider if baud/config/pins need checking/adjusting - potentially
       // risky.
     }
-  } else { // HardwareSerial UART 1 or 2 etc.
+  } else {  // HardwareSerial UART 1 or 2 etc.
     HardwareSerial *hw_serial = new HardwareSerial(uart_num);
     if (!hw_serial) {
       _df(0, "Failed to allocate HardwareSerial for UART %d", uart_num);
       return NULL;
     }
-    hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2); // Set buffer size
+    hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2);  // Set buffer size
     hw_serial->begin(baud, config, rx_pin, tx_pin);
     // Set FIFO threshold to trigger onReceive frequently (e.g., for every byte)
     // This depends on the ESP-IDF version / Arduino core.
-    hw_serial->setRxFIFOFull(100); // Example, check specific API for your core
+    hw_serial->setRxFIFOFull(100);  // Example, check specific API for your core
     hw_serial->setRxTimeout(1);
     serial_stream = hw_serial;
     is_hw = true;
-    owns_stream = true; // We created it, we own it.
+    owns_stream = true;  // We created it, we own it.
     _df(0, "HardwareSerial UART %d initialized.", uart_num);
   }
-#else // Non-ESP32 (e.g., RRF Sim)
+#else  // Non-ESP32 (e.g., RRF Sim)
   if (uart_num == RRF_SIM_UART_NUM) {
     serial_stream = new RRFMachineSimStream(uart_num);
     if (!serial_stream) {
@@ -278,7 +273,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
     _d(0, "RRFMachineSimStream initialized.");
   } else {
     _df(0, "Serial port %d not supported on this platform.", uart_num);
-    return NULL; // Not supported
+    return NULL;  // Not supported
   }
 #endif
 
@@ -286,17 +281,15 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   serial_port_data_t *port_data = new serial_port_data_t;
   if (!port_data) {
     _df(0, "Failed to allocate serial_port_data_t for UART %d", uart_num);
-    if (owns_stream && serial_stream)
-      delete serial_stream;
+    if (owns_stream && serial_stream) delete serial_stream;
     return NULL;
   }
-  memset(port_data, 0, sizeof(serial_port_data_t)); // Zero out the struct
+  memset(port_data, 0, sizeof(serial_port_data_t));  // Zero out the struct
 
   if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
     _df(0, "Failed to allocate ring buffer for UART %d", uart_num);
     delete port_data;
-    if (owns_stream && serial_stream)
-      delete serial_stream;
+    if (owns_stream && serial_stream) delete serial_stream;
     return NULL;
   }
 
@@ -307,7 +300,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
-  serial_handle_t handle = (serial_handle_t) serial_stream;
+  serial_handle_t handle = (serial_handle_t)serial_stream;
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
@@ -342,8 +335,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
 }
 
 void serial_end(serial_handle_t handle) {
-  if (!handle)
-    return;
+  if (!handle) return;
 
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data) {
@@ -358,7 +350,7 @@ void serial_end(serial_handle_t handle) {
   if (port_data->is_hw_serial) {
     HardwareSerial *hw_serial =
         static_cast<HardwareSerial *>(port_data->stream);
-    hw_serial->onReceive(NULL); // Unregister callback
+    hw_serial->onReceive(NULL);  // Unregister callback
     // Only call end() if we own the stream (i.e., not standard Serial unless we
     // explicitly initialized it) or if it's a dynamically created
     // HardwareSerial instance. Ending standard Serial might break other things
@@ -382,7 +374,7 @@ void serial_end(serial_handle_t handle) {
   if (port_data->owns_stream && port_data->stream) {
     _df(1, "Deleting owned stream object for UART %d", port_data->uart_num);
     delete port_data
-        ->stream; // This deletes HardwareSerial or RRFMachineSimStream
+        ->stream;  // This deletes HardwareSerial or RRFMachineSimStream
   }
 
   // Delete the port data struct itself
@@ -405,7 +397,7 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
     return 0;
   }
   //_df(3, "TX (UART %d): %.*s", port_data->uart_num, size, buffer); // Debug
-  //print
+  // print
   return port_data->stream->write(buffer, size);
 }
 
@@ -439,7 +431,7 @@ bool serial_register_line_callback(serial_handle_t handle,
   for (size_t i = 0; i < port_data->num_callbacks; ++i) {
     if (port_data->callbacks[i] == callback) {
       _d(1, "serial_register_line_callback: Callback already registered.");
-      return true; // Already registered
+      return true;  // Already registered
     }
   }
 
@@ -464,7 +456,7 @@ bool serial_unregister_line_callback(serial_handle_t handle,
         port_data->callbacks[j] = port_data->callbacks[j + 1];
       }
       port_data->num_callbacks--;
-      port_data->callbacks[port_data->num_callbacks] = NULL; // Clear last slot
+      port_data->callbacks[port_data->num_callbacks] = NULL;  // Clear last slot
       _df(1, "Callback unregistered for handle %p (total %d)", handle,
           port_data->num_callbacks);
       return true;
@@ -482,7 +474,7 @@ void add_standard_serial() {
   int uart_num = -1;
   if (g_uart_num_to_handle.count(uart_num)) {
     _d(1, "Standard serial already added/initialized.");
-    return; // Already managed
+    return;  // Already managed
   }
 
 #if defined(ESP32_HW)
@@ -505,8 +497,8 @@ void add_standard_serial() {
 
   port_data->stream = serial_stream;
   port_data->uart_num = uart_num;
-  port_data->is_hw_serial = false; // Assume standard Serial is HardwareSerial
-  port_data->owns_stream = false;  // We don't own the global Serial object
+  port_data->is_hw_serial = false;  // Assume standard Serial is HardwareSerial
+  port_data->owns_stream = false;   // We don't own the global Serial object
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
@@ -536,8 +528,9 @@ int add_rrf_sim_serial() {
   // Just call serial_init with the simulator UART number
   serial_handle_t handle =
       serial_init(RRF_SIM_UART_NUM, 0, CFG_SERIAL_8N1, -1,
-                  -1);                   // Baud/config/pins irrelevant for sim
-  return handle ? RRF_SIM_UART_NUM : -1; // Return num on success, -1 on failure
+                  -1);  // Baud/config/pins irrelevant for sim
+  return handle ? RRF_SIM_UART_NUM
+                : -1;  // Return num on success, -1 on failure
 }
 #endif
 
@@ -560,12 +553,13 @@ void default_serial_write(const uint8_t *buf, size_t len) {
     serial_flush(handle);
   } else {
     // Fallback if standard serial wasn't initialized/added
-    //printf("%.*s", (int)len, (const char *)buf);
+    // printf("%.*s", (int)len, (const char *)buf);
 #ifdef ESP32_HW
     Serial.write("Unable to find standard serial");
     Serial.flush();
- #endif
-    //_d(0, "default_serial_write: Standard serial handle not found, writing to "
+#endif
+    //_d(0, "default_serial_write: Standard serial handle not found, writing to
+    //"
     //      "printf.");
   }
 }
@@ -594,10 +588,10 @@ void serial_process_input(serial_handle_t handle) {
         if (!rb_push(&port_data->rx_buffer, (uint8_t)byte_int)) {
           _df(0, "serial_process_input: Ring buffer full for UART %d",
               port_data->uart_num);
-          break; // Stop reading if buffer is full
+          break;  // Stop reading if buffer is full
         }
       } else {
-        break; // No more data or error
+        break;  // No more data or error
       }
     }
   }
@@ -606,4 +600,4 @@ void serial_process_input(serial_handle_t handle) {
   process_received_data(port_data);
 }
 
-} // extern "C"
+}  // extern "C"

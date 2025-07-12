@@ -16,22 +16,22 @@
 #include <string.h>
 
 #include "driver/arduino_serial_wrapper.h"
-#define _d(lvl, s)                                                             \
-  do {                                                                         \
-    if (lvl >= UI_DEBUG_LOG) {                                                 \
-      default_serial_write((uint8_t *)s, strlen(s));                           \
-      default_serial_write((uint8_t *)"  \n", 3);                              \
-    }                                                                          \
+#define _d(lvl, s)                                   \
+  do {                                               \
+    if (lvl >= UI_DEBUG_LOG) {                       \
+      default_serial_write((uint8_t *)s, strlen(s)); \
+      default_serial_write((uint8_t *)"  \n", 3);    \
+    }                                                \
   } while (false)
-#define _df(lvl, format, ...)                                                  \
-  do {                                                                         \
-    if (lvl >= UI_DEBUG_LOG) {                                                 \
-      size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__);    \
-      char __temp[__len + 1];                                                  \
-      snprintf(__temp, __len + 1, format __VA_OPT__(, )##__VA_ARGS__);         \
-      __temp[__len] = '\0';                                                    \
-      _d(lvl, __temp);                                                         \
-    }                                                                          \
+#define _df(lvl, format, ...)                                               \
+  do {                                                                      \
+    if (lvl >= UI_DEBUG_LOG) {                                              \
+      size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__); \
+      char __temp[__len + 1];                                               \
+      snprintf(__temp, __len + 1, format __VA_OPT__(, )##__VA_ARGS__);      \
+      __temp[__len] = '\0';                                                 \
+      _d(lvl, __temp);                                                      \
+    }                                                                       \
   } while (false)
 // #  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) {
 // serial_write(get_serial_handle(-1), (uint8_t*) s, strlen(s));
@@ -64,27 +64,28 @@
 #define LOGV(tag, fmt, ...) _df(-2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 
 // Temporary debug override, always show.
-#define LOGT(tag, fmt, ...) _df(100, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#define LOGT(tag, fmt, ...) \
+  _df(100, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 
 #else
 #include <stdio.h>
-#define _d(lvl, s)                                                             \
-  do {                                                                         \
-    if (lvl >= UI_DEBUG_LOG) {                                                 \
-      printf("%s\n", s);                                                       \
-      fflush(stdout);                                                          \
-    }                                                                          \
+#define _d(lvl, s)             \
+  do {                         \
+    if (lvl >= UI_DEBUG_LOG) { \
+      printf("%s\n", s);       \
+      fflush(stdout);          \
+    }                          \
   } while (false)
-#define _df(lvl, format, ...)                                                  \
-  do {                                                                         \
-    if (lvl >= UI_DEBUG_LOG) {                                                 \
-      printf(format, __VA_ARGS__);                                             \
-      printf("\n");                                                            \
-      fflush(stdout);                                                          \
-    }                                                                          \
+#define _df(lvl, format, ...)      \
+  do {                             \
+    if (lvl >= UI_DEBUG_LOG) {     \
+      printf(format, __VA_ARGS__); \
+      printf("\n");                \
+      fflush(stdout);              \
+    }                              \
   } while (0)
 #endif
 
 void LOG_CURR_TASK();
 
-#endif // __DEBUG_H_
+#endif  // __DEBUG_H_

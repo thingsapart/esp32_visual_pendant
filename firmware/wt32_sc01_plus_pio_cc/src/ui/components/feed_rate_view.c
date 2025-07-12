@@ -1,10 +1,8 @@
 #include "lvgl.h"
-
-#include "ui/layout/lv_vfl.h" 
+#include "ui/layout/lv_vfl.h"
 #include "ui/layout/lv_views.h"
 
-
-lv_obj_t* create_feedrate_view(lv_obj_t *parent)  {
+lv_obj_t* create_feedrate_view(lv_obj_t* parent) {
 #if 0
     // Declare pointers for the widgets we might need to access later
     lv_obj_t *cont = NULL;
@@ -130,19 +128,19 @@ lv_obj_t* create_feedrate_view(lv_obj_t *parent)  {
 
     return container;
 #endif
-return NULL;
+  return NULL;
 }
 
 // Example Usage:
 // void my_ui_init(void) {
 //     lv_obj_t * screen = lv_screen_active();
-//     // Create a placeholder container if needed, e.g., to simulate the 240x320 context
-//     lv_obj_t * main_container = lv_obj_create(screen);
+//     // Create a placeholder container if needed, e.g., to simulate the
+//     240x320 context lv_obj_t * main_container = lv_obj_create(screen);
 //     lv_obj_set_size(main_container, 240, 80); // Approximate size from image
 //     lv_obj_center(main_container);
-//     lv_obj_set_style_bg_color(main_container, lv_color_hex(0x111111), 0); // Darker background for context
-//     lv_obj_set_style_pad_all(main_container, 0, 0);
-//     lv_obj_set_style_border_width(main_container, 0, 0);
+//     lv_obj_set_style_bg_color(main_container, lv_color_hex(0x111111), 0); //
+//     Darker background for context lv_obj_set_style_pad_all(main_container, 0,
+//     0); lv_obj_set_style_border_width(main_container, 0, 0);
 //
 //     lv_obj_t* feed_widget = create_feedrate_widget(main_container);
 //     // You might align feed_widget within main_container if needed,
