@@ -1,3 +1,7 @@
 [submodule "firmware/esp32_s3_uvc_camera/lib/esp32_usb_stream"]
 	path = firmware/esp32_s3_uvc_camera/lib/esp32_usb_stream
 	url = https://github.com/esp-arduino-libs/ESP32_USB_Stream.git
+[submodule "firmware/cnc_interface/lvgl_ui"]
+	path = firmware/cnc_interface/lvgl_ui
+	url = git@github.com:thingsapart/lvgl_ui.git
+    branch = jules-rewrites
