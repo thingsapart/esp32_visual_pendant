@@ -63,7 +63,9 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #include "machine/machine_rrf.h"
 #include "machine/multi_machine_interface.h"
 #include "ui/interface.h"
-#include "ui/tab_jog.h"
+#ifdef UPDATE_JOG_DIAL
+#  include "ui/tab_jog.h"
+#endif
 
 static machine_rrf_t machine_rrf;
 static machine_interface_remote_t machine_remote;
@@ -195,11 +197,13 @@ void lvgl_task(void *pv_params) {
     if (!encoder.isUiMode()) {
       int diff = encoder.readAndReset();
       if (diff != 0) {
+        #ifdef UPDATE_JOG_DIAL
         // interface->tab_jog->jog_dial->setValue(encoder.position());
         auto dial = interface.tab_jog->jog_dial;
         if (jog_dial_axis_selected(dial)) {
           jog_dial_apply_diff(dial, diff);
         }
+        #endif
 
         machine_interface_step_current_axis(&machine.base, 3000, diff);
 
