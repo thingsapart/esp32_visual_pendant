@@ -19,7 +19,7 @@ extern "C" {
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #else
-#include <threads.h>
+#include "compat/threads.h"
 #include <time.h>
 #endif
 
@@ -74,7 +74,7 @@ static struct {
 } queue_buffers[MAX_PROCESSING_TASKS] = {NULL};
 
 static bool ring_buffer_init(ring_buffer_t *rb);
-static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line,
+static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
                                  size_t len);
 static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer,
                                  size_t max_len, size_t *out_len);
@@ -173,7 +173,7 @@ static void ring_buffer_free_oldest(ring_buffer_t *rb) {
  * indefinitely is bad, but brief waits for a mutex are okay (like ESP-IDF
  * driver task context).
  */
-static bool ring_buffer_add_line(ring_buffer_t *rb, const char *line,
+static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
                                  size_t len) {
   if (!rb || !line || len == 0) return false;
 
@@ -423,7 +423,7 @@ int machine_response_proc_task_data_ready(
 #else
     gcode_queue_t *task_event_queue,
 #endif
-    const char *data, size_t len, bool from_isr) {
+    const uint8_t *data, size_t len, bool from_isr) {
   ring_buffer_t *response_buffer = NULL;
   for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
     if (queue_buffers[i].queue == task_event_queue) {

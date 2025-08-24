@@ -207,5 +207,5 @@ void interface_tick(interface_t* interface) {
     // This tick is primarily for UI state that is not directly driven by the machine,
     // like the 'time' variable used for animations in the YAML.
     float time_s = lv_tick_get() / 1000.0f;
-    data_binding_notify_state_changed("time", (binding_value_t){.type=BINDING_TYPE_FLOAT, .as.f_val=time_s});
+    //data_binding_notify_state_changed("time", (binding_value_t){.type=BINDING_TYPE_FLOAT, .as.f_val=time_s});
 }

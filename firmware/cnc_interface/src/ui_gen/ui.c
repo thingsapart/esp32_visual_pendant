@@ -4,6 +4,8 @@
 #include "lvgl_ui.h" // For obj_registry_add, data_binding, etc.
 #include <stdlib.h> // For malloc
 
+#include "ui/assets.h"
+
 void create_ui(lv_obj_t* parent) {
     // --- Static Arrays for LVGL properties ---
     static const int32_t s_static_array_11[] = { 80, 80, 80, 536870911 };
@@ -1305,7 +1307,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_141 (image)
     lv_obj_t* image_141 = lv_image_create(button_140);
 
-    lv_image_set_src(image_141, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_0.png");
+    lv_image_set_src(image_141, &img_probe_grid_0);
 
 
 
@@ -1329,7 +1331,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_144 (image)
     lv_obj_t* image_144 = lv_image_create(button_143);
 
-    lv_image_set_src(image_144, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_1.png");
+    lv_image_set_src(image_144, &img_probe_grid_1);
 
 
 
@@ -1353,7 +1355,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_147 (image)
     lv_obj_t* image_147 = lv_image_create(button_146);
 
-    lv_image_set_src(image_147, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_2.png");
+    lv_image_set_src(image_147, &img_probe_grid_2);
 
 
 
@@ -1377,7 +1379,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_150 (image)
     lv_obj_t* image_150 = lv_image_create(button_149);
 
-    lv_image_set_src(image_150, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_3.png");
+    lv_image_set_src(image_150, &img_probe_grid_3);
 
 
 
@@ -1401,7 +1403,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_153 (image)
     lv_obj_t* image_153 = lv_image_create(button_152);
 
-    lv_image_set_src(image_153, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_4.png");
+    lv_image_set_src(image_153, &img_probe_grid_4);
 
 
 
@@ -1425,7 +1427,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_156 (image)
     lv_obj_t* image_156 = lv_image_create(button_155);
 
-    lv_image_set_src(image_156, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_5.png");
+    lv_image_set_src(image_156, &img_probe_grid_5);
 
 
 
@@ -1449,7 +1451,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_159 (image)
     lv_obj_t* image_159 = lv_image_create(button_158);
 
-    lv_image_set_src(image_159, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_6.png");
+    lv_image_set_src(image_159, &img_probe_grid_6);
 
 
 
@@ -1473,7 +1475,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_162 (image)
     lv_obj_t* image_162 = lv_image_create(button_161);
 
-    lv_image_set_src(image_162, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_7.png");
+    lv_image_set_src(image_162, &img_probe_grid_7);
 
 
 
@@ -1497,7 +1499,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_165 (image)
     lv_obj_t* image_165 = lv_image_create(button_164);
 
-    lv_image_set_src(image_165, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_grid_8.png");
+    lv_image_set_src(image_165, &img_probe_grid_8);
 
 
 
@@ -1544,7 +1546,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_171 (image)
     lv_obj_t* image_171 = lv_image_create(button_170);
 
-    lv_image_set_src(image_171, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_0.png");
+    lv_image_set_src(image_171, &img_probe_out_0);
 
 
 
@@ -1568,7 +1570,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_174 (image)
     lv_obj_t* image_174 = lv_image_create(button_173);
 
-    lv_image_set_src(image_174, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_1.png");
+    lv_image_set_src(image_174, &img_probe_out_1);
 
 
 
@@ -1592,7 +1594,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_177 (image)
     lv_obj_t* image_177 = lv_image_create(button_176);
 
-    lv_image_set_src(image_177, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_2.png");
+    lv_image_set_src(image_177, &img_probe_out_2);
 
 
 
@@ -1616,7 +1618,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_180 (image)
     lv_obj_t* image_180 = lv_image_create(button_179);
 
-    lv_image_set_src(image_180, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_3.png");
+    lv_image_set_src(image_180, &img_probe_out_3);
 
 
 
@@ -1640,7 +1642,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_183 (image)
     lv_obj_t* image_183 = lv_image_create(button_182);
 
-    lv_image_set_src(image_183, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_4.png");
+    lv_image_set_src(image_183, &img_probe_out_4);
 
 
 
@@ -1664,7 +1666,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_186 (image)
     lv_obj_t* image_186 = lv_image_create(button_185);
 
-    lv_image_set_src(image_186, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_5.png");
+    lv_image_set_src(image_186, &img_probe_out_5);
 
 
 
@@ -1688,7 +1690,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_189 (image)
     lv_obj_t* image_189 = lv_image_create(button_188);
 
-    lv_image_set_src(image_189, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_6.png");
+    lv_image_set_src(image_189, &img_probe_out_6);
 
 
 
@@ -1712,7 +1714,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_192 (image)
     lv_obj_t* image_192 = lv_image_create(button_191);
 
-    lv_image_set_src(image_192, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_7.png");
+    lv_image_set_src(image_192, &img_probe_out_7);
 
 
 
@@ -1736,7 +1738,7 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: image_195 (image)
     lv_obj_t* image_195 = lv_image_create(button_194);
 
-    lv_image_set_src(image_195, "S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/img/probe_out_8.png");
+    lv_image_set_src(image_195, &img_probe_out_8);
 
 
 

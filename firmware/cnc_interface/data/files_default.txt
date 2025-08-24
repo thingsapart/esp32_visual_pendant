@@ -1,0 +1,7 @@
+src/drive/*.h
+src/machine/*.h
+src/machine/*.c
+src/main/main.cpp
+src/tasks/*.c
+platformio.ini
+README.md

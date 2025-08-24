@@ -18,7 +18,7 @@ extern "C" {
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #else
-#include <threads.h>
+#include "compat/threads.h"
 #endif
 
 #include "debug.h"

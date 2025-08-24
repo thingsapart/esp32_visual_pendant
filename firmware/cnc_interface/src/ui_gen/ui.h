@@ -3,6 +3,8 @@
 
 #include "lvgl.h"
 
+#include "ui/assets.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

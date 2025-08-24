@@ -3,13 +3,7 @@
 
 #include "lvgl.h"
 
-LV_FONT_DECLARE(font_kode_40)
-LV_FONT_DECLARE(font_kode_34)
-LV_FONT_DECLARE(font_kode_30)
-LV_FONT_DECLARE(font_kode_24)
-LV_FONT_DECLARE(font_kode_20)
-LV_FONT_DECLARE(font_kode_14)
-
+#include "ui/assets.h"
 #include "machine/machine_interface.h"
 
 #ifdef __cplusplus
