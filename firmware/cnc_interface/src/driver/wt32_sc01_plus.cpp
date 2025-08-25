@@ -18,7 +18,8 @@ class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
     {
       auto cfg = _bus_instance.config();
 
-      cfg.freq_write = 20000000;
+      cfg.freq_write = 40000000;
+      cfg.freq_read  = 16000000;
       cfg.pin_wr = 47;  // pin number connecting WR
       cfg.pin_rd = -1;  // pin number connecting RD
       cfg.pin_rs = 0;   // Pin number connecting RS(D/C)
@@ -130,7 +131,7 @@ void lvgl_log(const char *buf) {
 
 /* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
-static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL];
+static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 5 * BYTES_PER_PIXEL];
 
 /* Display flushing */
 void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {

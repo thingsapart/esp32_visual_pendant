@@ -1,7 +1,9 @@
-src/drive/*.h
+src/driver/*.h
 src/machine/*.h
 src/machine/*.c
 src/main/main.cpp
 src/tasks/*.c
+src/ui/*.c
+src/ui/*.h
 platformio.ini
 README.md
