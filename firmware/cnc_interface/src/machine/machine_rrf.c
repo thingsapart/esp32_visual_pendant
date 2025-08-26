@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h> // For isalnum in url_encode
 
+#define LOG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
 
@@ -92,6 +93,10 @@ static bool url_encode(const char *str, char *encoded_str, size_t max_len) {
             if (remaining_len < 2) return false; // Need space for char + null terminator
             *pbuf++ = *pstr;
             remaining_len--;
+        } else if (*pstr == ' ') {
+            if (remaining_len < 2) return false;
+            *pbuf++ = '+';
+            remaining_len--;
         } else {
             if (remaining_len < 4) return false; // Need space for %XX + null terminator
             snprintf(pbuf, 4, "%%%02X", (unsigned char)*pstr);
@@ -140,7 +145,7 @@ static int _dwc_perform_get(machine_rrf_t *self, const char *path, char *buffer,
     return read_len;
 }
 
-static void _dwc_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
+ static void _dwc_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
   // Escaped gcode can be up to 3x the original length, plus null terminator.
   char path[MAX_GCODE_STR_LEN * 3 + 1] = "/rr_gcode?gcode=";
   size_t len = strlen(path);
@@ -149,15 +154,15 @@ static void _dwc_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
       LOGE(TAG, "DWC: G-code string too long to URL encode.");
       return;
   }
-
+ 
   char response_buffer[64];
-  int status_code;
 
+  int status_code = 0;
   snprintf(path, sizeof(path), "/rr_gcode?gcode=%s", escaped_gcode);
   _dwc_perform_get(self, path, response_buffer, sizeof(response_buffer), &status_code);
   LOGI(TAG, "SEND G-CODE Resp: %s", response_buffer);
-}
-
+ }
+ 
 static bool _dwc_parse_json_response(machine_rrf_t *self,
                                      const char *json_response) {
   cJSON *root = cJSON_Parse(json_response);

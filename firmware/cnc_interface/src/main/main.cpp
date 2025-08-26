@@ -330,7 +330,7 @@ void setup() {
     if (!abort && machine_send_task_run("MachineSendTask", &machine_dwc.base,
                                         &machine_send_task_handle,
                                         &machine_send_queue, TASK_MACHINE_CORE,
-                                        3 * 1024, tskIDLE_PRIORITY + 5)) {
+                                        4 * 1024, tskIDLE_PRIORITY + 5)) {
         machine_dwc.base.gcode_queue = machine_send_queue;
         LOGI(TAG, "DONE\n");
     } else {
