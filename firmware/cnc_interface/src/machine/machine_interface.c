@@ -50,7 +50,7 @@ static void machinte_interface_send_gcode(machine_interface_t *self,
                                           poll_state_t poll_state) {
   gcode_queue_push(self->gcode_queue, gcode);
   self->poll_state = (uint32_t)self->poll_state | poll_state;
-  _df(-1, "gcode queued: %s", gcode);
+  LOGV(TAG, "gcode queued: %s", gcode);
 }
 #endif
 #endif
@@ -61,14 +61,14 @@ static void machinte_interface_send_gcode(machine_interface_t *self,
 static void _default_send_gcode(machine_interface_t *self, const char *gcode) {
   // Default implementation:  Just log the G-code.  Replace with actual sending
   // logic.
-  _df(-1, "Sending G-code (default): %s\n", gcode);
+  LOGV(TAG, "Sending G-code (default): %s\n", gcode);
   //  _childclass_override(); // This is how you'd call a "virtual" method
 }
 
 static void _default_update_machine_state(machine_interface_t *self,
                                           uint32_t poll_state) {
   // Default implementation:  Simulate some state changes.
-  _df(-1, "Updating machine state (default), poll_state: %d", (int)poll_state);
+  LOGV(TAG, "Updating machine state (default), poll_state: %d", (int)poll_state);
 }
 
 static bool _default_is_connected(machine_interface_t *self) {
@@ -76,17 +76,17 @@ static bool _default_is_connected(machine_interface_t *self) {
 }
 
 static void _default_list_files(machine_interface_t *self, const char *path) {
-  _df(0, "Listing files (default) in: %s", path);
+  LOGV(TAG, "Listing files (default) in: %s", path);
 }
 
 static void _default_run_macro(machine_interface_t *self,
                                const char *macro_name) {
-  _df(0, "Running macro (default): %s", macro_name);
+  LOGI(TAG, "Running macro (default): %s", macro_name);
 }
 
 static void _default_start_job(machine_interface_t *self,
                                const char *job_name) {
-  _df(0, "Starting job (default): %s", job_name);
+  LOGI(TAG, "Starting job (default): %s", job_name);
 }
 
 static void _default_move_to(machine_interface_t *self, const char axis,
@@ -114,17 +114,17 @@ static void _default_move_to(machine_interface_t *self, const char axis,
 
 static void _default_continuous_move(machine_interface_t *self, const char axis,
                                      float feed, int direction) {
-  _df(0, "Continuous move (default): axis=%c, feed=%f, direction=%d", axis,
+  LOGI(TAG, "Continuous move (default): axis=%c, feed=%f, direction=%d", axis,
       feed, direction);
 }
 
 static void _default_continuous_stop(machine_interface_t *self) {
-  _d(0, "Continuous stop (default)");
+  LOGI(TAG, "Continuous stop (default)");
 }
 
 static void _default_move(machine_interface_t *self, const char axis,
                           float feed, float value) {
-  _df(0, "Move (default): axis=%c, feed=%f, value=%f", axis, feed, value);
+  LOGI(TAG, "Move (default): axis=%c, feed=%f, value=%f", axis, feed, value);
   _default_move_to(self, axis, feed, value, true);  // Default to relative move
 }
 
@@ -196,7 +196,7 @@ machine_interface_t *machine_interface_create(uint16_t procrate_ms) {
 machine_interface_t *machine_interface_init(machine_interface_t *self,
                                             uint16_t procrate_ms) {
   if (!self) {
-    _d(2, "Failed to allocate memory for machine_interface");
+    LOGE(TAG, "Failed to allocate memory for machine_interface");
     return NULL;  // Indicate failure
   }
   memset(self, 0, sizeof(*self));
@@ -318,11 +318,11 @@ bool machine_interface_is_homed(machine_interface_t *self, const char *axes) {
       int axis_index = machine_interface_axis_idx(self, *p);
       if (axis_index >= 0 && axis_index < 3) {
         if (!self->axes_homed[axis_index]) {
-          _df(1, "Axis not homed: %c", *p);
+          LOGI(TAG, "Axis not homed: %c", *p);
           return false;
         }
       } else {
-        _df(1, "Invalid axis: %c", *p);  // Log warning for invalid axis
+        LOGI(TAG,, "Invalid axis: %c", *p);  // Log warning for invalid axis
         return false;                    // Consider invalid axis as not homed
       }
     }
@@ -349,10 +349,13 @@ const char *machine_interface_get_wcs_str(machine_interface_t *self,
 int machine_interface_axis_idx(machine_interface_t *self, char axis) {
   switch (axis) {
     case 'X':
+    case 'x':
       return 0;
     case 'Y':
+    case 'y':
       return 1;
     case 'Z':
+    case 'z':
       return 2;
     default:
       return -1;  // Indicate invalid axis
@@ -378,10 +381,10 @@ char idx_to_axis(int i) { return axes[i]; }
 void machine_interface_send_gcode(machine_interface_t *self, const char *gcode,
                                   uint32_t poll_state) {
   if (!gcode_queue_push(&self->gcode_queue, gcode)) {
-    _d(2, "Failed to add gcode to the queue");
+    LOGE(TAG, "Failed to add gcode to the queue");
   }
   self->poll_state = (uint32_t)self->poll_state | poll_state;
-  _df(-1, "gcode queued: %s", gcode);
+  LOGV(TAG, "gcode queued: %s", gcode);
 }
 
 void machine_interface_process_gcode_q(machine_interface_t *self) {
@@ -456,7 +459,7 @@ axis_t machine_interface_move_current_axis(machine_interface_t *self,
   }
 
   char axis = idx_to_axis(axi);
-  _df(0, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
+  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
       axes[2]);
   _default_move_to(self, axis, feed, value, relative);
   return self->current_move_axis;
@@ -479,7 +482,7 @@ axis_t machine_interface_step_current_axis(machine_interface_t *self,
   LOGI(TAG, "  axis: %c", axis);
 
   float dist = self->current_move_step * steps;
-  _df(0, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
+  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
       axes[2]);
   _default_move_to(self, axis, feed, dist, true);
   LOGI(TAG, "< machine_interface_step_current_axis");
@@ -502,7 +505,7 @@ axis_t machine_interface_get_current_move_axis(machine_interface_t *self) {
 
 void machine_interface_set_current_move_axis(machine_interface_t *self,
                                              axis_t axis) {
-  _df(0, ">> SET_CURR_AX: %d => %d [%c, %c, %c].\n", self->current_move_axis,
+  LOGI(TAG, ">> SET_CURR_AX: %d => %d [%c, %c, %c].\n", self->current_move_axis,
       axis, axes[0], axes[1], axes[2]);
   if (self->current_move_axis != axis) {
     self->current_move_axis = axis;
@@ -524,7 +527,7 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
 }
 
 void machine_interface_setup_loop(machine_interface_t *self) {
-  _d(0, "Machine event loop starting...");
+  LOGI(TAG, "Machine event loop starting...");
   size_t i = 0;
   while (1) {
     machine_interface_process_gcode_q(self);
@@ -532,7 +535,7 @@ void machine_interface_setup_loop(machine_interface_t *self) {
       machine_interface_task_loop_iter(self);
     }
     if (i % 500 == 0) {
-      _df(0, "Machine task stack size high: %d\n",
+      LOGI(TAG, "Machine task stack size high: %d\n",
           uxTaskGetStackHighWaterMark(NULL));
     }
 

@@ -41,7 +41,7 @@ int machine_task(void *pvParameters) {
   LOGI(TAG, "<< Machine Task Loop Ended?");
 
   // Should never reach here, but good practice to include
-  _d(2, "Machine task unexpectedly exiting");
+  LOGE(TAG, "Machine task unexpectedly exiting");
 #ifdef ESP32_HW
   vTaskDelete(NULL);
 #endif

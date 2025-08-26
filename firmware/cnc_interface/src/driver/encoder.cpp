@@ -6,6 +6,8 @@
 
 #include "debug.h"
 
+static const char *TAG = "encoder";
+
 Encoder encoder(ENCODER_PIN_X, ENCODER_PIN_Y, 4);
 
 Encoder::Encoder(uint8_t pin_x, uint8_t pin_y, int divisor)
@@ -31,7 +33,7 @@ int ::Encoder::readAndReset() {
   enc.zero();
   if (uiMode) {
     if (res != 0)
-      _df(0, "\n\n>> ENC: val %d, rem %d, res %d\n\n", val, rem, res);
+      LOGI(TAG,  "\n\n>> ENC: val %d, rem %d, res %d\n\n", val, rem, res);
     uiModeCount = rem;
   } else {
     encModePosition += res;

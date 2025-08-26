@@ -6,9 +6,34 @@
 #include "ui/assets.h"
 #include "machine/machine_interface.h"
 
+#ifdef DWC_MACHINE_MODE
+#include "config/dwc_settings.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * @brief Bitmask for tracking which parts of the machine state have changed
+ *        and need to be reflected in the UI.
+ */
+typedef enum {
+    UI_DIRTY_NONE           = 0,
+    UI_DIRTY_STATE          = (1 << 0),
+    UI_DIRTY_POS            = (1 << 1),
+    UI_DIRTY_HOME           = (1 << 2),
+    UI_DIRTY_WCS            = (1 << 3),
+    UI_DIRTY_FEED           = (1 << 4),
+    UI_DIRTY_SENSORS        = (1 << 5),
+    UI_DIRTY_DIALOGS        = (1 << 6),
+    UI_DIRTY_SPINDLES_TOOLS = (1 << 7),
+    UI_DIRTY_CONNECTED      = (1 << 8),
+    UI_DIRTY_MOVE_AXIS      = (1 << 9),
+    UI_DIRTY_FILES_GCODES   = (1 << 10),
+    UI_DIRTY_FILES_MACROS   = (1 << 11),
+} ui_dirty_flags_t;
+
 
 /**
  * @brief A structure to hold the state of the UI interface, primarily
@@ -16,6 +41,13 @@ extern "C" {
  */
 typedef struct {
     machine_interface_t* machine;
+#ifdef DWC_MACHINE_MODE
+    // Used to build up settings during the initial setup flow
+    dwc_settings_t setup_settings;
+#endif
+    // Dirty flags are set by machine callbacks (in machine thread)
+    // and are processed by interface_tick (in UI thread).
+    volatile uint32_t dirty_flags;
 } interface_t;
 
 /**

@@ -67,8 +67,25 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #  include "ui/tab_jog.h"
 #endif
 
+// DWC Mode specific includes
+#ifdef DWC_MACHINE_MODE
+#include "config/dwc_settings.h"
+#include "driver/wifi_manager.h"
+#include <WiFi.h>
+
+// Global flag to communicate startup failure to UI
+bool g_dwc_startup_connection_failed = false;
+char g_dwc_startup_host[65] = {0};
+
+#endif
+
+
+#ifndef DWC_MACHINE_MODE
 static machine_rrf_t machine_rrf;
 static machine_interface_remote_t machine_remote;
+#else
+static machine_rrf_t machine_dwc; // Unified struct, named for clarity in this mode
+#endif
 static multi_machine_interface_t machine;
 
 static interface_t interface;
@@ -87,6 +104,7 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "driver/arduino_serial_wrapper.h"
 
+#ifndef DWC_MACHINE_MODE
 bool machine_remote_init() {
   // Create and initialize the machine interface (RRF in this case)
   if (!machine_interface_remote_init(&machine_remote,
@@ -109,43 +127,74 @@ bool machine_remote_init() {
 }
 
 int rrf_uart_num = -1;
+#endif
+
 
 bool machine_init() {
-#ifndef RRF_SIM
-  rrf_uart_num = RRF_SERIAL_UART_NUM;
-#else
-  rrf_uart_num = add_rrf_sim_serial();
-#endif
-  // Create and initialize the machine interface (RRF in this case)
-#ifdef MACH_UART_PIN_TX
-  if (!machine_rrf_init(&machine_rrf, rrf_uart_num,
-                        MACHINE_SEND_GCODE_INTERVAL_MS, MACH_UART_PIN_TX,
-                        MACH_UART_PIN_RX)) {
-    LOGE(TAG, "Failed to create machine interface");
-    // vTaskDelete(NULL); // Delete the task if creation fails
-    return false;
-  }
-#endif
-
   if (!multi_machine_interface_init(&machine)) {
-    LOGE(TAG, "Failed to create remote machine interface");
-    machine_rrf_deinit(&machine_rrf);  // Clean up if the loop somehow exits
-    machine_interface_remote_deinit(
-        &machine_remote);  // Clean up if the loop somehow exits
-    // vTaskDelete(NULL); // Delete the task if creation fails
-    return false;
-  } else {
-#ifdef MACH_UART_PIN_TX
-    if (!multi_machine_add_impl(&machine, &machine_rrf.base)) {
-      LOGE(TAG, "Failed to initialize local/remote distribution interface");
-      multi_machine_interface_deinit(&machine);
-      machine_rrf_deinit(&machine_rrf);  // Clean up if the loop somehow exits
-      // vTaskDelete(NULL); // Delete the task if creation fails
+      LOGE(TAG, "Failed to create multi machine interface");
       return false;
+  }
+
+#ifdef DWC_MACHINE_MODE
+    dwc_settings_init();
+    if (dwc_settings_load() && dwc_settings_are_valid()) {
+        const dwc_settings_t* settings = dwc_settings_get();
+        LOGI(TAG, "Found DWC settings. Connecting to WiFi '%s'...", settings->ssid);
+        wifi_manager_init();
+        if (wifi_manager_connect(settings->ssid, settings->password, 15000)) {
+            LOGI(TAG, "WiFi connected. Resolving DWC host '%s'.", settings->host);
+            
+            char resolved_host_ip[16];
+            if (wifi_manager_resolve_host(settings->host, resolved_host_ip, sizeof(resolved_host_ip))) {
+                LOGI(TAG, "Initializing DWC machine interface with host %s (resolved from %s)", resolved_host_ip, settings->host);
+                if (machine_rrf_init_dwc(&machine_dwc, resolved_host_ip, NULL, MACHINE_SEND_GCODE_INTERVAL_MS)) {
+                    multi_machine_add_impl(&machine, (machine_interface_t*)&machine_dwc);
+                } else {
+                    LOGE(TAG, "Failed to initialize DWC machine interface.");
+                    g_dwc_startup_connection_failed = true;
+                    strncpy(g_dwc_startup_host, settings->host, sizeof(g_dwc_startup_host) - 1);
+                }
+            } else {
+                LOGE(TAG, "Failed to resolve host '%s'.", settings->host);
+                g_dwc_startup_connection_failed = true;
+                strncpy(g_dwc_startup_host, settings->host, sizeof(g_dwc_startup_host) - 1);
+            }
+        } else {
+            LOGE(TAG, "Failed to connect to WiFi '%s'. Proceeding to manual setup.", settings->ssid);
+            g_dwc_startup_connection_failed = true;
+            strncpy(g_dwc_startup_host, settings->host, sizeof(g_dwc_startup_host) - 1);
+        }
+    } else {
+        LOGI(TAG, "No valid DWC settings found. UI will start in setup mode.");
+    }
+#else
+    // --- RRF + Remote Mode ---
+    #ifndef RRF_SIM
+        rrf_uart_num = RRF_SERIAL_UART_NUM;
+    #else
+        rrf_uart_num = add_rrf_sim_serial();
+    #endif
+
+    #ifdef MACH_UART_PIN_TX
+        if (!machine_rrf_init_serial(&machine_rrf, rrf_uart_num,
+                              MACHINE_SEND_GCODE_INTERVAL_MS, MACH_UART_PIN_TX,
+                              MACH_UART_PIN_RX)) {
+            LOGE(TAG, "Failed to create RRF machine interface");
+            return false;
+        }
+        if (!multi_machine_add_impl(&machine, &machine_rrf.base)) {
+            LOGE(TAG, "Failed to add RRF machine to multi interface");
+            machine_rrf_deinit(&machine_rrf);
+            return false;
+        }
+    #endif
+
+    if (!machine_remote_init()) {
+        LOGE(TAG, "Failed to initialize remote machine interface");
+        return false;
     }
 #endif
-  }
-
   return true;
 }
 
@@ -215,6 +264,7 @@ void lvgl_task(void *pv_params) {
   }
 }
 
+#ifndef DWC_MACHINE_MODE
 TaskHandle_t machine_rrf_proc_task_handle = NULL;
 QueueHandle_t machine_rrf_proc_queue = NULL;
 TaskHandle_t machine_rrf_task = NULL;
@@ -222,9 +272,13 @@ TaskHandle_t machine_rrf_task = NULL;
 TaskHandle_t machine_remote_proc_task_handle = NULL;
 QueueHandle_t machine_remote_proc_queue = NULL;
 TaskHandle_t machine_remote_task = NULL;
+#else
+TaskHandle_t machine_dwc_task_handle = NULL;
+#endif
 
 TaskHandle_t machine_send_task_handle = NULL;
 QueueHandle_t machine_send_queue = NULL;
+
 
 void setup() {
   Serial.begin(115200);
@@ -232,15 +286,12 @@ void setup() {
   mcu_setup();
   mcu_startup();
 
-  machine_init();
-
   LOGI(TAG, "Loop task stack size high: %d\n",
        uxTaskGetStackHighWaterMark(NULL));
 
   bool abort = false;
 
   LOGI(TAG, "Creating LVGL Task..\n");
-  // Create the FreeRTOS machine loop task.
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
@@ -258,85 +309,110 @@ void setup() {
     abort = true;
   }
 
-  LOGI(TAG, "Creating Machine Tasks...\n");
-
   LOGI(TAG, "Creating Machine Interfaces... ");
-  if (!abort && machine_init() && machine_remote_init()) {
+  if (!abort && machine_init()) {
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
     abort = true;
   }
 
-  LOGI(TAG, "Creating RRF Machine Task... ");
-  if (!abort && machine_task_run("MachineRRF", &machine.base, &machine_rrf_task,
-                                 TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
 
-  LOGI(TAG, "Creating Remote Machine Task... ");
-  if (!abort && machine_task_run("MachineRemote", &machine.base,
-                                 &machine_remote_task, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
-
-  LOGI(TAG, "Creating RRF Machine State Processing Task... ");
-  if (!abort &&
-      machine_response_proc_task_run(
-          "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
-    if (!machine_rrf_setup_response_processing_task(&machine_rrf,
-                                                    machine_rrf_proc_queue)) {
-      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+#ifdef DWC_MACHINE_MODE
+    LOGI(TAG, "Creating DWC Machine Task... ");
+    if (!abort && machine_task_run("MachineDWC", &machine_dwc.base, &machine_dwc_task_handle, TASK_MACHINE_CORE)) {
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "\nFAIL: Could not create DWC Machine Task: error");
+        abort = true;
     }
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
-    abort = true;
-  }
-
-  LOGI(TAG, "Creating Remote Machine State Processing Task... ");
-  if (!abort && machine_response_proc_task_run(
-                    "MachineRemoteProc", &machine_remote.base,
-                    &machine_remote_proc_task_handle,
-                    &machine_remote_proc_queue, TASK_MACHINE_CORE)) {
-    if (!machine_remote_setup_response_processing_task(
-            &machine_remote, machine_remote_proc_queue)) {
-      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+    LOGI(TAG, "Creating DWC Machine GCode Sending Task... ");
+    if (!abort && machine_send_task_run("MachineSendTask", &machine_dwc.base,
+                                        &machine_send_task_handle,
+                                        &machine_send_queue, TASK_MACHINE_CORE,
+                                        3 * 1024, tskIDLE_PRIORITY + 5)) {
+        machine_dwc.base.gcode_queue = machine_send_queue;
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "FAIL: Could not create DWC GCode Sending Task: error");
+        abort = true;
     }
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG,
-         "FAIL: Could not create Remote Machine State Processing Task: error");
-    abort = true;
-  }
+#else // RRF Mode
+    LOGI(TAG, "Creating RRF Machine Task... ");
+    if (!abort && machine_task_run("MachineRRF", &machine_rrf.base, &machine_rrf_task,
+                                    TASK_MACHINE_CORE)) {
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+        abort = true;
+    }
 
-#ifdef ASYNC_GCODE_SENDING
-  LOGI(TAG, "Creating Machine GCode Sending Task... ");
-  if (!abort && machine_send_task_run("MachineSendTask", &machine_rrf.base,
-                                      &machine_send_task_handle,
-                                      &machine_send_queue, TASK_MACHINE_CORE,
-                                      2 * 1024, tskIDLE_PRIORITY + 5)) {
-    machine_rrf.base.gcode_queue = machine_send_queue;
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "FAIL: Could not create Machine GCode Sending Task: error");
-    abort = true;
-  }
+    LOGI(TAG, "Creating Remote Machine Task... ");
+    if (!abort && machine_task_run("MachineRemote", &machine_remote.base,
+                                    &machine_remote_task, TASK_MACHINE_CORE)) {
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+        abort = true;
+    }
+
+    LOGI(TAG, "Creating RRF Machine State Processing Task... ");
+    if (!abort &&
+        machine_response_proc_task_run(
+            "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
+            &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
+        if (!machine_rrf_setup_response_processing_task(&machine_rrf,
+                                                        machine_rrf_proc_queue)) {
+        LOGE(TAG, "Failed to set up even processing queue for RRF task");
+        }
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
+        abort = true;
+    }
+
+    LOGI(TAG, "Creating Remote Machine State Processing Task... ");
+    if (!abort && machine_response_proc_task_run(
+                        "MachineRemoteProc", &machine_remote.base,
+                        &machine_remote_proc_task_handle,
+                        &machine_remote_proc_queue, TASK_MACHINE_CORE)) {
+        if (!machine_remote_setup_response_processing_task(
+                &machine_remote, machine_remote_proc_queue)) {
+        LOGE(TAG, "Failed to set up even processing queue for RRF task");
+        }
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG,
+            "FAIL: Could not create Remote Machine State Processing Task: error");
+        abort = true;
+    }
+
+    #ifdef ASYNC_GCODE_SENDING
+    LOGI(TAG, "Creating Machine GCode Sending Task... ");
+    if (!abort && machine_send_task_run("MachineSendTask", &machine.base, // Send to multi-machine
+                                        &machine_send_task_handle,
+                                        &machine_send_queue, TASK_MACHINE_CORE,
+                                        2 * 1024, tskIDLE_PRIORITY + 5)) {
+        machine.base.gcode_queue = machine_send_queue;
+        LOGI(TAG, "DONE\n");
+    } else {
+        LOGE(TAG, "FAIL: Could not create Machine GCode Sending Task: error");
+        abort = true;
+    }
+    #endif
 #endif
+
 
   LOGI(TAG, "Machine loaded..\n");
 
   if (abort) {
     multi_machine_interface_deinit(&machine);
+#ifndef DWC_MACHINE_MODE
     machine_rrf_deinit(&machine_rrf);
     machine_interface_remote_deinit(&machine_remote);
+#else
+    machine_rrf_deinit(&machine_dwc);
+#endif
   }
 }
 

@@ -16,6 +16,8 @@
 #warning "CORE DUMP DISABLED"
 #endif
 
+static const char *TAG = "mcu_esp32";
+
 #ifdef HAS_CORE_DUMP
 
 void print_reset_reason() {
@@ -85,15 +87,15 @@ void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
       }
     }
 
-    _df(0, "[backtrace]: %s", results);
-    _df(0, "[backtrace]Backtrace Depth: %u", bt_info.depth);
-    _df(0, "[backtrace]Backtrace Corrupted: %s",
+    LOGI(TAG, "[backtrace]: %s", results);
+    LOGI(TAG, "[backtrace]Backtrace Depth: %u", bt_info.depth);
+    LOGI(TAG, "[backtrace]Backtrace Corrupted: %s",
         bt_info.corrupted ? "Yes" : "No");
-    _df(0, "[backtrace]Program Counter: %d", coredump_summary->exc_pc);
-    _df(0, "[backtrace]Coredump Version: %d",
+    LOGI(TAG,  "[backtrace]Program Counter: %d", coredump_summary->exc_pc);
+    LOGI(TAG, "[backtrace]Coredump Version: %d",
         coredump_summary->core_dump_version);
   } else {
-    _d(2, "Invalid core dump summary");
+    LOGW(TAG, "Invalid core dump summary");
   }
 }
 
@@ -138,7 +140,7 @@ void mcu_setup() {
                        USB_UART_PIN_TX);
 #endif
   Serial.setDebugOutput(true);
-  _d(0, "PRE-INIT");
+  LOGI(TAG, "PRE-INIT");
   delay(200);
 }
 
@@ -147,12 +149,12 @@ void mcu_startup() {
   print_reset_reason();
 #endif
 
-  _d(0, "POST-INIT");
+  LOGI(TAG, "POST-INIT");
   WiFi.mode(WIFI_STA);
   WiFi.STA.begin();
   print_mac_address();
   WiFi.STA.end();
-  _d(0, "POST-INIT DONE");
+  LOGI(TAG, "POST-INIT DONE");
 }
 
 void LIST_TASKS() {

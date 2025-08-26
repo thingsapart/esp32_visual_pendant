@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+const char *TAG = "queue";
+
 // Initialize the G-code queue
 void gcode_queue_init(gcode_queue_t *queue) {
   queue->head = 0;
@@ -22,13 +24,13 @@ void gcode_queue_init(gcode_queue_t *queue) {
 // Add a G-code command to the queue (FIFO).  Handles wraparound.
 bool gcode_queue_push(gcode_queue_t *queue, const char *gcode) {
   if (queue->count >= MAX_GCODE_Q_LEN) {
-    _d(2, "G-code queue overflow!");
+    LOGE(TAG, "G-code queue overflow!");
     return false;  // Indicate failure
   }
 
   size_t len = strlen(gcode);
   if (len >= sizeof(queue->buffer[0])) {
-    _df(2, "G-code command too long: %s", gcode);
+    LOGE(TAG, "G-code command too long: %s", gcode);
     return false;  // Command too long for buffer
   }
 

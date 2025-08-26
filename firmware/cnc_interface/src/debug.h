@@ -1,90 +1,125 @@
 #ifndef __DEBUG_H_
 #define __DEBUG_H_
 
-#define D_INFO 0
-#define D_WARN 1
-#define D_ERROR 2
+// --- Log Level Definitions ---
+// Define the available log levels. A lower number means a higher priority.
+#define D_NONE    -1 // Special level to disable all logs
+#define D_ERROR   0
+#define D_WARN    1
+#define D_INFO    2
+#define D_DEBUG   3
+#define D_VERBOSE 4
 
-#ifndef UI_DEBUG_LOG
-#define UI_DEBUG_LOG D_INFO
+// --- Global Log Level Configuration ---
+// This is the default log level for all files unless overridden locally.
+// It can be set via a build flag, e.g., -DUI_DEBUG_LEVEL=D_VERBOSE
+#ifndef UI_DEBUG_LEVEL
+#define UI_DEBUG_LEVEL D_INFO
 #endif
 
-#ifdef UI_DEBUG_LOG
+// --- Per-File Log Level Logic ---
+// A source file can #define LOG_LOCAL_LEVEL to its desired level *before*
+// including this header. If it's defined, we use it; otherwise, we fall back
+// to the global UI_DEBUG_LEVEL.
 
+#ifdef UI_DEBUG_LOCAL_LEVEL
+  #define EFFECTIVE_LOG_LEVEL UI_DEBUG_LOCAL_LEVEL
+  // We undefine it immediately to prevent it from leaking into other headers
+  // or source files included in the same compilation unit.
+  #undef LOG_LOCAL_LEVEL
+#else
+  #define EFFECTIVE_LOG_LEVEL UI_DEBUG_LEVEL
+#endif
+
+// --- Backend Implementation ---
+// This section defines the actual printing mechanism based on the platform.
 #if ESP32_HW
 #include <stdio.h>
 #include <string.h>
-
 #include "driver/arduino_serial_wrapper.h"
-#define _d(lvl, s)                                   \
-  do {                                               \
-    if (lvl >= UI_DEBUG_LOG) {                       \
-      default_serial_write((uint8_t *)s, strlen(s)); \
-      default_serial_write((uint8_t *)"  \n", 3);    \
-    }                                                \
-  } while (false)
-#define _df(lvl, format, ...)                                               \
-  do {                                                                      \
-    if (lvl >= UI_DEBUG_LOG) {                                              \
-      size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__); \
-      char __temp[__len + 1];                                               \
-      snprintf(__temp, __len + 1, format __VA_OPT__(, )##__VA_ARGS__);      \
-      __temp[__len] = '\0';                                                 \
-      _d(lvl, __temp);                                                      \
-    }                                                                       \
-  } while (false)
-// #  define _d(lvl, s) do { if (lvl >= UI_DEBUG_LOG) {
-// serial_write(get_serial_handle(-1), (uint8_t*) s, strlen(s));
-// serial_write(get_serial_handle(-1), (uint8_t *) "\n", 1); } } while (false)
-// #  define _df(lvl, format, ...) do { if (lvl >= UI_DEBUG_LOG) { char
-// __temp[1024]; snprintf(__temp, 1023, format, ##__VA_ARGS__); _d(lvl, __temp);
-// } }  while (false)
-#else
-#define _d(lvl, s)
-#define _df(lvl, format, ...)
-#endif
-
-#undef ESP_LOGE
-#define LOGE(tag, fmt, ...) _df(2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-#define ESP_LOGE LOGE
-
-#undef ESP_LOGW
-#define LOGW(tag, fmt, ...) _df(1, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-#define ESP_LOGW LOGW
-
-#undef ESP_LOGI
-#define LOGI(tag, fmt, ...) _df(0, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-#define ESP_LOGI LOGI
-
-#undef ESP_LOGD
-#define LOGD(tag, fmt, ...) _df(-1, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-#define ESP_LOGD LOGD
-
-// Verbose.
-#define LOGV(tag, fmt, ...) _df(-2, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-
-// Temporary debug override, always show.
-#define LOGT(tag, fmt, ...) \
-  _df(100, "[%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
-
-#else
+// The core logging function for ESP32 hardware.
+#define LOG_BACKEND(format, ...)                                               \
+  do {                                                                         \
+    size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__);       \
+    char __temp[__len + 2]; /* +1 for null, +1 for newline */                   \
+    snprintf(__temp, __len + 2, format "\n" __VA_OPT__(, )##__VA_ARGS__);       \
+    default_serial_write((const uint8_t *)__temp, strlen(__temp));             \
+  } while (0)
+#else // POSIX / Native simulation
 #include <stdio.h>
-#define _d(lvl, s)             \
-  do {                         \
-    if (lvl >= UI_DEBUG_LOG) { \
-      printf("%s\n", s);       \
-      fflush(stdout);          \
-    }                          \
-  } while (false)
-#define _df(lvl, format, ...)      \
-  do {                             \
-    if (lvl >= UI_DEBUG_LOG) {     \
-      printf(format, __VA_ARGS__); \
-      printf("\n");                \
-      fflush(stdout);              \
-    }                              \
+// The core logging function for native builds.
+#define LOG_BACKEND(format, ...)                 \
+  do {                                           \
+    printf(format "\n" __VA_OPT__(, )##__VA_ARGS__); \
+    fflush(stdout);                              \
   } while (0)
 #endif
+
+// --- Compile-Time Log Level Filtering ---
+// The preprocessor will completely remove log statements below the effective level.
+
+#if EFFECTIVE_LOG_LEVEL >= D_ERROR
+#define LOGE(tag, fmt, ...) LOG_BACKEND("[E][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define LOGE(...) ((void)0)
+#endif
+
+#if EFFECTIVE_LOG_LEVEL >= D_WARN
+#define LOGW(tag, fmt, ...) LOG_BACKEND("[W][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define LOGW(...) ((void)0)
+#endif
+
+#if EFFECTIVE_LOG_LEVEL >= D_INFO
+#define LOGI(tag, fmt, ...) LOG_BACKEND("[I][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define LOGI(...) ((void)0)
+#endif
+
+#if EFFECTIVE_LOG_LEVEL >= D_DEBUG
+#define LOGD(tag, fmt, ...) LOG_BACKEND("[D][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define LOGD(...) ((void)0)
+#endif
+
+#if EFFECTIVE_LOG_LEVEL >= D_VERBOSE
+#define LOGV(tag, fmt, ...) LOG_BACKEND("[V][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+#else
+#define LOGV(...) ((void)0)
+#endif
+
+// A special macro for temporary debugging that you want to always see.
+// It can be easily found and removed later.
+#define LOGT(tag, fmt, ...) LOG_BACKEND("[TEMP][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
+
+
+// --- ESP-IDF Compatibility Macros ---
+// Undefine existing macros to avoid warnings and redefine them to use our system.
+#ifdef ESP_LOGE
+#undef ESP_LOGE
+#endif
+#define ESP_LOGE(tag, ...) LOGE(tag, __VA_ARGS__)
+
+#ifdef ESP_LOGW
+#undef ESP_LOGW
+#endif
+#define ESP_LOGW(tag, ...) LOGW(tag, __VA_ARGS__)
+
+#ifdef ESP_LOGI
+#undef ESP_LOGI
+#endif
+#define ESP_LOGI(tag, ...) LOGI(tag, __VA_ARGS__)
+
+#ifdef ESP_LOGD
+#undef ESP_LOGD
+#endif
+#define ESP_LOGD(tag, ...) LOGD(tag, __VA_ARGS__)
+
+#ifdef ESP_LOGV
+#undef ESP_LOGV
+#endif
+#define ESP_LOGV(tag, ...) LOGV(tag, __VA_ARGS__)
+
 
 void LOG_CURR_TASK();
 

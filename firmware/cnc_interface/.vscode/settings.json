@@ -115,6 +115,11 @@
         "feed_rate_view.h": "c",
         "task.h": "c",
         "lvgl_ui.h": "c",
-        "data_binding.h": "c"
+        "data_binding.h": "c",
+        "esp_http_client.h": "c",
+        "machine_rrf.h": "c",
+        "math.h": "c",
+        "cjson.h": "c",
+        "dwc_http_client_wrapper.h": "c"
     }
 }

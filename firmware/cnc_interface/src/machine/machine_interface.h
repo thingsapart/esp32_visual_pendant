@@ -248,6 +248,7 @@ void machine_interface_setup_loop(machine_interface_t *self);
 void machine_interface_maybe_execute_continuous_move(machine_interface_t *self);
 void machine_interface_position_updated(machine_interface_t *self);
 void machine_interface_home_updated(machine_interface_t *self);
+void machine_interface_state_updated(machine_interface_t *self);
 void machine_interface_wcs_updated(machine_interface_t *self);
 void machine_interface_feed_updated(machine_interface_t *self);
 void machine_interface_sensors_updated(machine_interface_t *self);
@@ -315,7 +316,7 @@ add_callback_proto(machine_interface, current_move_axis_changed);
                                   machine_callback_t cb) {            \
     for (int i = 0; i < MAX_CALLBACKS; i++) {                         \
       if (!self->cbs_name##_cb[i].cb_fn) {                            \
-        _df(0, #type "_add_" #cbs_name "_cb adding: %d (%p)", i, cb); \
+        LOGI(TAG, #type "_add_" #cbs_name "_cb adding: %d (%p)", i, cb); \
         self->cbs_name##_cb[i].cb_fn = cb;                            \
         self->cbs_name##_cb[i].user_data = user_data;                 \
         return true;                                                  \

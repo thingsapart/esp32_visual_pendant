@@ -162,9 +162,9 @@ static void ring_buffer_free_oldest(ring_buffer_t *rb) {
   // fragmentation.
   if (rb->start_slot == rb->end_slot) {
     rb->buffer_write_offset = 0;
-    _df(1, "Ring buffer empty, reset write offset");
+    LOGE(TAG, "Ring buffer empty, reset write offset");
   }
-  _df(1, "Freed oldest slot, new start_slot: %u", rb->start_slot);
+  LOGW(TAG, "Freed oldest slot, new start_slot: %u", rb->start_slot);
 }
 
 /**
@@ -197,7 +197,7 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
     return false;  // Could not get mutex, drop the line
   }
 
-  _df(1, "Add Line: start=%u, end=%u, write_offset=%u, len=%u", rb->start_slot,
+  LOGI(TAG, "Add Line: start=%u, end=%u, write_offset=%u, len=%u", rb->start_slot,
       rb->end_slot, rb->buffer_write_offset, len);
 
   char *write_ptr = NULL;
@@ -232,7 +232,7 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
           oldest_data_start ==
               0) {  // Allow if fits before oldest or if oldest is also at 0
                     // (buffer effectively linear at this point)
-        _df(1, "Fit at start: offset=0");
+        LOGV(TAG, "Fit at start: offset=0");
         write_offset = 0;
         write_ptr = rb->buffer;
       } else {
@@ -295,7 +295,7 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
     rb->buffer_write_offset = 0;
   }
 
-  _df(1, "Added Line: start=%u, end=%u, new_write_offset=%u", rb->start_slot,
+  LOGV(TAG, "Added Line: start=%u, end=%u, new_write_offset=%u", rb->start_slot,
       rb->end_slot, rb->buffer_write_offset);
 
   // Release mutex
@@ -396,13 +396,13 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer,
   *out_len = len_to_copy;
 
   // Advance the start slot index (effectively removing the item)
-  _df(1, "Get Line: slot=%u, len=%u", rb->start_slot, len_to_copy);
+  LOGV(TAG, "Get Line: slot=%u, len=%u", rb->start_slot, len_to_copy);
   rb->start_slot = (rb->start_slot + 1) % MAX_BUFFER_SLOTS;
 
   // Optimization: If buffer becomes empty, reset write offset.
   if (rb->start_slot == rb->end_slot) {
     rb->buffer_write_offset = 0;
-    _df(1, "Ring buffer empty after get, reset write offset");
+    LOGV(TAG, "Ring buffer empty after get, reset write offset");
   }
 
   // Release mutex

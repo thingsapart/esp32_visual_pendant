@@ -12,8 +12,8 @@
 #include <nvs_flash.h>
 #include <string.h>
 
-#include "debug.h"
 #include "esp_log.h"
+#include "debug.h"
 
 static const char *TAG = "remote_comms_wrapper";
 
@@ -201,10 +201,10 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
   // Check if the stored MAC address is all zeros (uninitialized)
   bool is_uninitialized = memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0 ||
                           memcmp(stored_mac_addr, broadcast_mac, 6);
-  _df(0,
-      "[%s] RECV hub MAC address " MACSTR " == new MAC " MACSTR
+  LOGI(TAG,
+      "RECV hub MAC address " MACSTR " == new MAC " MACSTR
       " => is_unknown %d",
-      TAG, MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr),
+       MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr),
       is_uninitialized);
 
   // If uninitialized, or if the received MAC matches the stored MAC, add/update
@@ -218,14 +218,14 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
     // Update the stored MAC address *only* if it was uninitialized
     if (is_uninitialized) {
       memcpy(stored_mac_addr, received_mac_addr, 6);
-      _df(0, "[%s] Learned hub MAC address: " MACSTR, TAG,
+      LOGI(TAG, "[%s] Learned hub MAC address: " MACSTR, TAG,
           MAC2STR(stored_mac_addr));
     }
     return true;  // peer existed or added.
   } else {
     // The received MAC address is different from the stored one. This is
     // unexpected.
-    _df(1,
+    LOGI(TAG,
         "Received broadcast from a different hub!  Stored: " MACSTR
         ", Received: " MACSTR,
         TAG, MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr));

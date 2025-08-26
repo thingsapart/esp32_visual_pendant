@@ -3,7 +3,9 @@
 
 #include "cJSON.h"
 #include "config.h"
+
 #include "driver/arduino_serial_wrapper.h"
+#include "driver/dwc_http_client_wrapper.h"  // For DWC mode
 #include "machine_interface.h"
 
 #ifdef MACHINE_POLL_INTERVAL
@@ -16,48 +18,73 @@
 extern "C" {
 #endif
 
-// --- RRF-Specific Constants ---
+// --- Unified RRF/DWC Machine Structure ---
 
-// Mapping of RRF status codes to MachineStatus enum
-// (This could also be a lookup table, but an enum is cleaner)
-typedef enum {
-  RRF_STATUS_C = MACHINE_STATUS_INITIALIZING,
-  RRF_STATUS_F = MACHINE_STATUS_FLASHING_FIRMWARE,
-  RRF_STATUS_H = MACHINE_STATUS_EMERGENCY_HALTED,
-  RRF_STATUS_O = MACHINE_STATUS_OFF,
-  RRF_STATUS_D = MACHINE_STATUS_PAUSED_DEC,
-  RRF_STATUS_R = MACHINE_STATUS_PAUSED_RESUME,
-  RRF_STATUS_S = MACHINE_STATUS_PAUSED,
-  RRF_STATUS_M = MACHINE_STATUS_SIMULATING,
-  RRF_STATUS_P = MACHINE_STATUS_RUNNING,
-  RRF_STATUS_T = MACHINE_STATUS_TOOL_CHANGING,
-  RRF_STATUS_B = MACHINE_STATUS_BUSY,
-} rrf_status_t;
-// --- RRF Machine Structure ---
+// Forward declare the struct so the function pointers can use it
+typedef struct machine_rrf_t machine_rrf_t;
 
-typedef struct {
-  machine_interface_t base;  // Inherit from machine_interface_t
+// Define the transport function pointer types
+typedef void (*rrf_transport_send_gcode_fn)(machine_rrf_t *self,
+                                            const char *gcode);
+typedef void (*rrf_transport_poll_state_fn)(machine_rrf_t *self,
+                                            uint32_t poll_state);
+typedef void (*rrf_transport_set_connected_fn)(machine_rrf_t *self,
+                                               bool connect);
+typedef void (*rrf_transport_list_files_fn)(machine_rrf_t *self,
+                                            const char *path);
+typedef void (*rrf_transport_deinit_fn)(machine_rrf_t *self);
+typedef void (*rrf_transport_proc_state_resp_fn)(machine_interface_t *self,
+                                                 void *data, size_t len);
 
-  // RRF-Specific Data
-  serial_handle_t uart;
+typedef struct machine_rrf_t {
+  machine_interface_t base;
+
+  // Transport-specific state is kept in a union
+  union {
+    struct {
+      serial_handle_t uart;
+    } serial;
+    struct {
+      dwc_http_handle_t http_client;
+      char *host;
+      char *password;
+    } dwc;
+  } transport_state;
+
+  // Pointers to the transport implementation functions
+  rrf_transport_send_gcode_fn _send_gcode_impl;
+  rrf_transport_poll_state_fn _poll_state_impl;
+  rrf_transport_set_connected_fn _set_connected_impl;
+  rrf_transport_list_files_fn _list_files_impl;
+  rrf_transport_deinit_fn _deinit_impl;
+  rrf_transport_proc_state_resp_fn _proc_state_resp_impl;
+
+  // --- Common RRF State ---
   bool connected;
   const char *input_sel;
   int input_idx;
   int message_box_last_dismissed_seq;
-  // Add other RRF-specific data here (e.g., network info, job details)
+  int current_tool_idx;
 } machine_rrf_t;
 
 // --- Function Prototypes ---
 
-machine_rrf_t *machine_rrf_create(int rrf_serial_num, uint16_t sleep_ms,
-                                  int tx_pin, int rx_pin);
-machine_rrf_t *machine_rrf_init(machine_rrf_t *self, int rrf_serial_num,
-                                uint16_t sleep_ms, int tx_pin, int rx_pin);
+// New initializers
+machine_rrf_t *machine_rrf_create_serial(int rrf_serial_num, uint16_t sleep_ms,
+                                         int tx_pin, int rx_pin);
+machine_rrf_t *machine_rrf_create_dwc(const char *host, const char *password,
+                                      uint16_t sleep_ms);
+
+machine_rrf_t *machine_rrf_init_serial(machine_rrf_t *self, int rrf_serial_num,
+                                       uint16_t sleep_ms, int tx_pin,
+                                       int rx_pin);
+machine_rrf_t *machine_rrf_init_dwc(machine_rrf_t *self, const char *host,
+                                    const char *password, uint16_t sleep_ms);
 
 void machine_rrf_destroy(machine_rrf_t *self);
 void machine_rrf_deinit(machine_rrf_t *self);
-void machine_rrf_task_loop_iter(
-    machine_rrf_t *self);  // Override the base class version
+
+bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj);
 
 #ifdef ASYNC_RESPONSE_PROCESSING
 #ifdef ESP32_HW
@@ -68,11 +95,12 @@ void machine_rrf_task_loop_iter(
 #include "compat/queue.h"
 #endif
 
-bool machine_rrf_setup_response_processing_task(machine_rrf_t *self,
+bool machine_rrf_setup_response_processing_task(
+    machine_rrf_t *self,
 #ifdef ESP32_HW
-                                                QueueHandle_t task_event_queue
+    QueueHandle_t task_event_queue
 #else
-                                                gcode_queue_t *task_event_queue
+    gcode_queue_t *task_event_queue
 #endif
 );
 
