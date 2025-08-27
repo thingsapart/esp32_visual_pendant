@@ -39,8 +39,12 @@ IRAM_ATTR void display_flush( lv_display_t *disp, const lv_area_t *area, uint8_t
   const int offsetx2 = area->x2;
   const int offsety1 = area->y1;
   const int offsety2 = area->y2;
-  //lcd.lcd_draw_bitmap(offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
-  lv_disp_flush_ready(disp);
+  lcd.lcd_draw_bitmap(offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+  //lv_disp_flush_ready(disp);
+}
+
+// No-op in direct mode.
+IRAM_ATTR void display_flush_direct( lv_display_t *disp, const lv_area_t *area, uint8_t * color_map) {
 }
 
 //IRAM_ATTR bool lcd_draw_finished(void *user_data)
@@ -115,7 +119,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
 
   /* Set display buffer for display. */
   lv_display_set_buffers(disp, buf, buf1, buffer_size,
-                         LV_DISPLAY_RENDER_MODE_PARTIAL);
+                         LV_DISPLAY_RENDER_MODE_FULL);
   lv_display_set_flush_cb(disp, display_flush);
 
   esp_lcd_dpi_panel_event_callbacks_t cbs = {
@@ -153,7 +157,7 @@ void display_setup_direct(lv_display_t *disp, lv_indev_t *indev) {
   /* Set display buffer for display. */
   lv_display_set_buffers(disp, buf, buf1, buffer_size,
                          LV_DISPLAY_RENDER_MODE_DIRECT);
-  lv_display_set_flush_cb(disp, display_flush);
+  lv_display_set_flush_cb(disp, display_flush_direct);
 
   esp_lcd_dpi_panel_event_callbacks_t cbs = {
       .on_refresh_done = lcd_draw_finished,
