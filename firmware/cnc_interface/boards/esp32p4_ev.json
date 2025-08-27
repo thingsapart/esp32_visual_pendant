@@ -6,15 +6,15 @@
       ],
       "f_cpu": "360000000L",
       "f_flash": "80000000L",
-      "flash_mode": "qio",
+      "flash_mode": "opi",
       "mcu": "esp32p4",
       "variant": "esp32p4"
     },
-    "boot": "qio",
-    "psram_type": "opi",
+    "boot": "opi",
+    "psram_type": "hpi",
     "arduino": {
       "partitions": "default_16MB.csv",
-      "memory_type": "qio_opi"
+      "memory_type": "opi_hpi"
     },
     "connectivity": [
       "bluetooth",

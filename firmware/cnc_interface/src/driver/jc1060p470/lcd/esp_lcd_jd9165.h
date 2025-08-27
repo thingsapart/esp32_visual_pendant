@@ -109,7 +109,7 @@ esp_err_t esp_lcd_new_panel_jd9165(const esp_lcd_panel_io_handle_t io, const esp
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,             \
         .dpi_clock_freq_mhz = 56,                                \
         .pixel_format = px_format,                               \
-        .num_fbs = 1,                                            \
+        .num_fbs = 2,                                            \
         .video_timing = {                                        \
             .h_size = 1024,                                      \
             .v_size = 600,                                       \

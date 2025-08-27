@@ -40,7 +40,6 @@ jd9165_lcd::jd9165_lcd(int8_t lcd_rst)
 
 void jd9165_lcd::example_bsp_enable_dsi_phy_power()
 {
-    // 打开 MIPI DSI PHY 的电源，使其从“无电”状态进入“关机”状态
     esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
 #ifdef EXAMPLE_MIPI_DSI_PHY_PWR_LDO_CHAN
     esp_ldo_channel_config_t ldo_mipi_phy_config = {

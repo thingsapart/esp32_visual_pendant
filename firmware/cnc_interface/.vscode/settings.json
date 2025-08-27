@@ -126,6 +126,7 @@
         "nvs_flash.h": "c",
         "esp_wifi_types.h": "c",
         "i2c.h": "c",
-        "esp_lcd_touch.h": "c"
+        "esp_lcd_touch.h": "c",
+        "semphr.h": "c"
     }
 }

@@ -198,6 +198,34 @@ bool machine_init() {
   return true;
 }
 
+#if defined(configUSE_TICK_HOOK) || defined(CONFIG_USE_TICK_HOOK)
+
+#ifndef ESP32_HW
+extern "C" {
+  void vApplicationIdleHook(void) {
+      lv_tick_inc(1000 / CONFIG_FREERTOS_HZ);
+  }
+}
+#else
+
+#include "esp_freertos_hooks.h"
+void lv_tick_task_esp(void) {
+  lv_tick_inc(1000 / CONFIG_FREERTOS_HZ);
+}
+#endif
+
+#else
+
+void lv_tick_task(void *pvParameters) {
+    for(;;) {
+        lv_tick_inc(1);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+#endif
+
+
 static unsigned int ctr = 0;
 void lvgl_task(void *pv_params) {
   LOGI(TAG, "LV_INIT");
@@ -225,9 +253,9 @@ void lvgl_task(void *pv_params) {
   while (true) {
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
-    if (sleep_time < 20) {
-      sleep_time = 20;
-    }
+    //if (sleep_time < 20) {
+    //  sleep_time = 20;
+    //}
     vTaskDelay(sleep_time / portTICK_PERIOD_MS);
 
     auto time_end = millis();
@@ -260,7 +288,7 @@ void lvgl_task(void *pv_params) {
       }
     }
 
-    lv_tick_inc(time_end - time_start);
+    //lv_tick_inc(time_end - time_start);
   }
 }
 
@@ -309,6 +337,22 @@ void setup() {
     LOGE(TAG, "FAIL: Could not create LVGL Task: error %d", create_res);
     abort = true;
   }
+
+#if !defined(configUSE_TICK_HOOK) && !defined(CONFIG_USE_TICK_HOOK)
+  // Create tick task if USE_TICK_HOOK is not set.
+  xTaskCreatePinnedToCore(
+      lv_tick_task,    // Function that implements the task
+      "lv_tick_task",  // Task name (for debugging)
+      64,              // Stack size (adjust as needed, ESP32 it's bytes)
+      NULL,            // Task input parameter (not used here)
+      tskIDLE_PRIORITY +
+          2,           // Task priority (adjust as needed) - higher than machine task
+      NULL,            // Task handle (optional, can be used to control the
+                       // task)
+      0);
+#elif defined(ESP32_HW)
+  esp_register_freertos_tick_hook_for_cpu(&lv_tick_task_esp, 0);
+#endif
 
   LOGI(TAG, "Creating Machine Interfaces... ");
   if (!abort && machine_init()) {

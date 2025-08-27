@@ -6,7 +6,7 @@
 #include <string.h>
 #include <ctype.h> // For isalnum in url_encode
 
-#define LOG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
 
