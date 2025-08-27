@@ -31,7 +31,7 @@ static const char *TAG = "MACHINE_TASK";
 
 // Function that will run as the FreeRTOS task calling
 // machine_interface_setup_lookp infinitely.
-int machine_task(void *pvParameters) {
+void machine_task(void *pvParameters) {
   machine_interface_t *s_machine_interface =
       (machine_interface_t *)pvParameters;
 
@@ -45,7 +45,7 @@ int machine_task(void *pvParameters) {
 #ifdef ESP32_HW
   vTaskDelete(NULL);
 #endif
-  return 0;
+  return;
 }
 
 bool machine_task_run(const char *task_name, machine_interface_t *machine,

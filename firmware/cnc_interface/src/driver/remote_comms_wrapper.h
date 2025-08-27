@@ -8,7 +8,7 @@
 
 #include "machine/machine_interface.h"
 
-#ifdef ESP32_HW
+#if defined(ESP32_HW) && !defined(ESP32P4_HW)
 
 #include <esp_now.h>
 #include <esp_wifi.h>

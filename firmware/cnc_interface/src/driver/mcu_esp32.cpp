@@ -67,6 +67,10 @@ void print_reset_reason() {
 
 #include "esp_core_dump.h"
 
+#if ESP32P4_HW
+void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
+}
+#else
 void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
   if (coredump_summary != NULL) {
     esp_core_dump_bt_info_t bt_info = coredump_summary->exc_bt_info;
@@ -118,6 +122,8 @@ void read_core_dump() {
     free(summary);
   }
 }
+#endif
+
 #endif
 
 void print_mac_address() {

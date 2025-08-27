@@ -120,6 +120,12 @@
         "machine_rrf.h": "c",
         "math.h": "c",
         "cjson.h": "c",
-        "dwc_http_client_wrapper.h": "c"
+        "dwc_http_client_wrapper.h": "c",
+        "gpio.h": "c",
+        "esp_system.h": "c",
+        "nvs_flash.h": "c",
+        "esp_wifi_types.h": "c",
+        "i2c.h": "c",
+        "esp_lcd_touch.h": "c"
     }
 }

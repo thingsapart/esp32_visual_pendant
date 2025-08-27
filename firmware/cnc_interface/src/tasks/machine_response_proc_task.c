@@ -497,7 +497,7 @@ typedef struct {
 /**
  * @brief The main function for the Machine Response Processing Task.
  */
-int machine_response_proc_task(void *vpargs) {
+void machine_response_proc_task(void *vpargs) {
   machine_response_proc_task_args_t *args =
       (machine_response_proc_task_args_t *)vpargs;
   machine_interface_t *machine = args->machine;
@@ -517,7 +517,7 @@ int machine_response_proc_task(void *vpargs) {
 #ifdef ESP32_HW
     vTaskDelete(NULL);
 #endif
-    return 1;  // Should not happen if run() succeeded
+    return;  // Should not happen if run() succeeded
   }
 
   free(args);
@@ -615,7 +615,7 @@ int machine_response_proc_task(void *vpargs) {
   vSemaphoreDelete(response_buffer.mutex);  // Clean up mutex
   vTaskDelete(NULL);
 #endif
-  return 0;
+  return;
 }
 
 bool machine_response_proc_task_run(const char *task_name,

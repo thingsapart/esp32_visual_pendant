@@ -2,7 +2,7 @@
 #include "debug.h"
 
 #ifdef ESP32_HW
-#define LOG_LOCAL_LEVEL D_WARN
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #endif
 #include "debug.h"
 

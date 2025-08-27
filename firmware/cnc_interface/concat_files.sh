@@ -81,14 +81,11 @@ fi
 # FINAL_MESSAGE="\nPlease print out whole files. Don\'t give me just the section that has changed, do not omit parts with comments.\n"
 
 FINAL_MESSAGE='
-IMPORTANT: Performance is very important to this project and is one of the primary goals. Make sure every change is performant. Check PERF.md for relative perf figures and ask for updated values.
+Please note that the ESP32-S3 we are using is already under decent RAM-memory-pressure but usually has 8-16MB of PSRAM. Therefore it usually makes sense to store non-performance-criticl data in PSRAM if possible.
 
-doc/HL_CEFD.md outlines a method to summarize Halide schedules, please use that to output a summary every time the pipeline/schedule is modified.
+Generally though, note that this project aims to be cross-platform even though it is currently mostly targeting the ESP32 platform. It often makes sense to write ESP32/-IDF specific code for performance, but make sure those sections are "#ifdef HW_ESP32"-gated with a fallback/generic "#else" block!
 
-doc/HL_Optimize.md has general tips about pipeline optimization to keep in mind, but think deeply about the pipeline ang go beyond the prescripted thinking outlined there.
-
-
-Please print out whole files, only those that you have changed. Do not give me just the section that has changed, do not omit parts with comments. Only print out the files that have been changed.
+The UI is defined in a YAML dialect, in the file "lvgl_ui/examples/cnc_pendant.yaml" and is translated using a tool. The c-code output of that UI is in "src/ui_gen/ui.c". Do not change the output "src/ui_gen/ui.c", change the input YAML file.
 
 NOTE:
 

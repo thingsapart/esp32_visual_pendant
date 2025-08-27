@@ -1,4 +1,5 @@
-src/driver/*.h
+src/driver/*
+src/config/*
 src/machine/*.h
 src/machine/*.c
 src/main/main.cpp
@@ -6,5 +7,8 @@ src/tasks/*.c
 src/ui/*.c
 src/ui/*.h
 src/debug.h
+lvgl_ui/docs/data_binding.md
 platformio.ini
 README.md
+lvgl_ui/examples/cnc_pendant.yaml
+src/ui_gen/ui.c

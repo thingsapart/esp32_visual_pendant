@@ -109,14 +109,14 @@ bool machine_remote_init() {
   // Create and initialize the machine interface (RRF in this case)
   if (!machine_interface_remote_init(&machine_remote,
                                      (const uint8_t *)"\0\0\0\0\0\0")) {
-    _d(2, "Failed to create remote machine interface");
+    LOGE(TAG, "Failed to create remote machine interface");
     machine_rrf_deinit(&machine_rrf);  // Clean up if the loop somehow exits
     vTaskDelete(NULL);                 // Delete the task if creation fails
     return false;
   }
 
   if (!multi_machine_add_impl(&machine, &machine_remote.base)) {
-    _d(2, "Failed to register remote machine interface");
+    LOGE(TAG, "Failed to register remote machine interface");
     machine_interface_remote_deinit(
         &machine_remote);  // Clean up if the loop somehow exits
     return false;
@@ -282,6 +282,7 @@ QueueHandle_t machine_send_queue = NULL;
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("TEST, TEST, TEST");
 
   mcu_setup();
   mcu_startup();

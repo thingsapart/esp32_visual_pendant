@@ -1,4 +1,7 @@
 #include "mdns_wrapper.h"
+
+#ifdef DWC_MACHINE_MODE
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -76,4 +79,7 @@ mdns_query_status_t mdns_wrapper_run(uint32_t* ip_addr_out) {
 
 #ifdef __cplusplus
 }
-#endif
+
+#endif // __cplusplus
+
+#endif // DWC_MACHINE_MODE

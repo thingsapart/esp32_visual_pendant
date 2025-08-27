@@ -43,7 +43,7 @@ typedef struct {
 
 // Function that will run as the FreeRTOS task calling
 // machine_interface_setup_lookp infinitely.
-int machine_send_task(void *pvParameters) {
+void machine_send_task(void *pvParameters) {
   machine_send_task_args_t *args = (machine_send_task_args_t *)pvParameters;
 
   machine_interface_t *machine = args->machine;
@@ -84,7 +84,7 @@ int machine_send_task(void *pvParameters) {
 #ifdef ESP32_HW
   vTaskDelete(NULL);
 #endif
-  return 0;
+  return;
 }
 
 bool machine_send_task_run(const char *task_name, machine_interface_t *machine,

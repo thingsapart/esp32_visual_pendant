@@ -123,4 +123,17 @@
 
 void LOG_CURR_TASK();
 
+#define RETURN_ON_ERROR(x, log_tag, format, ...) do {                                                  \
+        int err_rc_ = (x);                                                                           \
+        if (unlikely(err_rc_ != 0)) {                                                                 \
+            LOGE(log_tag, "%s(%d): " format, __FUNCTION__, __LINE__ __VA_OPT__(,) __VA_ARGS__);        \
+            return err_rc_;                                                                                \
+        }                                                                                                  \
+    } while(0)
+
+#define ERROR_CHECK(x) do {                                         \
+        esp_err_t err_rc_ = (x);                                    \
+        (void) sizeof(err_rc_);                                     \
+    } while(0)
+
 #endif  // __DEBUG_H_

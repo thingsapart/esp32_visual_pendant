@@ -2,7 +2,9 @@
 
 #include "remote_comms_wrapper.h"
 
-#ifdef ESP32_HW
+#if defined(ESP32_HW) && !defined(ESP32P4_HW)
+
+err
 
 #include <assert.h>
 #include <esp_event.h>
