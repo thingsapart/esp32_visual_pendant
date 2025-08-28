@@ -131,7 +131,11 @@
 #define LV_DRAW_BUF_STRIDE_ALIGN                1
 
 /** Align start address of draw_buf addresses to this bytes*/
-#define LV_DRAW_BUF_ALIGN                       4
+#if defined(ESP32P4_HW)
+#  define LV_DRAW_BUF_ALIGN (64) /* PPA requires 64-byte alignment */
+#else
+#  define LV_DRAW_BUF_ALIGN (4)
+#endif
 
 /** Using matrix for transformations.
  * Requirements:
@@ -213,6 +217,23 @@
 
     /** Enable drawing complex gradients in software: linear at an angle, radial or conical */
     #define LV_USE_DRAW_SW_COMPLEX_GRADIENTS    0
+#endif
+
+/* Use PPA on ESP32-P4 for blending, filling, and image copying */
+#if defined(ESP32P4_HW)
+    //#define LV_USE_GPU_ESP32_P4_PPA 1
+    #define CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE 64
+    #define CONFIG_LV_DRAW_BUF_ALIGN 64
+    //#define LV_USE_PPA 1
+    //#define CONFIG_LV_USE_PPA 1
+#endif
+
+/* Use optimized assembly functions for drawing on ESP32 series */
+#if defined(ESP32_HW) && !defined(ESP32P4_HW)
+    /* Enable the custom ASM usage */
+    #define LV_USE_DRAW_SW_ASM LV_DRAW_SW_ASM_CUSTOM
+    /* Add the header that enables the assembly functions */
+    #define LV_DRAW_SW_ASM_CUSTOM_INCLUDE "driver/esp_lvgl/include/esp_lvgl_port_lv_blend.h"
 #endif
 
 /*Use TSi's aka (Think Silicon) NemaGFX */

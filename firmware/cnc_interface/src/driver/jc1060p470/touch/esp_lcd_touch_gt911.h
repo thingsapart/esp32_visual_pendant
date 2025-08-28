@@ -34,18 +34,12 @@ extern "C" {
 esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const esp_lcd_touch_config_t *config, esp_lcd_touch_handle_t *out_touch);
 
 /**
- * @brief I2C address of the GT911 controller
- *
- */
-#define ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS (0x5D)
-
-/**
  * @brief Touch IO configuration structure
  *
  */
 #define ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG()           \
     {                                       \
-        .dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, \
+        .dev_addr = 0, /* Address is set at runtime */ \
         .control_phase_bytes = 1,           \
         .dc_bit_offset = 0,                 \
         .lcd_cmd_bits = 16,                 \

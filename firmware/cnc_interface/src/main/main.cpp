@@ -322,12 +322,11 @@ void setup() {
 
   LOGI(TAG, "Creating LVGL Task..\n");
   BaseType_t create_res = xTaskCreatePinnedToCore(
-      lvgl_task,    // Function that implements the task
-      "lvgl_task",  // Task name (for debugging)
-      1024 * 50,    // Stack size (adjust as needed, ESP32 it's bytes)
-      NULL,         // Task input parameter (not used here)
-      tskIDLE_PRIORITY +
-          2,  // Task priority (adjust as needed) - higher than machine task
+      lvgl_task,          // Function that implements the task
+      "lvgl_task",        // Task name (for debugging)
+      1024 * 55,          // Stack size (adjust as needed, ESP32 it's bytes)
+      NULL,               // Task input parameter (not used here)
+      5,                  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
                           // task)
       0);

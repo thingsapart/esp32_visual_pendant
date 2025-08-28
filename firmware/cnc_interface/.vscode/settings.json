@@ -127,6 +127,7 @@
         "esp_wifi_types.h": "c",
         "i2c.h": "c",
         "esp_lcd_touch.h": "c",
-        "semphr.h": "c"
+        "semphr.h": "c",
+        "lv_draw_ppa_private.h": "c"
     }
 }

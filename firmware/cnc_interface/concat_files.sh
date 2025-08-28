@@ -81,7 +81,7 @@ fi
 # FINAL_MESSAGE="\nPlease print out whole files. Don\'t give me just the section that has changed, do not omit parts with comments.\n"
 
 FINAL_MESSAGE='
-Please note that the ESP32-S3 we are using is already under decent RAM-memory-pressure but usually has 8-16MB of PSRAM. Therefore it usually makes sense to store non-performance-criticl data in PSRAM if possible.
+Please note that the ESP32-S3 we are targetting (along with ESP32-P4) is already under decent RAM-memory-pressure but usually has 8-16MB of PSRAM. Therefore it usually makes sense to store non-performance-criticl data in PSRAM if possible.
 
 Generally though, note that this project aims to be cross-platform even though it is currently mostly targeting the ESP32 platform. It often makes sense to write ESP32/-IDF specific code for performance, but make sure those sections are "#ifdef HW_ESP32"-gated with a fallback/generic "#else" block!
 
