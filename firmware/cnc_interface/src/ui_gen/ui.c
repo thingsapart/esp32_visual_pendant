@@ -125,8 +125,8 @@ void create_ui(lv_obj_t* parent) {
     obj_registry_add("bg_gradient", bg_gradient_10);
     lv_style_set_bg_opa(bg_gradient_10, 255);
     lv_style_set_bg_color(bg_gradient_10, lv_color_hex(0x222222));
-    lv_style_set_bg_grad_color(bg_gradient_10, lv_color_hex(0x444444));
-    lv_style_set_bg_grad_dir(bg_gradient_10, LV_GRAD_DIR_HOR);
+    //lv_style_set_bg_grad_color(bg_gradient_10, lv_color_hex(0x444444));
+    //lv_style_set_bg_grad_dir(bg_gradient_10, LV_GRAD_DIR_HOR);
 
     // flex_x: flex_x_11 (style)
     lv_style_t* flex_x_11 = malloc(sizeof(lv_style_t));

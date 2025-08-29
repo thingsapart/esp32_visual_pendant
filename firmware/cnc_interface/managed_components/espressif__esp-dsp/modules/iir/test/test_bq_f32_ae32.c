@@ -24,7 +24,7 @@
 #include "dsps_biquad.h"
 
 static const char *TAG = "dsps_biquad_f32";
-const int bq_len = 1024;
+static const int bq_len = 1024;
 TEST_CASE("dsps_biquad_f32 functionality", "[dsps]")
 {
     float *x = calloc(bq_len, sizeof(float));

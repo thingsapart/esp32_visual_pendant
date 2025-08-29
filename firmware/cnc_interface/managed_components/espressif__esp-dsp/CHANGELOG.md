@@ -7,9 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] 
 
-### Changed
-
+## [1.7.0] 2025-06-15
 ### Added
+- Multirate FIR filter
+- Resampler based on Multirate FIR  
+
+## [1.6.3] 2025-05-19
+### Fixed
+- FFT2R test case typo
+- IIR filter remove legacy a++
+
+
+## [1.6.2] 2025-04-28
+### Fixed
+- FFT2R output buffer overrun is fixed
+
+## [1.6.1] 2025-04-17
+### Changed
+- The fft4r added function with the same name as for esp32 to be compatible with precompiled libraries
+
+## [1.6.0] 2025-04-16
+### Added
+- IIR filter for stereo data processing
+- Add DCT-IV and DST-IV 
+
+### Changed
+- Improvements for FFT2R and FFT4R for esp32 and esp32s3
+- Update 3D graphics applications for M5Stack Core S3 board  
+- Bugfix for SNR calculation: free array in case of error 
+- Bugfix for determinant calculation in mat.cpp 
+- Bugfix esp32s3 sub/mul s8/s16
+- Bugfix - definition in fft4_fc32 for esp32p4
+- Bugfix for IIR esp32p4
 
 ### Removed
 

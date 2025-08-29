@@ -56,10 +56,10 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
             .mirror_y = false,
         },
         .flags = {
-            .buff_dma = false,
+            .buff_dma = true,
             .buff_spiram = true,
+            .full_refresh = false,
             .direct_mode = true,
-            //.full_refresh = true,
         }
     };
 

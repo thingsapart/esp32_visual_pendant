@@ -226,6 +226,7 @@
     #define CONFIG_LV_DRAW_BUF_ALIGN 64
     //#define LV_USE_PPA 1
     //#define CONFIG_LV_USE_PPA 1
+    #define ESP32_HW_USE_PPA
 #endif
 
 /* Use optimized assembly functions for drawing on ESP32 series */

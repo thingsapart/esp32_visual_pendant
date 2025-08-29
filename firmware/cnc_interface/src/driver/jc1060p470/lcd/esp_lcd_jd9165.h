@@ -109,22 +109,23 @@ esp_err_t esp_lcd_new_panel_jd9165(const esp_lcd_panel_io_handle_t io, const esp
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,             \
         .dpi_clock_freq_mhz = 56,                                \
         .pixel_format = px_format,                               \
-        .num_fbs = 1,                                            \
+        .num_fbs = 2,                                            \
         .video_timing = {                                        \
             .h_size = 1024,                                      \
             .v_size = 600,                                       \
             .hsync_pulse_width = 40,                             \
-            .hsync_back_porch = 160,                             \
-            .hsync_front_porch = 160,                            \
-            .vsync_pulse_width = 10,                              \
-            .vsync_back_porch = 23,                              \
-            .vsync_front_porch = 12,                             \
+            .hsync_back_porch = 80,                              \
+            .hsync_front_porch = 80,                             \
+            .vsync_pulse_width = 10,                             \
+            .vsync_back_porch = 20,                              \
+            .vsync_front_porch = 10,                             \
         },                                                       \
         .flags= {                                                \
             .use_dma2d = true,                                   \
         },                                                       \
     }								
 #endif
+            //.use_dma2d = true,                                   \
 
 #ifdef __cplusplus
 }

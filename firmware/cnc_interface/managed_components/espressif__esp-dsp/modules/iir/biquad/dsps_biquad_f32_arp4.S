@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2018-2025 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,8 +60,8 @@ dsps_biquad_f32_arp4:
     fneg.S      fa5, fa3    // -a[1]
     fneg.S      fa6, fa4    // -a[2]
 
-    flw         ft0, 0(a4)  // ft0 - f7
-    flw         ft1, 4(a4)  // ft1 - f8
+    flw         ft0, 0(a4)  // ft0 - w0
+    flw         ft1, 4(a4)  // ft1 - w1
 
     flw         ft2, 0(a0)      // ft2 - f9 = x[i]
     esp.lp.setup    0, a2, .iir_loop_end      // label to the last executed instruction
@@ -80,6 +80,8 @@ dsps_biquad_f32_arp4:
         addi        a1, a1, 4           // out++;
 
 .iir_loop_end: nop
+    fsw         ft0, 0(a4)  // ft0 - f7
+    fsw         ft1, 4(a4)  // ft1 - f8
 
     mv  a0, a6
     add sp,sp,16
