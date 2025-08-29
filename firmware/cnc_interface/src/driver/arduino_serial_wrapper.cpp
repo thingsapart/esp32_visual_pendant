@@ -224,7 +224,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   }
 
 #if defined(ESP32_HW)
-  if (uart_num == -1) {  // Standard Serial (usually UART0)
+  if (uart_num == -1 && rx_pin == -1) {  // Standard Serial (usually UART0)
     serial_stream = &Serial;
     is_hw = false;  // Serial is typically HardwareSerial
     // Check if Serial was already begun externally
@@ -245,7 +245,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
       // risky.
     }
   } else {  // HardwareSerial UART 1 or 2 etc.
-    HardwareSerial *hw_serial = new HardwareSerial(uart_num);
+    HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num );
     if (!hw_serial) {
       LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
       return NULL;
