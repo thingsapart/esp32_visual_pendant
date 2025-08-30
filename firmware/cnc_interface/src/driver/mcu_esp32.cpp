@@ -68,8 +68,7 @@ void print_reset_reason() {
 #include "esp_core_dump.h"
 
 #if ESP32P4_HW
-void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
-}
+void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {}
 #else
 void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
   if (coredump_summary != NULL) {
@@ -94,10 +93,10 @@ void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
     LOGI(TAG, "[backtrace]: %s", results);
     LOGI(TAG, "[backtrace]Backtrace Depth: %u", bt_info.depth);
     LOGI(TAG, "[backtrace]Backtrace Corrupted: %s",
-        bt_info.corrupted ? "Yes" : "No");
-    LOGI(TAG,  "[backtrace]Program Counter: %d", coredump_summary->exc_pc);
+         bt_info.corrupted ? "Yes" : "No");
+    LOGI(TAG, "[backtrace]Program Counter: %d", coredump_summary->exc_pc);
     LOGI(TAG, "[backtrace]Coredump Version: %d",
-        coredump_summary->core_dump_version);
+         coredump_summary->core_dump_version);
   } else {
     LOGW(TAG, "Invalid core dump summary");
   }

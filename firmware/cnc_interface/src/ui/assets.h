@@ -36,4 +36,4 @@ LV_IMAGE_DECLARE(img_probe_icon_4);
 LV_IMAGE_DECLARE(img_probe_icon_5);
 LV_IMAGE_DECLARE(img_probe_icon_6);
 
-#endif // UI_ASSETS_H
+#endif  // UI_ASSETS_H

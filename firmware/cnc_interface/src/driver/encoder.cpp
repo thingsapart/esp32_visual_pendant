@@ -33,7 +33,7 @@ int ::Encoder::readAndReset() {
   enc.zero();
   if (uiMode) {
     if (res != 0)
-      LOGI(TAG,  "\n\n>> ENC: val %d, rem %d, res %d\n\n", val, rem, res);
+      LOGI(TAG, "\n\n>> ENC: val %d, rem %d, res %d\n\n", val, rem, res);
     uiModeCount = rem;
   } else {
     encModePosition += res;

@@ -12,11 +12,11 @@ extern "C" {
 
 #ifdef ESP32_HW
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 #else
-#include "compat/threads.h"
 #include "compat/queue.h"
+#include "compat/threads.h"
 #endif
 
 bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
@@ -31,10 +31,9 @@ bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
 #endif
 );
 
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif // ASYNC_GCODE_SENDING
-#endif // MACHINE_SEND_TASK_H
+#endif  // ASYNC_GCODE_SENDING
+#endif  // MACHINE_SEND_TASK_H

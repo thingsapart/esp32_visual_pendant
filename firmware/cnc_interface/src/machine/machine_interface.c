@@ -68,7 +68,8 @@ static void _default_send_gcode(machine_interface_t *self, const char *gcode) {
 static void _default_update_machine_state(machine_interface_t *self,
                                           uint32_t poll_state) {
   // Default implementation:  Simulate some state changes.
-  LOGV(TAG, "Updating machine state (default), poll_state: %d", (int)poll_state);
+  LOGV(TAG, "Updating machine state (default), poll_state: %d",
+       (int)poll_state);
 }
 
 static bool _default_is_connected(machine_interface_t *self) {
@@ -115,7 +116,7 @@ static void _default_move_to(machine_interface_t *self, const char axis,
 static void _default_continuous_move(machine_interface_t *self, const char axis,
                                      float feed, int direction) {
   LOGI(TAG, "Continuous move (default): axis=%c, feed=%f, direction=%d", axis,
-      feed, direction);
+       feed, direction);
 }
 
 static void _default_continuous_stop(machine_interface_t *self) {
@@ -322,8 +323,8 @@ bool machine_interface_is_homed(machine_interface_t *self, const char *axes) {
           return false;
         }
       } else {
-        LOGI(TAG,, "Invalid axis: %c", *p);  // Log warning for invalid axis
-        return false;                    // Consider invalid axis as not homed
+        LOGI(TAG, , "Invalid axis: %c", *p);  // Log warning for invalid axis
+        return false;  // Consider invalid axis as not homed
       }
     }
     return true;
@@ -459,8 +460,8 @@ axis_t machine_interface_move_current_axis(machine_interface_t *self,
   }
 
   char axis = idx_to_axis(axi);
-  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
-      axes[2]);
+  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0],
+       axes[1], axes[2]);
   _default_move_to(self, axis, feed, value, relative);
   return self->current_move_axis;
 }
@@ -482,8 +483,8 @@ axis_t machine_interface_step_current_axis(machine_interface_t *self,
   LOGI(TAG, "  axis: %c", axis);
 
   float dist = self->current_move_step * steps;
-  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0], axes[1],
-      axes[2]);
+  LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0],
+       axes[1], axes[2]);
   _default_move_to(self, axis, feed, dist, true);
   LOGI(TAG, "< machine_interface_step_current_axis");
   return self->current_move_axis;
@@ -506,7 +507,7 @@ axis_t machine_interface_get_current_move_axis(machine_interface_t *self) {
 void machine_interface_set_current_move_axis(machine_interface_t *self,
                                              axis_t axis) {
   LOGI(TAG, ">> SET_CURR_AX: %d => %d [%c, %c, %c].\n", self->current_move_axis,
-      axis, axes[0], axes[1], axes[2]);
+       axis, axes[0], axes[1], axes[2]);
   if (self->current_move_axis != axis) {
     self->current_move_axis = axis;
     machine_interface_current_move_axis_updated(self);
@@ -532,11 +533,11 @@ void machine_interface_setup_loop(machine_interface_t *self) {
   while (1) {
     machine_interface_process_gcode_q(self);
     if (i++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
-      //machine_interface_task_loop_iter(self);
+      // machine_interface_task_loop_iter(self);
     }
     if (i % 500 == 0) {
       LOGI(TAG, "Machine task stack size high: %d\n",
-          uxTaskGetStackHighWaterMark(NULL));
+           uxTaskGetStackHighWaterMark(NULL));
     }
 
     vTaskDelay(pdMS_TO_TICKS(self->procrate_ms));

@@ -311,19 +311,19 @@ add_callback_proto(machine_interface, spindles_tools_changed);
 add_callback_proto(machine_interface, connected_changed);
 add_callback_proto(machine_interface, current_move_axis_changed);
 
-#define add_callback_fn(type, cbs_name)                               \
-  bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,    \
-                                  machine_callback_t cb) {            \
-    for (int i = 0; i < MAX_CALLBACKS; i++) {                         \
-      if (!self->cbs_name##_cb[i].cb_fn) {                            \
+#define add_callback_fn(type, cbs_name)                                  \
+  bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,       \
+                                  machine_callback_t cb) {               \
+    for (int i = 0; i < MAX_CALLBACKS; i++) {                            \
+      if (!self->cbs_name##_cb[i].cb_fn) {                               \
         LOGI(TAG, #type "_add_" #cbs_name "_cb adding: %d (%p)", i, cb); \
-        self->cbs_name##_cb[i].cb_fn = cb;                            \
-        self->cbs_name##_cb[i].user_data = user_data;                 \
-        return true;                                                  \
-      }                                                               \
-    }                                                                 \
-    assert(0 && "Maximum number of callbacks reached");               \
-    return false;                                                     \
+        self->cbs_name##_cb[i].cb_fn = cb;                               \
+        self->cbs_name##_cb[i].user_data = user_data;                    \
+        return true;                                                     \
+      }                                                                  \
+    }                                                                    \
+    assert(0 && "Maximum number of callbacks reached");                  \
+    return false;                                                        \
   }
 
 #ifdef __cplusplus

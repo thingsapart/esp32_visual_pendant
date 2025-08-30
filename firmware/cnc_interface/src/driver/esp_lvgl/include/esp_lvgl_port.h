@@ -13,9 +13,9 @@
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
-#include "lvgl.h"
 #include "esp_lvgl_port_disp.h"
 #include "esp_lvgl_port_touch.h"
+#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,49 +29,51 @@ extern "C" {
  * @brief LVGL Port task event type
  */
 typedef enum {
-    LVGL_PORT_EVENT_DISPLAY = 0x01,
-    LVGL_PORT_EVENT_TOUCH   = 0x02,
-    LVGL_PORT_EVENT_USER    = 0x80,
+  LVGL_PORT_EVENT_DISPLAY = 0x01,
+  LVGL_PORT_EVENT_TOUCH = 0x02,
+  LVGL_PORT_EVENT_USER = 0x80,
 } lvgl_port_event_type_t;
 
 /**
  * @brief LVGL Port task events
  */
 typedef struct {
-    lvgl_port_event_type_t type;
-    void *param;
+  lvgl_port_event_type_t type;
+  void *param;
 } lvgl_port_event_t;
 
 /**
  * @brief Init configuration structure
  */
 typedef struct {
-    int task_priority;        /*!< LVGL task priority */
-    int task_stack;           /*!< LVGL task stack size */
-    int task_affinity;        /*!< LVGL task pinned to core (-1 is no affinity) */
-    int task_max_sleep_ms;    /*!< Maximum sleep in LVGL task */
-    unsigned task_stack_caps; /*!< LVGL task stack memory capabilities (see esp_heap_caps.h) */
-    int timer_period_ms;      /*!< LVGL timer tick period in ms */
+  int task_priority;        /*!< LVGL task priority */
+  int task_stack;           /*!< LVGL task stack size */
+  int task_affinity;        /*!< LVGL task pinned to core (-1 is no affinity) */
+  int task_max_sleep_ms;    /*!< Maximum sleep in LVGL task */
+  unsigned task_stack_caps; /*!< LVGL task stack memory capabilities (see
+                               esp_heap_caps.h) */
+  int timer_period_ms;      /*!< LVGL timer tick period in ms */
 } lvgl_port_cfg_t;
 
 /**
  * @brief LVGL port configuration structure
  *
  */
-#define ESP_LVGL_PORT_INIT_CONFIG()                \
-    {                                              \
-        .task_priority = 4,                        \
-        .task_stack = 7168,                        \
-        .task_affinity = -1,                       \
-        .task_max_sleep_ms = 500,                  \
-        .task_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT,    \
-        .timer_period_ms = 5,                      \
-    }
+#define ESP_LVGL_PORT_INIT_CONFIG()                                \
+  {                                                                \
+      .task_priority = 4,                                          \
+      .task_stack = 7168,                                          \
+      .task_affinity = -1,                                         \
+      .task_max_sleep_ms = 500,                                    \
+      .task_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT, \
+      .timer_period_ms = 5,                                        \
+  }
 
 /**
  * @brief Initialize LVGL portation
  *
- * @note This function initialize LVGL and create timer and task for LVGL right working.
+ * @note This function initialize LVGL and create timer and task for LVGL right
+ * working.
  *
  * @return
  *      - ESP_OK                    on success

@@ -14,4 +14,4 @@
  */
 void ui_action_handler_init(interface_t* interface);
 
-#endif // UI_ACTION_HANDLER_H
+#endif  // UI_ACTION_HANDLER_H

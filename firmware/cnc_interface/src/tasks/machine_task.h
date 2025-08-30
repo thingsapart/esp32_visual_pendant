@@ -29,5 +29,5 @@ bool machine_task_run(const char *task_name, machine_interface_t *machine,
 }
 #endif
 
-#endif // ASYNC_GCODE_SENDING
-#endif // MACHINE_TASK_H
+#endif  // ASYNC_GCODE_SENDING
+#endif  // MACHINE_TASK_H

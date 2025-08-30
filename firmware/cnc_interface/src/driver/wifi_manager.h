@@ -2,8 +2,8 @@
 #define WIFI_MANAGER_H
 
 #include <stdbool.h>
+#include <stddef.h>  // For size_t
 #include <stdint.h>
-#include <stddef.h> // For size_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +26,8 @@ void wifi_manager_init();
  * @param timeout_ms The maximum time to wait for a connection.
  * @return true if connected successfully, false otherwise.
  */
-bool wifi_manager_connect(const char* ssid, const char* password, uint32_t timeout_ms);
+bool wifi_manager_connect(const char* ssid, const char* password,
+                          uint32_t timeout_ms);
 
 /**
  * @brief Disconnects from the current Wi-Fi network.
@@ -45,7 +46,8 @@ void wifi_manager_disconnect();
  * @return true if the host was successfully resolved or was already an IP,
  *         false on failure (e.g., timeout, host not found).
  */
-bool wifi_manager_resolve_host(const char* host, char* ip_buffer, size_t buffer_len);
+bool wifi_manager_resolve_host(const char* host, char* ip_buffer,
+                               size_t buffer_len);
 
 /**
  * @brief Scans for available Wi-Fi networks.
@@ -57,7 +59,6 @@ bool wifi_manager_resolve_host(const char* host, char* ip_buffer, size_t buffer_
  */
 void wifi_manager_scan(wifi_scan_done_cb_t callback, void* user_data);
 
-
 /**
  * @brief Checks if the device is currently connected to Wi-Fi.
  *
@@ -65,9 +66,8 @@ void wifi_manager_scan(wifi_scan_done_cb_t callback, void* user_data);
  */
 bool wifi_manager_is_connected();
 
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif // WIFI_MANAGER_H
+#endif  // WIFI_MANAGER_H

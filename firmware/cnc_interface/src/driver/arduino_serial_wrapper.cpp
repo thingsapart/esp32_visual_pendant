@@ -139,8 +139,8 @@ static void process_received_data(serial_port_data_t *port_data) {
 
     if (byte == '\n') {
       port_data->line_buffer[port_data->line_pos] = '\0';  // Null-terminate
-      //LOGI(TAG, "RX Line (UART %d): %s", port_data->uart_num,
-      // port_data->line_buffer); // Debug print
+      // LOGI(TAG, "RX Line (UART %d): %s", port_data->uart_num,
+      //  port_data->line_buffer); // Debug print
 
       // Call registered callbacks
       for (size_t i = 0; i < port_data->num_callbacks; ++i) {
@@ -245,7 +245,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
       // risky.
     }
   } else {  // HardwareSerial UART 1 or 2 etc.
-    HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num );
+    HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
     if (!hw_serial) {
       LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
       return NULL;
@@ -287,7 +287,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   memset(port_data, 0, sizeof(serial_port_data_t));  // Zero out the struct
 
   if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
-    LOGE(TAG,  "Failed to allocate ring buffer for UART %d", uart_num);
+    LOGE(TAG, "Failed to allocate ring buffer for UART %d", uart_num);
     delete port_data;
     if (owns_stream && serial_stream) delete serial_stream;
     return NULL;
@@ -330,7 +330,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
 #endif
 
   LOGI(TAG, "Serial port %d (handle %p) successfully initialized.", uart_num,
-      handle);
+       handle);
   return handle;
 }
 
@@ -339,11 +339,12 @@ void serial_end(serial_handle_t handle) {
 
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data) {
-    LOGI(TAG,  "serial_end: Handle %p not found.", handle);
+    LOGI(TAG, "serial_end: Handle %p not found.", handle);
     return;
   }
 
-  LOGI(TAG, "Ending serial port %d (handle %p)...", port_data->uart_num, handle);
+  LOGI(TAG, "Ending serial port %d (handle %p)...", port_data->uart_num,
+       handle);
 
   // Unregister callback and stop hardware serial if applicable
 #if defined(ESP32_HW)
@@ -356,8 +357,8 @@ void serial_end(serial_handle_t handle) {
     // HardwareSerial instance. Ending standard Serial might break other things
     // (like USB CDC). Be careful.
     if (port_data->owns_stream) {
-      LOGI(TAG,  "Calling end() for owned HardwareSerial UART %d",
-          port_data->uart_num);
+      LOGI(TAG, "Calling end() for owned HardwareSerial UART %d",
+           port_data->uart_num);
       hw_serial->end();
     }
   }
@@ -393,11 +394,12 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
       printf("%.*s", (int)size, (const char *)buffer);
       return size;
     }
-    LOGE(TAG,  "serial_write: Invalid handle %p", handle);
+    LOGE(TAG, "serial_write: Invalid handle %p", handle);
     return 0;
   }
-  //LOGI(TAG, "TX (UART %d): %.*s", port_data->uart_num, size, buffer); // Debug
-  // print
+  // LOGI(TAG, "TX (UART %d): %.*s", port_data->uart_num, size, buffer); //
+  // Debug
+  //  print
   return port_data->stream->write(buffer, size);
 }
 
@@ -421,23 +423,23 @@ bool serial_register_line_callback(serial_handle_t handle,
   }
 
   if (port_data->num_callbacks >= MAX_CALLBACKS) {
-    LOGW(TAG, 
-        "serial_register_line_callback: Max callbacks reached for handle %p.",
-        handle);
+    LOGW(TAG,
+         "serial_register_line_callback: Max callbacks reached for handle %p.",
+         handle);
     return false;
   }
 
   // Check if already registered
   for (size_t i = 0; i < port_data->num_callbacks; ++i) {
     if (port_data->callbacks[i] == callback) {
-      LOGW(TAG,  "serial_register_line_callback: Callback already registered.");
+      LOGW(TAG, "serial_register_line_callback: Callback already registered.");
       return true;  // Already registered
     }
   }
 
   port_data->callbacks[port_data->num_callbacks++] = callback;
-  LOGI(TAG,  "Callback registered for handle %p (total %d)", handle,
-      port_data->num_callbacks);
+  LOGI(TAG, "Callback registered for handle %p (total %d)", handle,
+       port_data->num_callbacks);
   return true;
 }
 
@@ -445,7 +447,7 @@ bool serial_unregister_line_callback(serial_handle_t handle,
                                      serial_line_callback_t callback) {
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data || !callback) {
-    LOGW(TAG,  "serial_unregister_line_callback: Invalid handle or callback.");
+    LOGW(TAG, "serial_unregister_line_callback: Invalid handle or callback.");
     return false;
   }
 
@@ -457,14 +459,15 @@ bool serial_unregister_line_callback(serial_handle_t handle,
       }
       port_data->num_callbacks--;
       port_data->callbacks[port_data->num_callbacks] = NULL;  // Clear last slot
-      LOGI(TAG,  "Callback unregistered for handle %p (total %d)", handle,
-          port_data->num_callbacks);
+      LOGI(TAG, "Callback unregistered for handle %p (total %d)", handle,
+           port_data->num_callbacks);
       return true;
     }
   }
 
-  LOGW(TAG, "serial_unregister_line_callback: Callback not found for handle %p.",
-      handle);
+  LOGW(TAG,
+       "serial_unregister_line_callback: Callback not found for handle %p.",
+       handle);
   return false;
 }
 
@@ -484,7 +487,7 @@ void add_standard_serial() {
   // Assume Serial might be initialized externally, just manage it
   serial_port_data_t *port_data = new serial_port_data_t;
   if (!port_data) {
-    LOGE(TAG,  "Failed to allocate serial_port_data_t for standard serial");
+    LOGE(TAG, "Failed to allocate serial_port_data_t for standard serial");
     return;
   }
   memset(port_data, 0, sizeof(serial_port_data_t));
@@ -587,7 +590,7 @@ void serial_process_input(serial_handle_t handle) {
       if (byte_int != -1) {
         if (!rb_push(&port_data->rx_buffer, (uint8_t)byte_int)) {
           LOGE(TAG, "serial_process_input: Ring buffer full for UART %d",
-              port_data->uart_num);
+               port_data->uart_num);
           break;  // Stop reading if buffer is full
         }
       } else {

@@ -33,13 +33,16 @@ void dwc_http_destroy(dwc_http_handle_t handle);
  * @param path The path and query string for the request (e.g., "/rr_status").
  * @param response_buffer A buffer to store the response body.
  * @param buffer_len The maximum size of the response buffer.
- * @param status_code A pointer to an integer where the HTTP status code will be stored.
- * @return The number of bytes read into the buffer, or a negative value on error.
+ * @param status_code A pointer to an integer where the HTTP status code will be
+ * stored.
+ * @return The number of bytes read into the buffer, or a negative value on
+ * error.
  */
-int dwc_http_get(dwc_http_handle_t handle, const char* path, char* response_buffer, size_t buffer_len, int* status_code);
+int dwc_http_get(dwc_http_handle_t handle, const char* path,
+                 char* response_buffer, size_t buffer_len, int* status_code);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // DWC_HTTP_CLIENT_WRAPPER_H
+#endif  // DWC_HTTP_CLIENT_WRAPPER_H

@@ -9,9 +9,9 @@ extern "C" {
 
 // Structure to hold the DWC configuration
 typedef struct {
-    char ssid[33];      // 32 max SSID length + null terminator
-    char password[65];  // 64 max password length + null terminator
-    char host[64];      // Hostname or IP address
+  char ssid[33];      // 32 max SSID length + null terminator
+  char password[65];  // 64 max password length + null terminator
+  char host[64];      // Hostname or IP address
 } dwc_settings_t;
 
 /**
@@ -57,4 +57,4 @@ const dwc_settings_t* dwc_settings_get();
 }
 #endif
 
-#endif // DWC_SETTINGS_H
+#endif  // DWC_SETTINGS_H

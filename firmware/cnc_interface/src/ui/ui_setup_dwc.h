@@ -17,6 +17,6 @@
  */
 void ui_start_dwc_setup_flow(interface_t* interface);
 
-#endif // DWC_MACHINE_MODE
+#endif  // DWC_MACHINE_MODE
 
-#endif // UI_SETUP_DWC_H
+#endif  // UI_SETUP_DWC_H

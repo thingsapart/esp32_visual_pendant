@@ -2,7 +2,6 @@
 #define UI_GEN_UI_H
 
 #include "lvgl.h"
-
 #include "ui/assets.h"
 
 #ifdef __cplusplus
@@ -25,4 +24,4 @@ void create_ui(lv_obj_t* parent);
 }
 #endif
 
-#endif // UI_GEN_UI_H
+#endif  // UI_GEN_UI_H

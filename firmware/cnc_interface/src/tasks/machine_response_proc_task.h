@@ -7,15 +7,16 @@ extern "C" {
 #endif
 
 #include <stdbool.h>
+
 #include "machine/machine_interface.h"
 
 #ifdef ESP32_HW
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 #else
-#include "compat/threads.h"
 #include "compat/queue.h"
+#include "compat/threads.h"
 #endif
 
 int machine_response_proc_task_data_ready(
@@ -30,8 +31,7 @@ bool machine_response_proc_task_run(const char* task_name,
                                     machine_interface_t* machine,
 #ifdef ESP32_HW
                                     TaskHandle_t* task_handle,
-                                    QueueHandle_t* queue,
-                                    BaseType_t pinned_core
+                                    QueueHandle_t* queue, BaseType_t pinned_core
 #else
                                     thrd_t* task_handle, gcode_queue_t* queue
 #endif

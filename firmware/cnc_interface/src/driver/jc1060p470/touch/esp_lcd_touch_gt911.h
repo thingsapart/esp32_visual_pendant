@@ -29,28 +29,28 @@ extern "C" {
  * @param out_touch: Touch instance handle
  * @return
  *      - ESP_OK                    on success
- *      - ESP_ERR_NO_MEM            if there is no memory for allocating main structure
+ *      - ESP_ERR_NO_MEM            if there is no memory for allocating main
+ * structure
  */
-esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const esp_lcd_touch_config_t *config, esp_lcd_touch_handle_t *out_touch);
+esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io,
+                                      const esp_lcd_touch_config_t *config,
+                                      esp_lcd_touch_handle_t *out_touch);
 
 /**
  * @brief Touch IO configuration structure
  *
  */
-#define ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG()           \
-    {                                       \
-        .dev_addr = 0, /* Address is set at runtime */ \
-        .control_phase_bytes = 1,           \
-        .dc_bit_offset = 0,                 \
-        .lcd_cmd_bits = 16,                 \
-        .flags =                            \
-        {                                   \
-            .disable_control_phase = 1,     \
-        }                                   \
-    }
+#define ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG()                               \
+  {                                                                       \
+    .dev_addr = 0, /* Address is set at runtime */                        \
+        .control_phase_bytes = 1, .dc_bit_offset = 0, .lcd_cmd_bits = 16, \
+    .flags = {                                                            \
+      .disable_control_phase = 1,                                         \
+    }                                                                     \
+  }
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // JC1060P470
+#endif  // JC1060P470

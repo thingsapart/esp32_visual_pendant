@@ -584,7 +584,7 @@ void process_message(const uint8_t *data, const size_t data_len) {
 void process_buffered_messages() {
   // Execute remote commands.
   size_t msgbuf_len = message_buffer_len;
-  uint8_t(*buf)[PAYLOAD_MAX][MAX_MSG_BUFFER] = message_buffer;
+  uint8_t (*buf)[PAYLOAD_MAX][MAX_MSG_BUFFER] = message_buffer;
   size_t *lens = message_lens;
 
   message_buffer_len = 0;

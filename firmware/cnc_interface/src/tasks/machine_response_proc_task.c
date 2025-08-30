@@ -19,8 +19,9 @@ extern "C" {
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #else
-#include "compat/threads.h"
 #include <time.h>
+
+#include "compat/threads.h"
 #endif
 
 #define UI_DEBUG_LOG D_ERROR
@@ -197,8 +198,8 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
     return false;  // Could not get mutex, drop the line
   }
 
-  LOGI(TAG, "Add Line: start=%u, end=%u, write_offset=%u, len=%u", rb->start_slot,
-      rb->end_slot, rb->buffer_write_offset, len);
+  LOGI(TAG, "Add Line: start=%u, end=%u, write_offset=%u, len=%u",
+       rb->start_slot, rb->end_slot, rb->buffer_write_offset, len);
 
   char *write_ptr = NULL;
   size_t write_offset = 0;
@@ -296,7 +297,7 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
   }
 
   LOGV(TAG, "Added Line: start=%u, end=%u, new_write_offset=%u", rb->start_slot,
-      rb->end_slot, rb->buffer_write_offset);
+       rb->end_slot, rb->buffer_write_offset);
 
   // Release mutex
   release_mutex(rb);

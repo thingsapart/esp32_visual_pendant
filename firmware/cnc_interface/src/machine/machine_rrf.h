@@ -3,7 +3,6 @@
 
 #include "cJSON.h"
 #include "config.h"
-
 #include "driver/arduino_serial_wrapper.h"
 #include "driver/dwc_http_client_wrapper.h"  // For DWC mode
 #include "machine_interface.h"
@@ -95,12 +94,11 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj);
 #include "compat/queue.h"
 #endif
 
-bool machine_rrf_setup_response_processing_task(
-    machine_rrf_t *self,
+bool machine_rrf_setup_response_processing_task(machine_rrf_t *self,
 #ifdef ESP32_HW
-    QueueHandle_t task_event_queue
+                                                QueueHandle_t task_event_queue
 #else
-    gcode_queue_t *task_event_queue
+                                                gcode_queue_t *task_event_queue
 #endif
 );
 

@@ -14,10 +14,10 @@ err
 #include <nvs_flash.h>
 #include <string.h>
 
-#include "esp_log.h"
 #include "debug.h"
+#include "esp_log.h"
 
-static const char *TAG = "remote_comms_wrapper";
+    static const char *TAG = "remote_comms_wrapper";
 
 static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -204,10 +204,8 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
   bool is_uninitialized = memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0 ||
                           memcmp(stored_mac_addr, broadcast_mac, 6);
   LOGI(TAG,
-      "RECV hub MAC address " MACSTR " == new MAC " MACSTR
-      " => is_unknown %d",
-       MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr),
-      is_uninitialized);
+       "RECV hub MAC address " MACSTR " == new MAC " MACSTR " => is_unknown %d",
+       MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr), is_uninitialized);
 
   // If uninitialized, or if the received MAC matches the stored MAC, add/update
   // the peer
@@ -221,16 +219,16 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
     if (is_uninitialized) {
       memcpy(stored_mac_addr, received_mac_addr, 6);
       LOGI(TAG, "[%s] Learned hub MAC address: " MACSTR, TAG,
-          MAC2STR(stored_mac_addr));
+           MAC2STR(stored_mac_addr));
     }
     return true;  // peer existed or added.
   } else {
     // The received MAC address is different from the stored one. This is
     // unexpected.
     LOGI(TAG,
-        "Received broadcast from a different hub!  Stored: " MACSTR
-        ", Received: " MACSTR,
-        TAG, MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr));
+         "Received broadcast from a different hub!  Stored: " MACSTR
+         ", Received: " MACSTR,
+         TAG, MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr));
     // Do NOT add the peer.  We don't want to overwrite our existing peer.
     return false;
   }
