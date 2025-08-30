@@ -232,6 +232,9 @@
 /* Use optimized assembly functions for drawing on ESP32 series */
 #if defined(ESP32_HW) && !defined(ESP32P4_HW)
     /* Enable the custom ASM usage */
+    #undef LV_USE_DRAW_SW_ASM
+    #undef LV_DRAW_SW_ASM_CUSTOM_INCLUDE
+
     #define LV_USE_DRAW_SW_ASM LV_DRAW_SW_ASM_CUSTOM
     /* Add the header that enables the assembly functions */
     #define LV_DRAW_SW_ASM_CUSTOM_INCLUDE "driver/esp_lvgl/include/esp_lvgl_port_lv_blend.h"
@@ -1139,7 +1142,7 @@
 /** Use SDL to open window on PC and handle mouse and keyboard. */
 //#define LV_USE_SDL              0
 #if LV_USE_SDL
-    #ifndef LV_SDL_INCLUDE_PATH 
+    #ifndef LV_SDL_INCLUDE_PATH
     #  define LV_SDL_INCLUDE_PATH     <SDL2/SDL.h>
     #endif
     #define LV_SDL_RENDER_MODE      LV_DISPLAY_RENDER_MODE_DIRECT   /**< LV_DISPLAY_RENDER_MODE_DIRECT is recommended for best performance */

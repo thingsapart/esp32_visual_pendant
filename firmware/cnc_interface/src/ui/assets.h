@@ -28,4 +28,12 @@ LV_IMAGE_DECLARE(img_probe_out_6);
 LV_IMAGE_DECLARE(img_probe_out_7);
 LV_IMAGE_DECLARE(img_probe_out_8);
 
+LV_IMAGE_DECLARE(img_probe_icon_0);
+LV_IMAGE_DECLARE(img_probe_icon_1);
+LV_IMAGE_DECLARE(img_probe_icon_2);
+LV_IMAGE_DECLARE(img_probe_icon_3);
+LV_IMAGE_DECLARE(img_probe_icon_4);
+LV_IMAGE_DECLARE(img_probe_icon_5);
+LV_IMAGE_DECLARE(img_probe_icon_6);
+
 #endif // UI_ASSETS_H
