@@ -71,7 +71,11 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
+#ifdef ESP32P4_HW
     #define LV_MEM_SIZE (96 * 1024U)          /**< [bytes] */
+#else
+    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
+#endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE (64 * 1024U)
@@ -544,7 +548,11 @@
 #define LV_ATTRIBUTE_LARGE_RAM_ARRAY
 
 /** Place performance critical functions into a faster memory (e.g RAM) */
+#ifdef ESP32P4_HW
 #define LV_ATTRIBUTE_FAST_MEM IRAM_ATTR
+#else
+#define LV_ATTRIBUTE_FAST_MEM
+#endif
 
 /** Export integer constant to binding. This macro is used with constants in the form of LV_<CONST> that
  *  should also appear on LVGL binding API such as MicroPython. */

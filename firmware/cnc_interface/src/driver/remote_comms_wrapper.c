@@ -4,8 +4,6 @@
 
 #if defined(ESP32_HW) && !defined(ESP32P4_HW)
 
-err
-
 #include <assert.h>
 #include <esp_event.h>
 #include <esp_netif.h>
@@ -22,7 +20,11 @@ err
 static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Forward declarations of static callback functions
+#if defined(ESP_IDF_LEGACY)
 static void on_data_sent(const uint8_t *mac_addr, esp_now_send_status_t status);
+#else
+static void on_data_sent(const wifi_tx_info_t *, esp_now_send_status_t status);
+#endif
 static void on_data_recv(const esp_now_recv_info_t *esp_now_info,
                          const uint8_t *data, int data_len);
 
@@ -252,12 +254,23 @@ void remote_wrapper_deinit() {
 }
 
 // Static callback function for data sent
+
+#if defined(ESP_IDF_LEGACY)
 static void on_data_sent(const uint8_t *mac_addr,
                          esp_now_send_status_t status) {
   if (g_send_cb) {
     g_send_cb(mac_addr, status, g_user_data);
   }
 }
+#else
+static void on_data_sent(const wifi_tx_info_t *info,
+                         esp_now_send_status_t status) {
+  if (g_send_cb) {
+    //g_send_cb(mac_addr, status, g_user_data);
+    g_send_cb(info ? info->des_addr : NULL, status, g_user_data);
+  }
+}
+#endif
 
 // Static callback function for data received
 static void on_data_recv(const esp_now_recv_info_t *esp_now_info,

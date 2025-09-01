@@ -1,5 +1,209 @@
 #ifdef WT32_SC01_PLUS
 
+static const char *TAG = "WT32_SC01_PLUS";
+
+#if defined(WT32_SC01_PLUS) && defined(ESP32_LVGL_ESP_DISP)
+
+// ESP32_Display_Panel configuration to enable only necessary drivers
+#define ESP_PANEL_DRIVERS_BUS_USE_I80 (1)
+#define ESP_PANEL_DRIVERS_BUS_USE_I2C (1)
+#define ESP_PANEL_DRIVERS_LCD_USE_ST7796 (1)
+#define ESP_PANEL_DRIVERS_TOUCH_USE_FT5x06 (1)
+
+#include <Arduino.h>
+#include <lvgl.h>
+
+#include "esp_idf_version.h"
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 4, 0)
+#error "This driver requires ESP-IDF v4.4 or later for I80 bus support. Please update your PlatformIO platform version."
+#endif
+
+// Required IDF headers for I80 bus and panel creation
+#include "driver/i2c.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_io_i80.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_panel_ops.h"
+#include "drivers/lcd/port/esp_lcd_st7796.h"
+
+#include "esp_display_panel.hpp"
+#include "esp_heap_caps.h"
+#include "debug.h"
+
+// Hardware configuration from platformio.ini
+// Display: ST7796
+// Touch: FT6336 (FT5x06 family)
+// Resolution: 480x320 (after rotation)
+// Bus: 8-bit parallel (I80)
+
+
+#if LV_USE_LOG != 0
+/* Serial debugging */
+void lvgl_log(const char *buf) {
+  Serial.printf(buf);
+  Serial.flush();
+}
+#endif
+
+// LVGL buffer (allocated in PSRAM)
+#define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
+#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 5 * BYTES_PER_PIXEL)
+static uint8_t *buf1 = NULL;
+
+// Global driver objects
+static esp_lcd_panel_handle_t panel_handle = NULL;
+static std::shared_ptr<esp_panel::drivers::Touch> touch = nullptr;
+
+// LVGL callbacks
+static void display_flush(lv_display_t *disp, const lv_area_t *area,
+                          uint8_t *px_map) {
+  // The underlying esp-idf driver uses exclusive end coordinates
+  esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
+  lv_disp_flush_ready(disp);
+}
+
+static void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
+  esp_panel::drivers::TouchPoint point;
+  // Read one point with 0 timeout
+  if (touch->readPoints(&point, 1, 0) > 0) {
+    data->state = LV_INDEV_STATE_PR;
+    data->point.x = point.x;
+    data->point.y = point.y;
+#if DEBUG_TOUCH != 0
+    // This can be spammy
+    // Serial.printf("Touch: x=%d, y=%d\n", point.x, point.y);
+#endif
+  } else {
+    data->state = LV_INDEV_STATE_REL;
+  }
+}
+
+void display_setup(lv_display_t *disp, lv_indev_t *indev) {
+  LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with ESP_Display_Panel");
+
+  // Allocate LVGL draw buffer from PSRAM
+  buf1 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf1) {
+    LOGW(TAG,
+         "LVGL draw buffer allocation failed in PSRAM, trying internal RAM");
+    // Fallback to internal RAM
+    buf1 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  assert(buf1);
+
+  // 1. Initialize Backlight
+  esp_panel::drivers::BacklightPWM_LEDC::Config backlight_cfg = {
+      .ledc_channel = esp_panel::drivers::BacklightPWM_LEDC::LEDC_ChannelPartialConfig{
+          .io_num = TFT_BCKL,
+          .on_level = 1,
+      },
+  };
+  auto backlight = esp_panel::drivers::BacklightFactory::create(backlight_cfg);
+  backlight->begin();
+  backlight->on();
+  backlight->setBrightness(100);
+
+  // 2. Initialize LCD Panel
+  // The C++ wrapper for I80 Bus was removed from the library. We now use the esp-idf functions directly.
+  esp_lcd_i80_bus_handle_t i80_bus = NULL;
+  esp_lcd_i80_bus_config_t bus_config = {
+      .dc_gpio_num = TFT_RS,
+      .wr_gpio_num = TFT_WR,
+      .clk_src = LCD_CLK_SRC_DEFAULT,
+      .data_gpio_nums = {TFT_D0, TFT_D1, TFT_D2, TFT_D3, TFT_D4, TFT_D5,
+                         TFT_D6, TFT_D7},
+      .bus_width = 8,
+      .max_transfer_bytes = DRAW_BUF_SIZE,
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_config, &i80_bus));
+
+  esp_lcd_panel_io_handle_t io_handle = NULL;
+  esp_lcd_panel_io_i80_config_t io_config = {
+      .cs_gpio_num = TFT_CS,
+      .pclk_hz = 15 * 1000 * 1000, // 15MHz
+      .trans_queue_depth = 10,
+      .on_color_trans_done = NULL,
+      .user_ctx = NULL,
+      .lcd_cmd_bits = 8,
+      .lcd_param_bits = 8,
+      .dc_levels = {
+          .dc_idle_level = 0,
+          .dc_cmd_level = 0,
+          .dc_dummy_level = 0,
+          .dc_data_level = 1,
+      },
+      .flags = {
+          .swap_color_bytes = (LV_COLOR_16_SWAP != 0),
+      },
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &io_handle));
+
+  esp_lcd_panel_dev_config_t panel_config = {
+      .reset_gpio_num = TFT_RST,
+      .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+      .bits_per_pixel = 16,
+  };
+  ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(io_handle, &panel_config, &panel_handle));
+
+  esp_lcd_panel_reset(panel_handle);
+  esp_lcd_panel_init(panel_handle);
+  esp_lcd_panel_invert_color(panel_handle, true);
+  esp_lcd_panel_swap_xy(panel_handle, true);
+  esp_lcd_panel_mirror(panel_handle, false, false);
+  esp_lcd_panel_disp_on_off(panel_handle, true);
+
+  // 3. Initialize Touch Panel
+  esp_panel::drivers::BusI2C::Config i2c_bus_config = {
+      .host_id = (i2c_port_t)I2C_TOUCH_PORT,
+      .host = esp_panel::drivers::BusI2C::HostPartialConfig{
+          .sda_io_num = TOUCH_SDA,
+          .scl_io_num = TOUCH_SCL,
+          .sda_pullup_en = true,
+          .scl_pullup_en = true,
+          .clk_speed = I2C_TOUCH_FREQUENCY,
+      },
+      .control_panel = ESP_PANEL_TOUCH_I2C_CONTROL_PANEL_CONFIG(FT5x06),
+  };
+  esp_panel::drivers::BusFactory::Config touch_bus_cfg(i2c_bus_config);
+
+  esp_panel::drivers::Touch::Config touch_cfg;
+  touch_cfg.device = esp_panel::drivers::Touch::DevicePartialConfig{
+      // Native resolution of the touch panel
+      .x_max = 320,
+      .y_max = 480,
+      .rst_gpio_num = -1,
+      .int_gpio_num = 7,  // From old LGFX config
+  };
+
+  touch = esp_panel::drivers::TouchFactory::create("FT5x06", touch_bus_cfg,
+                                                   touch_cfg);
+  touch->init();
+  touch->begin();
+  touch->swapXY(true);  // Match LCD's swap_xy
+
+  // 4. Setup LVGL
+#if LV_USE_LOG != 0
+  lv_log_register_print_cb(
+      lvgl_log); /* register print function for debugging */
+#endif
+
+  // For I80 panels, LVGL needs to know when the flush is done.
+  // The `drawBitmap` is synchronous for I80, so we can call
+  // `lv_disp_flush_ready` right away.
+  lv_display_set_flush_cb(disp, display_flush);
+  lv_display_set_buffers(disp, buf1, NULL, DRAW_BUF_SIZE,
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+  lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(indev, touch_indev_read);
+
+  LOGI(TAG, "DONE.");
+}
+
+#else
+
 // Already defined in ini.
 // #define LGFX_USE_V1
 
@@ -18,8 +222,10 @@ class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
     {
       auto cfg = _bus_instance.config();
 
-      cfg.freq_write = 40000000;
-      cfg.freq_read = 16000000;
+      //cfg.freq_write = 40000000;
+      //cfg.freq_read = 16000000;
+      cfg.freq_write = 16000000;
+      cfg.freq_read = 6250000;
       cfg.pin_wr = 47;  // pin number connecting WR
       cfg.pin_rd = -1;  // pin number connecting RD
       cfg.pin_rs = 0;   // Pin number connecting RS(D/C)
@@ -131,7 +337,7 @@ void lvgl_log(const char *buf) {
 
 /* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
-static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 5 * BYTES_PER_PIXEL];
+static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL];
 
 /* Display flushing */
 void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -145,6 +351,8 @@ void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
 }
 
 #include "debug.h"
+
+#define DEBUG_TOUCH 1
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   uint16_t touchX, touchY;
@@ -166,14 +374,20 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 }
 
 void display_setup(lv_display_t *disp, lv_indev_t *indev) {
+  LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with LGFX");
+
   tft.begin();
   tft.setRotation(1);
   tft.setBrightness(255);
+
+  vTaskDelay(pdMS_TO_TICKS(1));
 
 #if LV_USE_LOG != 0
   lv_log_register_print_cb(
       lvgl_log); /* register print function for debugging */
 #endif
+
+  LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with LGFX");
 
   /* Set display buffer for display. */
   lv_display_set_buffers(disp, buf1, NULL, sizeof(buf1),
@@ -183,6 +397,10 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   /*Initialize the input device driver*/
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touch_indev_read);
+
+  LOGI(TAG, "DONE: DISPLAY SETUP WT32-SC01-PLUS with LGFX");
 }
+
+#endif
 
 #endif

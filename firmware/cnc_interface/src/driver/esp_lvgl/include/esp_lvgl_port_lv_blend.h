@@ -16,6 +16,8 @@ extern "C" {
  *      INCLUDES
  *********************/
 #include "lvgl.h"
+#include "draw/sw/lv_draw_sw.h"
+#include "draw/sw/blend/lv_draw_sw_blend_private.h"
 
 //
 // The content of this file is included by C sources and assembly sources.
@@ -86,7 +88,7 @@ typedef struct {
 extern int lv_color_blend_to_argb8888_esp(asm_dsc_t *asm_dsc);
 
 static inline lv_result_t _lv_color_blend_to_argb8888_esp(
-    _lv_draw_sw_blend_fill_dsc_t *dsc) {
+    lv_draw_sw_blend_fill_dsc_t *dsc) {
   asm_dsc_t asm_dsc = {
       .dst_buf = dsc->dest_buf,
       .dst_w = dsc->dest_w,
@@ -101,7 +103,7 @@ static inline lv_result_t _lv_color_blend_to_argb8888_esp(
 extern int lv_color_blend_to_rgb565_esp(asm_dsc_t *asm_dsc);
 
 static inline lv_result_t _lv_color_blend_to_rgb565_esp(
-    _lv_draw_sw_blend_fill_dsc_t *dsc) {
+    lv_draw_sw_blend_fill_dsc_t *dsc) {
   asm_dsc_t asm_dsc = {
       .dst_buf = dsc->dest_buf,
       .dst_w = dsc->dest_w,
@@ -116,7 +118,7 @@ static inline lv_result_t _lv_color_blend_to_rgb565_esp(
 extern int lv_color_blend_to_rgb888_esp(asm_dsc_t *asm_dsc);
 
 static inline lv_result_t _lv_color_blend_to_rgb888_esp(
-    _lv_draw_sw_blend_fill_dsc_t *dsc, uint32_t dest_px_size) {
+    lv_draw_sw_blend_fill_dsc_t *dsc, uint32_t dest_px_size) {
   if (dest_px_size != 3) {
     return LV_RESULT_INVALID;
   }
@@ -134,7 +136,7 @@ static inline lv_result_t _lv_color_blend_to_rgb888_esp(
 extern int lv_rgb565_blend_normal_to_rgb565_esp(asm_dsc_t *asm_dsc);
 
 static inline lv_result_t _lv_rgb565_blend_normal_to_rgb565_esp(
-    _lv_draw_sw_blend_image_dsc_t *dsc) {
+    lv_draw_sw_blend_image_dsc_t *dsc) {
   asm_dsc_t asm_dsc = {.dst_buf = dsc->dest_buf,
                        .dst_w = dsc->dest_w,
                        .dst_h = dsc->dest_h,
@@ -148,7 +150,7 @@ static inline lv_result_t _lv_rgb565_blend_normal_to_rgb565_esp(
 extern int lv_rgb888_blend_normal_to_rgb888_esp(asm_dsc_t *asm_dsc);
 
 static inline lv_result_t _lv_rgb888_blend_normal_to_rgb888_esp(
-    _lv_draw_sw_blend_image_dsc_t *dsc, uint32_t dest_px_size,
+    lv_draw_sw_blend_image_dsc_t *dsc, uint32_t dest_px_size,
     uint32_t src_px_size) {
   if (!(dest_px_size == 3 && src_px_size == 3)) {
     return LV_RESULT_INVALID;

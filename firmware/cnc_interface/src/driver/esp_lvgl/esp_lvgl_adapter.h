@@ -1,6 +1,9 @@
 #ifndef ESP_LVGL_ADAPTER_H
 #define ESP_LVGL_ADAPTER_H
 
+#ifdef ESP32_LVGL_ESP_DISP
+
+#include <esp_display_panel.hpp>
 #include "driver/esp_lvgl/include/esp_lvgl_port.h"
 
 #ifdef __cplusplus
@@ -42,3 +45,5 @@ esp_err_t esp_lvgl_adapter_init_touch(lv_indev_t *indev,
 #endif
 
 #endif  // ESP_LVGL_ADAPTER_H
+
+#endif

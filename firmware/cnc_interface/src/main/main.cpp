@@ -16,6 +16,8 @@
 
 // SET_LOOP_TASK_STACK_SIZE(1024 * 48);
 
+#include "esp_freertos_hooks.h" // For xTaskCreateStaticWithCaps
+
 static const char *TAG = "ESP32_CNC_HMI";
 
 #include "driver/encoder.hpp"
@@ -235,11 +237,17 @@ void lvgl_task(void *pv_params) {
   LOGI(TAG, "LV_INIT");
   lv_init();
 
+  LOGI(TAG, "LV_INIT DISPLAY");
+
   display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
   indev = lv_indev_create();
   indev_encoder = lv_indev_create();
 
+  LOGI(TAG, "Display setup...");
+
   display_setup(display1, indev);
+
+  LOGI(TAG, "Display setup... DONE");
 
   lv_indev_set_type(indev_encoder, LV_INDEV_TYPE_ENCODER);
   lv_indev_set_read_cb(indev_encoder, encoder_indev_read);
@@ -262,7 +270,6 @@ void lvgl_task(void *pv_params) {
     // }
     vTaskDelay(sleep_time / portTICK_PERIOD_MS);
 
-    auto time_end = millis();
     if ((ctr++ % 500) == 0) {
       LOGI(TAG, "LVGL task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
@@ -272,6 +279,8 @@ void lvgl_task(void *pv_params) {
     // Run from main UI thread due to data races/crashes if directly called from
     // machine_interface_t callbacks.
     interface_tick(&interface);
+
+    LOGI(TAG, ">>> tick...");
 
     // interface_update_machine_state(&interface, &machine.base);
 
@@ -292,7 +301,8 @@ void lvgl_task(void *pv_params) {
       }
     }
 
-    // lv_tick_inc(time_end - time_start);
+    auto time_end = millis();
+    lv_tick_inc(time_end - time_start);
   }
 }
 
@@ -311,9 +321,43 @@ TaskHandle_t machine_dwc_task_handle = NULL;
 TaskHandle_t machine_send_task_handle = NULL;
 QueueHandle_t machine_send_queue = NULL;
 
+void ram_usage() {
+    // --- Internal SRAM ---
+    size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t internal_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    Serial.printf("Internal SRAM:\n");
+    Serial.printf("  Total: %u bytes\n", internal_total);
+    Serial.printf("  Free: %u bytes\n", internal_free);
+    Serial.printf("  Largest Free Block: %u bytes\n", internal_largest_free);
+
+    // --- PSRAM ---
+    // Check if PSRAM is enabled in the config
+#if CONFIG_SPIRAM
+    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    if (psram_total > 0) {
+        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t psram_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        Serial.printf("PSRAM (SPIRAM):\n");
+        Serial.printf("  Total: %u bytes\n", psram_total);
+        Serial.printf("  Free: %u bytes\n", psram_free);
+        Serial.printf("  Largest Free Block: %u bytes\n", psram_largest_free);
+    } else {
+        Serial.println("PSRAM: Not available or size is 0.");
+    }
+#else
+    Serial.println("PSRAM: Not enabled in menuconfig/sdkconfig.");
+#endif
+    Serial.println("-------------------");
+    Serial.flush();
+
+}
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("TEST, TEST, TEST");
+  delay(2000);
+
+  ram_usage();
 
   mcu_setup();
   mcu_startup();
@@ -324,22 +368,47 @@ void setup() {
   bool abort = false;
 
   LOGI(TAG, "Creating LVGL Task..\n");
+  /*
+  #ifdef ESP32P4_HW
   BaseType_t create_res = xTaskCreatePinnedToCore(
+  #else
+  BaseType_t create_res = xTaskCreateWithCaps(
+  #endif
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 55,    // Stack size (adjust as needed, ESP32 it's bytes)
+      1024 * 68,    // Stack size (adjust as needed, ESP32 it's bytes)
       NULL,         // Task input parameter (not used here)
-      5,  // Task priority (adjust as needed) - higher than machine task
+      tskIDLE_PRIORITY +
+          2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
                           // task)
+  #ifdef ESP32P4_HW
       0);
+  #else
+      MALLOC_CAP_SPIRAM);
+  #endif
+
   if (create_res == pdPASS) {
     LOGI(TAG, "DONE: Created LVGL Task..\n");
   } else {
     LOGE(TAG, "FAIL: Could not create LVGL Task: error %d", create_res);
     abort = true;
   }
+  */
+  BaseType_t create_res = xTaskCreatePinnedToCore(
+      lvgl_task,    // Function that implements the task
+      "lvgl_task",  // Task name (for debugging)
+      1024 * 46,    // Stack size (adjust as needed, ESP32 it's bytes)
+      NULL,         // Task input parameter (not used here)
+      tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
+      &lvgl_task_handle,  // Task handle (optional, can be used to control the
+                          // task)
+      0);
 
+  ram_usage();
+  
+vTaskDelay(5000 / portTICK_PERIOD_MS);
+/*
 #if !defined(configUSE_TICK_HOOK) && !defined(CONFIG_USE_TICK_HOOK)
   // Create tick task if USE_TICK_HOOK is not set.
   xTaskCreatePinnedToCore(
@@ -355,6 +424,10 @@ void setup() {
 #elif defined(ESP32_HW)
   esp_register_freertos_tick_hook_for_cpu(&lv_tick_task_esp, 0);
 #endif
+
+  LOGI(TAG, "DONE: Tick Task...\n");
+  ram_usage();
+*/
 
   LOGI(TAG, "Creating Machine Interfaces... ");
   if (!abort && machine_init()) {
@@ -394,6 +467,8 @@ void setup() {
     abort = true;
   }
 
+  ram_usage();
+
   LOGI(TAG, "Creating Remote Machine Task... ");
   if (!abort && machine_task_run("MachineRemote", &machine_remote.base,
                                  &machine_remote_task, TASK_MACHINE_CORE)) {
@@ -402,6 +477,8 @@ void setup() {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
     abort = true;
   }
+
+  ram_usage();
 
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
@@ -417,6 +494,8 @@ void setup() {
     LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
     abort = true;
   }
+
+  ram_usage();
 
   LOGI(TAG, "Creating Remote Machine State Processing Task... ");
   if (!abort && machine_response_proc_task_run(

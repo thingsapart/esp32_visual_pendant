@@ -383,7 +383,7 @@ static void _multi_machine_probe(machine_interface_t *self,
   }
 }
 
-static char *_multi_machine_debug_print(machine_interface_t *self) {
+static char *IRAM_ATTR _multi_machine_debug_print(machine_interface_t *self) {
   return NULL;  // Not implemented for multi-machine.
 }
 

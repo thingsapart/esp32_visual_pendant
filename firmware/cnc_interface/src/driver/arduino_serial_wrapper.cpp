@@ -99,6 +99,9 @@ typedef struct {
 static std::map<serial_handle_t, serial_port_data_t *> g_serial_ports;
 // Map the UART number back to the handle for easy lookup
 static std::map<int, serial_handle_t> g_uart_num_to_handle;
+// ISR-safe lookup table for port data based on UART number.
+#define MAX_HW_UARTS 5 // ESP32-S3 has 3, but this provides a safe upper bound
+static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
 
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t *port_data);
@@ -184,14 +187,17 @@ static void onReceiveGeneric(void *arg) {  // Removed IRAM_ATTR
   // --- Let's process directly here for simplicity, BUT BEWARE OF ISR
   // CONSTRAINTS --- This is generally okay if callbacks are short and
   // non-blocking. If callbacks are complex, use a task/queue mechanism.
-  process_received_data(port_data);
+  //
+#ifdef PROCESS_HW_SERIAL_IN_ISR
+   process_received_data(port_data);
+#endif
 }
 
 #define ONRECV(N)                                     \
-  void onReceive##N(void) {                           \
-    serial_handle_t handle = get_serial_handle(N);    \
-    serial_port_data_t *arg = find_port_data(handle); \
-    onReceiveGeneric(arg);                            \
+   void onReceive##N(void) {                          \
+     if (N < MAX_HW_UARTS) {                          \
+       onReceiveGeneric(g_isr_port_data[N]);          \
+     }                                                \
   }
 
 void onReceiveM1(void) {
@@ -371,6 +377,11 @@ void serial_end(serial_handle_t handle) {
   g_serial_ports.erase(handle);
   g_uart_num_to_handle.erase(port_data->uart_num);
 
+  // Clear from ISR-safe table
+  if (port_data->uart_num >= 0 && port_data->uart_num < MAX_HW_UARTS) {
+      g_isr_port_data[port_data->uart_num] = NULL;
+  }
+
   // Delete the stream object *if* we allocated it
   if (port_data->owns_stream && port_data->stream) {
     LOGI(TAG, "Deleting owned stream object for UART %d", port_data->uart_num);
@@ -508,6 +519,11 @@ void add_standard_serial() {
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
+  // Populate the ISR-safe lookup table if it's a valid hardware UART
+  if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
+      g_isr_port_data[uart_num] = port_data;
+  }
+
   // Register the onReceive callback
   // HardwareSerial* hw_serial = static_cast<HardwareSerial*>(serial_stream);
   // hw_serial->onReceive(onReceiveM1, port_data);
@@ -575,6 +591,7 @@ void serial_process_input(serial_handle_t handle) {
     return;
   }
 
+#ifdef PROCESS_HW_SERIAL_IN_ISR
   // For HardwareSerial on ESP32, data is processed in onReceive.
   // Only process manually if it's not a HW serial port using onReceive.
   if (port_data->is_hw_serial) {
@@ -582,6 +599,7 @@ void serial_process_input(serial_handle_t handle) {
     // and try processing again, but generally not needed if onReceive works.
     return;
   }
+#endif
 
   // Manually read from stream into ring buffer for non-HW/non-onReceive ports
   if (port_data->stream) {

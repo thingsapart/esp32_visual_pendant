@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#if defined(ESP32_HW) && !defined(ESP32P4_HW)
+#if defined(ESP32_HW) && defined(ESP32S3_HW) && !defined(ESP32P4_HW)
 
 // This is LVGL RGB888 simple fill for ESP32S3 processor
 
