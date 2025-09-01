@@ -38,11 +38,11 @@ static void _multi_machine_set_wcs(machine_interface_t *self, int wcs);
 static void _multi_machine_set_wcs_zero(machine_interface_t *self, int wcs,
                                         const char *axes);
 static void _multi_machine_next_wcs(machine_interface_t *self);
-static char *_multi_machine_debug_print(
+static char * IRAM_ATTR _multi_machine_debug_print(
     machine_interface_t *self);  // Not yet implemented.
 static void _multi_machine_modal_cancel(machine_interface_t *self,
                                         int modal_id);
-static void _multi_machine_modal_ok(machine_interface_t *self, int modal_id);
+static void _multi_machine_modal_ok(machine_interface_t* self, int modal_id);
 static void _multi_machine_modal_choice(machine_interface_t *self, int choice,
                                         int modal_id);
 static void _multi_machine_modal_int(machine_interface_t *self, int val,
@@ -53,6 +53,10 @@ static void _multi_machine_modal_str(machine_interface_t *self, const char *val,
                                      int modal_id);
 static void _multi_machine_probe(machine_interface_t *self,
                                  const char *probe_gcode);
+static void _multi_machine_set_connected(machine_interface_t *self, bool connected);
+static void _multi_machine_process_machine_state_response(
+    machine_interface_t *self, void *data, size_t len);
+
 static void _multi_machine__continuous_stop(machine_interface_t *self);
 static void _multi_machine__continuous_move(machine_interface_t *self,
                                             const char axis, float feed,
@@ -383,7 +387,31 @@ static void _multi_machine_probe(machine_interface_t *self,
   }
 }
 
-static char *IRAM_ATTR _multi_machine_debug_print(machine_interface_t *self) {
+static void _multi_machine_set_connected(machine_interface_t *self, bool connected) {
+  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
+  for (size_t i = 0; i < multi_self->num_machines; i++) {
+    // We delegate the call to all children, letting them manage their own state.
+    if (multi_self->machines[i] && multi_self->machines[i]->set_connected) {
+      multi_self->machines[i]->set_connected(multi_self->machines[i], connected);
+    }
+  }
+}
+
+static void _multi_machine_process_machine_state_response(
+    machine_interface_t *self, void *data, size_t len) {
+  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
+  for (size_t i = 0; i < multi_self->num_machines; i++) {
+    // Delegate to all children. The child that sent the data will process it.
+    if (multi_self->machines[i] && multi_self->machines[i]->is_connected(multi_self->machines[i])) {
+      if (multi_self->machines[i]->process_machine_state_response) {
+        multi_self->machines[i]->process_machine_state_response(
+            multi_self->machines[i], data, len);
+      }
+    }
+  }
+}
+
+static char * IRAM_ATTR _multi_machine_debug_print(machine_interface_t *self) {
   return NULL;  // Not implemented for multi-machine.
 }
 
@@ -437,6 +465,10 @@ multi_machine_interface_t *multi_machine_interface_init(
   self->base.modal_float = _multi_machine_modal_float;
   self->base.modal_str = _multi_machine_modal_str;
   self->base.probe = _multi_machine_probe;
+
+  self->base.set_connected = _multi_machine_set_connected;
+  self->base.process_machine_state_response =
+      _multi_machine_process_machine_state_response;
 
   self->base.debug_print = _multi_machine_debug_print;
 
@@ -709,6 +741,7 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
     return false;  // Too many machines
   }
   self->machines[self->num_machines++] = machine;
+  machine->procrate_ms = self->base.procrate_ms;
 
   machine_interface_add_state_change_cb(machine, self, _mach_cb_state);
   machine_interface_add_pos_changed_cb(machine, self, _mach_cb_pos);

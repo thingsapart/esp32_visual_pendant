@@ -302,7 +302,7 @@ static void _machine_interface_remote_process_state(machine_interface_t *self,
 machine_interface_remote_t *machine_interface_remote_init(
     machine_interface_remote_t *self, const uint8_t *hub_mac) {
   // Initialize base class (important!)
-  machine_interface_init(&self->base, 0);  // No internal processing loop
+  machine_interface_init(&self->base, 100);  // No internal processing loop
 
   // Copy the hub's MAC address
   memcpy(self->hub_mac_address, hub_mac, 6);

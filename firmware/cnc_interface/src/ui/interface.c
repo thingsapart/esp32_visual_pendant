@@ -165,6 +165,8 @@ void interface_tick(interface_t* interface) {
 
   machine_interface_t* machine = interface->machine;
 
+  if (!machine) { return; }
+
   if (flags_to_process & UI_DIRTY_STATE) {
     data_binding_notify_state_changed(
         "machine_mode",

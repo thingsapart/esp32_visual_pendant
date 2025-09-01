@@ -527,6 +527,11 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
   self->poll_state = machine_interface_next_poll_state(self);
 }
 
+#ifdef MACHINE_INTERFACE_CALC_TICKS
+#include "Arduino.h"
+static unsigned long last_tick = 0;
+#endif
+
 void machine_interface_setup_loop(machine_interface_t *self) {
   LOGI(TAG, "Machine event loop starting...");
   size_t i = 0;
@@ -535,12 +540,20 @@ void machine_interface_setup_loop(machine_interface_t *self) {
     if (i++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
       // machine_interface_task_loop_iter(self);
     }
-    if (i % 500 == 0) {
+    if (i % 10 == 0) {
+#ifdef MACHINE_INTERFACE_CALC_TICKS
+      unsigned long now = millis();
+      LOGI(TAG, "Machine task stack size high: %d (%d/%d ms)\n",
+           uxTaskGetStackHighWaterMark(NULL), now - last_tick, self->procrate_ms);
+      last_tick = now;
+#else
       LOGI(TAG, "Machine task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(NULL));
+#endif
     }
 
-    vTaskDelay(pdMS_TO_TICKS(self->procrate_ms));
+    //vTaskDelay(pdMS_TO_TICKS(self->procrate_ms));
+    vTaskDelay(self->procrate_ms / portTICK_PERIOD_MS);
   }
 }
 
