@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CNC Probe SVG Generator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --text-color: #d4d4d4;
+            --panel-bg: #2a2a2a;
+            --border-color: #444;
+            --accent-color: #00aaff;
+            --input-bg: #3c3c3c;
+            --success-color: #28a745;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            gap: 20px;
+            height: calc(100vh - 40px);
+        }
+        .preview-panel {
+            flex: 3;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .controls-panel {
+            flex: 2;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 100%;
+        }
+        .svg-container {
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-grow: 1;
+        }
+        .svg-container svg {
+            max-width: 100%;
+            max-height: 100%;
+        }
+        .preview-box {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        h1, h2 {
+            margin: 0 0 15px 0;
+            color: #fff;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 5px;
+        }
+        h2 {
+            font-size: 1.2em;
+        }
+        .controls-panel h1 {
+            margin-top: 0;
+        }
+        .download-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            border: 1px solid var(--accent-color);
+            background-color: transparent;
+            color: var(--accent-color);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+            position: relative;
+        }
+        button:hover {
+            background-color: var(--accent-color);
+            color: var(--bg-color);
+        }
+        button:disabled {
+            border-color: #555;
+            color: #555;
+            cursor: not-allowed;
+        }
+        button.success {
+             border-color: var(--success-color);
+             color: var(--success-color);
+        }
+        fieldset {
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            margin-bottom: 20px;
+            padding: 15px;
+        }
+        legend {
+            color: var(--accent-color);
+            font-weight: bold;
+            padding: 0 10px;
+        }
+        .control-group {
+            display: grid;
+            grid-template-columns: 150px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+         .control-group-colors {
+            display: grid;
+            grid-template-columns: 150px 80px 80px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        label {
+            font-size: 0.9em;
+        }
+        input[type="number"], select {
+            width: 80px;
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 5px;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        input[type="color"] {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            width: 60px;
+            height: 30px;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        input[type="color"]::-webkit-color-swatch {
+            border-radius: 3px;
+            border: none;
+        }
+        input[type="color"]::-moz-color-swatch {
+            border-radius: 3px;
+            border: none;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .settings-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .scale-factor-row {
+            display: grid;
+            grid-template-columns: 150px 1fr 1fr 40px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .scale-factor-row label {
+             white-space: nowrap;
+        }
+        .scale-factor-row button {
+            padding: 4px 8px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="preview-panel">
+        <div class="preview-box">
+            <h2>Outer Probing</h2>
+            <div id="outer-svg-container" class="svg-container"></div>
+            <div class="download-buttons">
+                <button id="download-outer-svg">Download SVG</button>
+                <button id="download-outer-png">Download PNG</button>
+            </div>
+        </div>
+        <div class="preview-box">
+            <h2>Inner Probing</h2>
+            <div id="inner-svg-container" class="svg-container"></div>
+            <div class="download-buttons">
+                <button id="download-inner-svg">Download SVG</button>
+                <button id="download-inner-png">Download PNG</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="controls-panel">
+        <h1>SVG Generator</h1>
+        <form id="controls-form">
+            <fieldset>
+                <legend>Layout & Sizing</legend>
+                <div class="control-group">
+                    <label for="tileWidth">Tile Width</label>
+                    <input type="number" id="tileWidth" value="100" min="20">
+                </div>
+                <div class="control-group">
+                    <label for="tileHeight">Tile Height</label>
+                    <input type="number" id="tileHeight" value="100" min="20">
+                </div>
+                <div class="control-group">
+                    <label for="gap">Gap</label>
+                    <input type="number" id="gap" value="10" min="0">
+                </div>
+                <div class="control-group">
+                    <label for="insetPercent">Inset (%)</label>
+                    <input type="number" id="insetPercent" value="30" min="10" max="50">
+                </div>
+                 <div class="control-group">
+                    <label for="tileRx">Tile Corner Radius</label>
+                    <input type="number" id="tileRx" value="8" min="0">
+                </div>
+                 <div class="control-group">
+                    <label for="tileStrokeWidth">Tile Outline Width</label>
+                    <input type="number" id="tileStrokeWidth" value="1" min="0" step="0.5">
+                </div>
+                 <div class="control-group">
+                    <label for="hatchWidth">Hatch Width</label>
+                    <input type="number" id="hatchWidth" value="12" min="1">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Middle Tile</legend>
+                <div class="checkbox-group">
+                    <label for="middleTileMode">Probe Boss / Pocket</label>
+                    <input type="checkbox" id="middleTileMode">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Typography</legend>
+                 <div class="control-group">
+                    <label for="fontSize">Font Size</label>
+                    <input type="number" id="fontSize" value="13" min="1">
+                </div>
+                 <div class="control-group">
+                    <label for="fontColor">Font Color</label>
+                    <input type="color" id="fontColor" value="#f8f9fa">
+                </div>
+                 <div class="control-group">
+                    <label for="fontShadowColor">Shadow Color</label>
+                    <input type="color" id="fontShadowColor" value="#000000">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Color Scheme</legend>
+                <div class="control-group-colors">
+                    <label>Background</label>
+                    <input type="color" id="bgGradient1" value="#e9e9e9">
+                    <input type="color" id="bgGradient2" value="#d5d5d5">
+                </div>
+                <div class="control-group-colors">
+                    <label>Workpiece</label>
+                    <input type="color" id="workpieceGradient1" value="#6c757d">
+                    <input type="color" id="workpieceGradient2" value="#495057">
+                </div>
+                 <div class="control-group-colors">
+                    <label>Probed Surface</label>
+                    <input type="color" id="probedSurfaceColor" value="#00aaff">
+                </div>
+                 <div class="control-group-colors">
+                    <label>Hatch Pattern</label>
+                    <input type="color" id="hatchColor" value="#888888">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Probe Path</legend>
+                <div class="control-group-colors">
+                    <label>Arrow Gradient</label>
+                    <input type="color" id="arrowGradient1" value="#ff4d4d">
+                    <input type="color" id="arrowGradient2" value="#c82333">
+                </div>
+                 <div class="control-group">
+                    <label for="arrowWidth">Arrow Thickness</label>
+                    <input type="number" id="arrowWidth" value="2.5" min="0.5" step="0.1">
+                </div>
+                 <div class="control-group-colors">
+                    <label>Probe Point</label>
+                    <input type="color" id="probePointColor" value="#ff4d4d">
+                    <input type="color" id="probePointGlow" value="#e00000">
+                </div>
+                 <div class="control-group">
+                    <label for="probePointRadius">Point Radius</label>
+                    <input type="number" id="probePointRadius" value="3.5" min="0.5" step="0.1">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>LVGL C-File Export</legend>
+                 <div class="control-group">
+                     <label for="lvglFormat">Color Format</label>
+                     <select id="lvglFormat">
+                         <option value="RGB888">RGB888 (24-bit)</option>
+                         <option value="RGB565" selected>RGB565 (16-bit)</option>
+                     </select>
+                 </div>
+                 <div>
+                    <label>Scaling Factors (largest TFT_WIDTH first)</label>
+                    <div id="scaling-factors-container" style="margin-top: 10px;">
+                        <!-- Scaling factor rows will be added here -->
+                    </div>
+                    <div class="settings-buttons">
+                        <button type="button" id="add-scale-factor">Add Scale Factor</button>
+                    </div>
+                 </div>
+                 <div class="settings-buttons">
+                     <button type="button" id="download-c-files">Download All C-Files</button>
+                 </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Settings</legend>
+                 <div class="settings-buttons">
+                     <button type="button" id="save-settings">Save Settings</button>
+                     <button type="button" id="load-settings">Load Settings</button>
+                     <input type="file" id="load-file" accept=".json" style="display: none;">
+                 </div>
+            </fieldset>
+        </form>
+    </div>
+
+<script>
+// --- CONFIGURATION AND STATE ---
+const config = {};
+const form = document.getElementById('controls-form');
+const outerSvgContainer = document.getElementById('outer-svg-container');
+const innerSvgContainer = document.getElementById('inner-svg-container');
+
+// --- SVG GENERATION LOGIC ---
+
+function getDefs(c) {
+    return `
+    <defs>
+        <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="${c.bgGradient1}" /><stop offset="100%" stop-color="${c.bgGradient2}" /></linearGradient>
+        <linearGradient id="workpieceGradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${c.workpieceGradient1}" /><stop offset="100%" stop-color="${c.workpieceGradient2}" /></linearGradient>
+        <linearGradient id="arrowGradient" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="${c.arrowGradient1}"/><stop offset="100%" stop-color="${c.arrowGradient2}"/></linearGradient>
+        <filter id="blueGlow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="${c.probedSurfaceColor}" /></filter>
+        <filter id="redGlow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="${c.probePointGlow}" /></filter>
+        <filter id="textShadow"><feDropShadow dx="1" dy="1" stdDeviation="1" flood-color="${c.fontShadowColor}" flood-opacity="0.5"/></filter>
+        <pattern id="hatch" patternUnits="userSpaceOnUse" width="8" height="8"><path d="M-2,2 l4,-4 M0,8 l8,-8 M6,10 l4,-4" stroke="${c.hatchColor}" stroke-width="1.5"/></pattern>
+        <marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="url(#arrowGradient)" /></marker>
+    </defs>`;
+}
+
+function getStyle(c) {
+    return `
+    <style>
+        .tile-bg { fill: url(#bgGradient); stroke: #444; stroke-width: ${c.tileStrokeWidth}; rx: ${c.tileRx}; }
+        .workpiece { fill: url(#workpieceGradient); }
+        .probed-surface { stroke: ${c.probedSurfaceColor}; stroke-width: 6; stroke-linecap: round; fill: none; filter: url(#blueGlow); }
+        .probe-arrow { stroke: url(#arrowGradient); stroke-width: ${c.arrowWidth}; }
+        .probe-arrow-poly { fill: ${c.arrowGradient1}; }
+        .probe-label { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: ${c.fontSize}px; font-weight: 600; fill: ${c.fontColor}; text-anchor: middle; dominant-baseline: middle; filter: url(#textShadow); }
+        .probe-endpoint { fill: ${c.probePointColor}; stroke: none; filter: url(#redGlow); }
+        .z-probe-target { stroke: none; fill: ${c.probedSurfaceColor}; filter: url(#blueGlow); }
+        .hatch-indicator { fill: url(#hatch); }
+    </style>`;
+}
+
+function getMiddleTile(c, type) {
+    const w = c.tileWidth;
+    const h = c.tileHeight;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    if (c.middleTileMode) { // Boss or Pocket
+        const radius = Math.min(w, h) * 0.25;
+        let arrows = '';
+        const arrowLength = 12;
+        const arrowWidth = 10;
+
+        for (let i = 0; i < 3; i++) {
+            const angle = (i * 120 - 90) * (Math.PI / 180);
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const perpX = -sin;
+            const perpY = cos;
+
+            let tipX, tipY, b1X, b1Y, b2X, b2Y;
+            if (type === 'outer') { // Arrows inward
+                const radiusEnd = radius + 4;
+                tipX = cx + radiusEnd * cos;
+                tipY = cy + radiusEnd * sin;
+                const baseCenterX = cx + (radiusEnd + arrowLength) * cos;
+                const baseCenterY = cy + (radiusEnd + arrowLength) * sin;
+                b1X = baseCenterX - (arrowWidth/2) * perpX;
+                b1Y = baseCenterY - (arrowWidth/2) * perpY;
+                b2X = baseCenterX + (arrowWidth/2) * perpX;
+                b2Y = baseCenterY + (arrowWidth/2) * perpY;
+            } else { // Arrows outward
+                const radiusEnd = radius - 4;
+                tipX = cx + radiusEnd * cos;
+                tipY = cy + radiusEnd * sin;
+                const baseCenterX = cx + (radiusEnd - arrowLength) * cos;
+                const baseCenterY = cy + (radiusEnd - arrowLength) * sin;
+                b1X = baseCenterX - (arrowWidth/2) * perpX;
+                b1Y = baseCenterY - (arrowWidth/2) * perpY;
+                b2X = baseCenterX + (arrowWidth/2) * perpX;
+                b2Y = baseCenterY + (arrowWidth/2) * perpY;
+            }
+            arrows += `<polygon class="probe-arrow-poly" points="${tipX},${tipY} ${b1X},${b1Y} ${b2X},${b2Y}" />`;
+        }
+        return `
+        <g transform="translate(${c.gap + w}, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <circle class="workpiece" cx="${cx}" cy="${cy}" r="${radius}"/>
+            <circle class="probed-surface" cx="${cx}" cy="${cy}" r="${radius}" stroke-width="4"/>
+            ${arrows}
+        </g>`;
+    } else { // Z-Surface
+        return `
+        <g transform="translate(${c.gap + w}, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <rect class="workpiece" x="0" y="0" width="${w}" height="${h}"/>
+            <circle class="z-probe-target" cx="${cx}" cy="${cy}" r="20" opacity="0.3"/><circle class="z-probe-target" cx="${cx}" cy="${cy}" r="10" opacity="0.6"/>
+            <text class="probe-label" x="${cx}" y="${h - c.fontSize * 1.2}">Z-</text>
+            <circle class="probe-endpoint" cx="${cx}" cy="${cy}" r="${c.probePointRadius}" />
+        </g>`;
+    }
+}
+
+function generateOuterSVG(c) {
+    const w = c.tileWidth;
+    const h = c.tileHeight;
+    const insetX = w * (c.insetPercent / 100);
+    const insetY = h * (c.insetPercent / 100);
+    const hw = c.hatchWidth;
+
+    const svg = `
+    <svg width="${3 * w + 2 * c.gap}" height="${3 * h + 2 * c.gap}" viewBox="0 0 ${3 * w + 2 * c.gap} ${3 * h + 2 * c.gap}" xmlns="http://www.w3.org/2000/svg">
+        ${getDefs(c)}
+        ${getStyle(c)}
+        <!-- ROW 1 -->
+        <g transform="translate(0, 0)">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="${insetY}" width="${w-insetX}" height="${h-insetY}" />
+            <rect class="hatch-indicator" x="${insetX}" y="${insetY}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${insetX}" y="${insetY}" width="${hw}" height="${h-insetY}" />
+            <line class="probed-surface" x1="${insetX}" y1="${insetY}" x2="${insetX}" y2="${h}" /><line class="probed-surface" x1="${insetX}" y1="${insetY}" x2="${w}" y2="${insetY}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w-insetX/2}" y="${insetY*0.5}">Y-</text><text class="probe-label" x="${insetX*0.5}" y="${h-insetY/2}">X+</text>
+            <circle class="probe-endpoint" cx="${insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${c.gap + w}, 0)">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="${insetY}" width="${w}" height="${h-insetY}" /><rect class="hatch-indicator" x="0" y="${insetY}" width="${w}" height="${hw}" />
+            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.75}" y="${insetY*0.5}">Y-</text><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${2*(c.gap + w)}, 0)">
+             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="${insetY}" width="${w-insetX}" height="${h-insetY}" />
+             <rect class="hatch-indicator" x="0" y="${insetY}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="${insetY}" width="${hw}" height="${h-insetY}" />
+             <line class="probed-surface" x1="0" y1="${insetY}" x2="${w-insetX}" y2="${insetY}" /><line class="probed-surface" x1="${w-insetX}" y1="${insetY}" x2="${w-insetX}" y2="${h}" />
+             <line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+             <text class="probe-label" x="${insetX/2}" y="${insetY*0.5}">Y-</text><text class="probe-label" x="${w-(insetX*0.5)}" y="${h-insetY/2}">X-</text>
+             <circle class="probe-endpoint" cx="${w-insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <!-- ROW 2 -->
+        <g transform="translate(0, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="0" width="${w-insetX}" height="${h}" /><rect class="hatch-indicator" x="${insetX}" y="0" width="${hw}" height="${h}" />
+            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${insetX*0.5}" y="${h*0.75}">X+</text><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+        </g>
+        ${getMiddleTile(c, 'outer')}
+        <g transform="translate(${2*(c.gap + w)}, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w-insetX}" height="${h}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="0" width="${hw}" height="${h}" />
+            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w-(insetX*0.5)}" y="${h*0.75}">X-</text><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+        </g>
+        <!-- ROW 3 -->
+        <g transform="translate(0, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="0" width="${w-insetX}" height="${h-insetY}" />
+            <rect class="hatch-indicator" x="${insetX}" y="${h-insetY-hw}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${insetX}" y="0" width="${hw}" height="${h-insetY}" />
+            <line class="probed-surface" x1="${insetX}" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h-insetY}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w-insetX/2}" y="${h-(insetY*0.5)}">Y+</text><text class="probe-label" x="${insetX*0.5}" y="${insetY/2}">X+</text>
+            <circle class="probe-endpoint" cx="${insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${c.gap + w}, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w}" height="${h-insetY}" /><rect class="hatch-indicator" x="0" y="${h-insetY-hw}" width="${w}" height="${hw}" />
+            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.75}" y="${h-(insetY*0.5)}">Y+</text><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${2*(c.gap + w)}, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w-insetX}" height="${h-insetY}" />
+            <rect class="hatch-indicator" x="0" y="${h-insetY-hw}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="0" width="${hw}" height="${h-insetY}" />
+            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w-insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h-insetY}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${insetX/2}" y="${h-(insetY*0.5)}">Y+</text><text class="probe-label" x="${w-(insetX*0.5)}" y="${insetY/2}">X-</text>
+            <circle class="probe-endpoint" cx="${w-insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+    </svg>`;
+    return svg;
+}
+
+function generateInnerSVG(c) {
+    const w = c.tileWidth;
+    const h = c.tileHeight;
+    const insetX = w * (c.insetPercent / 100);
+    const insetY = h * (c.insetPercent / 100);
+    const hw = c.hatchWidth;
+    const rx = c.tileRx;
+
+    const svg = `
+    <svg width="${3 * w + 2 * c.gap}" height="${3 * h + 2 * c.gap}" viewBox="0 0 ${3 * w + 2 * c.gap} ${3 * h + 2 * c.gap}" xmlns="http://www.w3.org/2000/svg">
+        ${getDefs(c)}
+        ${getStyle(c)}
+        <!-- ROW 1 -->
+        <g transform="translate(0, 0)">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M${w} ${insetY} H${insetX} V${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} V${rx} A${rx} ${rx} 0 0 1 ${rx} 0 H${w} Z" />
+            <path class="hatch-indicator" d="M${insetX-hw} ${insetY-hw} H${w} V${insetY} H${insetX} V${h} H${insetX-hw} Z" />
+            <line class="probed-surface" x1="${insetX}" y1="${h}" x2="${insetX}" y2="${insetY}" /><line class="probed-surface" x1="${w}" y1="${insetY}" x2="${insetX}" y2="${insetY}" />
+            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="${h}" x2="${(w+insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h+insetY)/2}" x2="${insetX+3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w+insetX)/2}" y="${(h+insetY)/2 + (h-insetY)/2.5}">Y+</text><text class="probe-label" x="${(w+insetX)/2 + (w-insetX)/2.5}" y="${(h+insetY)/2}">X-</text>
+            <circle class="probe-endpoint" cx="${insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${c.gap + w}, 0)">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M0 ${insetY} H${w} V${rx} A${rx} ${rx} 0 0 0 ${w-rx} 0 H${rx} A${rx} ${rx} 0 0 0 0 ${rx} Z" />
+            <rect class="hatch-indicator" x="0" y="${insetY-hw}" width="${w}" height="${hw}" />
+            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${h}" x2="${w/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.5}" y="${(h+insetY)/2}">Y+</text><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${2*(c.gap + w)}, 0)">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M0 ${insetY} H${w-insetX} V${h} H${w-rx} A${rx} ${rx} 0 0 0 ${w} ${h-rx} V${rx} A${rx} ${rx} 0 0 0 ${w-rx} 0 H0 Z" />
+            <path class="hatch-indicator" d="M${w-insetX+hw} ${insetY-hw} H0 V${insetY} H${w-insetX} V${h} H${w-insetX+hw} Z" />
+            <line class="probed-surface" x1="${w-insetX}" y1="${h}" x2="${w-insetX}" y2="${insetY}" /><line class="probed-surface" x1="0" y1="${insetY}" x2="${w-insetX}" y2="${insetY}" />
+            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="${h}" x2="${(w-insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h+insetY)/2}" x2="${w-insetX-3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w-insetX)/2}" y="${(h+insetY)/2 + (h-insetY)/2.5}">Y+</text><text class="probe-label" x="${(w-insetX)/2.5}" y="${(h+insetY)/2}">X+</text>
+            <circle class="probe-endpoint" cx="${w-insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+        </g>
+        <!-- ROW 2 -->
+        <g transform="translate(0, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M${insetX} 0 H${rx} A${rx} ${rx} 0 0 0 0 ${rx} V${h-rx} A${rx} ${rx} 0 0 0 ${rx} ${h} H${insetX} Z" />
+            <rect class="hatch-indicator" x="${insetX-hw}" y="0" width="${hw}" height="${h}" />
+            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><line class="probe-arrow" x1="${w}" y1="${h/2}" x2="${insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w+insetX)/2}" y="${h*0.5}">X-</text><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+        </g>
+        ${getMiddleTile(c, 'inner')}
+        <g transform="translate(${2*(c.gap + w)}, ${c.gap + h})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M${w-insetX} 0 H${w-rx} A${rx} ${rx} 0 0 1 ${w} ${rx} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${w-insetX} Z" />
+            <rect class="hatch-indicator" x="${w-insetX}" y="0" width="${hw}" height="${h}" />
+            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><line class="probe-arrow" x1="0" y1="${h/2}" x2="${w-insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w-insetX)/2}" y="${h*0.5}">X+</text><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+        </g>
+        <!-- ROW 3 -->
+        <g transform="translate(0, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M${insetX} ${h-insetY} H${w} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} V0 H${insetX} Z" />
+            <path class="hatch-indicator" d="M${insetX-hw} ${h-insetY+hw} H${w} V${h-insetY} H${insetX} V0 H${insetX-hw} Z" />
+            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="${w}" y1="${h-insetY}" x2="${insetX}" y2="${h-insetY}" />
+            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="0" x2="${(w+insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h-insetY)/2}" x2="${insetX+3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w+insetX)/2}" y="${(h-insetY)/2.5}">Y-</text><text class="probe-label" x="${(w+insetX)/2 + (w-insetX)/2.5}" y="${(h-insetY)/2}">X-</text>
+            <circle class="probe-endpoint" cx="${insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${c.gap + w}, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M0 ${h-insetY} H${w} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} Z" />
+            <rect class="hatch-indicator" x="0" y="${h-insetY}" width="${w}" height="${hw}" />
+            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probe-arrow" x1="${w/2}" y1="0" x2="${w/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.5}" y="${(h-insetY)/2.5}">Y-</text><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+        <g transform="translate(${2*(c.gap + w)}, ${2*(c.gap + h)})">
+            <rect class="tile-bg" width="${w}" height="${h}" />
+            <path class="workpiece" d="M${w-insetX} ${h-insetY} H0 V${h-rx} A${rx} ${rx} 0 0 0 ${rx} ${h} H${w-rx} A${rx} ${rx} 0 0 0 ${w} ${h-rx} V0 H${w-insetX} Z" />
+            <path class="hatch-indicator" d="M${w-insetX+hw} ${h-insetY+hw} H0 V${h-insetY} H${w-insetX} V0 H${w-insetX+hw} Z" />
+            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w-insetX}" y2="${h-insetY}" />
+            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="0" x2="${(w-insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h-insetY)/2}" x2="${w-insetX-3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w-insetX)/2}" y="${(h-insetY)/2.5}">Y-</text><text class="probe-label" x="${(w-insetX)/2.5}" y="${(h-insetY)/2}">X+</text>
+            <circle class="probe-endpoint" cx="${w-insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+        </g>
+    </svg>`;
+    return svg;
+}
+
+
+// --- UI UPDATE AND EVENT HANDLING ---
+
+function updateAll() {
+    // Read all values from the form into the config object
+    const inputs = form.elements;
+    for (const input of inputs) {
+        if (input.id) {
+            if (input.type === 'number') {
+                config[input.id] = parseFloat(input.value);
+            } else if (input.type === 'checkbox') {
+                config[input.id] = input.checked;
+            } else {
+                config[input.id] = input.value;
+            }
+        }
+    }
+
+    // Regenerate and render SVGs
+    outerSvgContainer.innerHTML = generateOuterSVG(config);
+    innerSvgContainer.innerHTML = generateInnerSVG(config);
+}
+
+// --- DOWNLOAD AND SETTINGS FUNCTIONALITY ---
+
+function downloadFile(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function downloadSVG(svgEl, filename) {
+    downloadFile(svgEl.outerHTML, filename, 'image/svg+xml;charset=utf-8');
+}
+
+function downloadPNG(svgEl, filename) {
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const canvas = document.createElement('canvas');
+    const svgSize = svgEl.getBoundingClientRect();
+
+    const scale = 2; // For higher resolution
+    canvas.width = svgSize.width * scale;
+    canvas.height = svgSize.height * scale;
+
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const img = new Image();
+    img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        });
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
+
+function saveSettings() {
+    downloadFile(JSON.stringify(config, null, 2), 'probe-settings.json', 'application/json');
+}
+
+function loadSettings(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const loadedConfig = JSON.parse(e.target.result);
+            for (const key in loadedConfig) {
+                const input = document.getElementById(key);
+                if (input) {
+                     if (input.type === 'checkbox') {
+                        input.checked = loadedConfig[key];
+                    } else {
+                        input.value = loadedConfig[key];
+                    }
+                }
+            }
+            updateAll();
+        } catch (error) {
+            alert('Error: Could not parse JSON file.');
+            console.error(error);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+// --- LVGL C-FILE GENERATION ---
+
+function getSingleTileSVG(baseSvgString, tileIndex, c) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(baseSvgString, "image/svg+xml");
+    const allGroups = doc.querySelectorAll('svg > g');
+    if (tileIndex >= allGroups.length) return null;
+
+    const targetGroup = allGroups[tileIndex];
+    targetGroup.removeAttribute('transform');
+
+    const newSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    newSvg.setAttribute('width', c.tileWidth);
+    newSvg.setAttribute('height', c.tileHeight);
+    newSvg.setAttribute('viewBox', `0 0 ${c.tileWidth} ${c.tileHeight}`);
+    newSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+    const defs = doc.querySelector('defs');
+    const style = doc.querySelector('style');
+    if (defs) newSvg.appendChild(defs.cloneNode(true));
+    if (style) newSvg.appendChild(style.cloneNode(true));
+
+    newSvg.appendChild(targetGroup.cloneNode(true));
+    return new XMLSerializer().serializeToString(newSvg);
+}
+
+async function renderTileToCanvas(tileSvgString, width, height) {
+    return new Promise((resolve, reject) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+
+        const img = new Image();
+        img.onload = () => {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(ctx.getImageData(0, 0, width, height));
+        };
+        img.onerror = () => {
+            reject(new Error('Failed to load SVG tile into image'));
+        };
+        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(tileSvgString)));
+    });
+}
+
+function encodePixelsToCArray(imageData, format) {
+    const pixels = imageData.data;
+    const bytes = [];
+    let stride = 0;
+
+    if (format === 'RGB888') {
+        stride = imageData.width * 3;
+        for (let i = 0; i < pixels.length; i += 4) {
+            bytes.push(pixels[i], pixels[i + 1], pixels[i + 2]); // R, G, B
+        }
+    } else { // RGB565
+        stride = imageData.width * 2;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i] >> 3;
+            const g = pixels[i + 1] >> 2;
+            const b = pixels[i + 2] >> 3;
+            const value = (r << 11) | (g << 5) | b;
+            bytes.push(value & 0xFF, (value >> 8) & 0xFF); // Little-endian
+        }
+    }
+
+    const hexBytes = bytes.map(b => `0x${b.toString(16).padStart(2, '0')}`);
+    let cArrayString = '    ';
+    for (let i = 0; i < hexBytes.length; i++) {
+        cArrayString += hexBytes[i] + ',';
+        if ((i + 1) % 12 === 0) {
+            cArrayString += '\n    ';
+        } else {
+            cArrayString += ' ';
+        }
+    }
+    cArrayString = cArrayString.trim().replace(/,$/, '');
+
+    return { cArrayString, stride };
+}
+
+function generateCFileString(baseName, tileIndex, lvglFormat, scaledVersions) {
+    const varName = `${baseName}_${tileIndex}`;
+    const lvglCf = lvglFormat === 'RGB888' ? 'LV_COLOR_FORMAT_RGB888' : 'LV_COLOR_FORMAT_RGB565';
+
+    let content = `#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_LVGL_H_INCLUDE_SYSTEM)
+#include <lvgl.h>
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+#define LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+#endif
+
+`;
+    if (scaledVersions.length === 0) {
+        return `// No scaling factors defined for ${varName}`;
+    }
+
+    scaledVersions.forEach((version, index) => {
+        const condition = index === 0 ? '#if' : '#elif';
+        content += `${condition} TFT_WIDTH > ${version.tftWidth}\n`;
+        content += `// ${version.width}x${version.height} version for TFT_WIDTH > ${version.tftWidth}\n`;
+        content += `static const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+uint8_t ${varName}_map[] = {
+${version.cArrayString}
+};
+
+const lv_image_dsc_t ${varName} = {
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = ${lvglCf},
+    .flags = 0,
+    .w = ${version.width},
+    .h = ${version.height},
+    .stride = ${version.stride},
+    .reserved_2 = 0,
+  },
+  .data_size = sizeof(${varName}_map),
+  .data = ${varName}_map,
+  .reserved = NULL,
+};
+`;
+    });
+
+    const smallest = scaledVersions[scaledVersions.length - 1];
+    content += `#else // Fallback for TFT_WIDTH <= ${smallest.tftWidth}\n`;
+    content += `// Fallback ${smallest.width}x${smallest.height} version\n`;
+    content += `static const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+uint8_t ${varName}_map[] = {
+${smallest.cArrayString}
+};
+
+const lv_image_dsc_t ${varName} = {
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = ${lvglCf},
+    .flags = 0,
+    .w = ${smallest.width},
+    .h = ${smallest.height},
+    .stride = ${smallest.stride},
+    .reserved_2 = 0,
+  },
+  .data_size = sizeof(${varName}_map),
+  .data = ${varName}_map,
+  .reserved = NULL,
+};
+`;
+
+    content += `\n#endif /*TFT_WIDTH*/\n`;
+    return content;
+}
+
+
+async function downloadAllCFiles() {
+    const btn = document.getElementById('download-c-files');
+    const originalText = btn.textContent;
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+
+    try {
+        const lvglFormat = document.getElementById('lvglFormat').value;
+        const scales = getScalingFactors();
+        if (scales.length === 0) {
+            alert('Please add at least one scaling factor.');
+            throw new Error("No scaling factors defined.");
+        }
+        scales.sort((a, b) => b.tftWidth - a.tftWidth);
+
+        let masterOutput = '';
+        const modes = [
+            { svg: generateOuterSVG(config), baseName: 'img_probe_out' },
+            { svg: generateInnerSVG(config), baseName: 'img_probe_grid' }
+        ];
+
+        for (const mode of modes) {
+            for (let i = 0; i < 9; i++) {
+                const tileSvg = getSingleTileSVG(mode.svg, i, config);
+                if (!tileSvg) continue;
+
+                const scaledVersions = [];
+                for (const scaleInfo of scales) {
+                    const scaledWidth = Math.round(config.tileWidth * scaleInfo.scale);
+                    const scaledHeight = Math.round(config.tileHeight * scaleInfo.scale);
+                    if (scaledWidth < 1 || scaledHeight < 1) continue;
+
+                    const imageData = await renderTileToCanvas(tileSvg, scaledWidth, scaledHeight);
+                    const { cArrayString, stride } = encodePixelsToCArray(imageData, lvglFormat);
+                    
+                    scaledVersions.push({
+                        tftWidth: scaleInfo.tftWidth,
+                        scale: scaleInfo.scale,
+                        cArrayString: cArrayString,
+                        width: imageData.width,
+                        height: imageData.height,
+                        stride: stride,
+                    });
+                }
+
+                if (scaledVersions.length > 0) {
+                    const cFileContent = generateCFileString(mode.baseName, i, lvglFormat, scaledVersions);
+                    masterOutput += `!>>> ${mode.baseName}_${i}.c\n\`\`\`c\n${cFileContent}\n\`\`\`\n!<<< end\n\n`;
+                }
+            }
+        }
+        downloadFile(masterOutput, 'lvgl_probe_images.c', 'text/plain;charset=utf-8');
+        btn.textContent = 'Success!';
+        btn.classList.add('success');
+
+    } catch (error) {
+        console.error('Failed to generate C-files:', error);
+        if (error.message !== "No scaling factors defined.") {
+           alert('An error occurred during C-file generation. See console for details.');
+        }
+        btn.textContent = 'Failed!';
+    } finally {
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.disabled = false;
+            btn.classList.remove('success');
+        }, 2000);
+    }
+}
+
+// --- SCALING FACTOR UI ---
+function addScaleFactor(tftWidth = 0, scale = 1.0) {
+    const container = document.getElementById('scaling-factors-container');
+    if (container.children.length >= 4) {
+        document.getElementById('add-scale-factor').disabled = true;
+        return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'scale-factor-row';
+
+    row.innerHTML = `
+        <label>If TFT_WIDTH &gt;</label>
+        <input type="number" class="scale-tft-width" value="${tftWidth}" placeholder="e.g., 480">
+        <select class="scale-factor-value">
+            <option value="1" ${scale === 1.0 ? 'selected' : ''}>1x (Full Size)</option>
+            <option value="0.5" ${scale === 0.5 ? 'selected' : ''}>1/2x</option>
+            <option value="0.25" ${scale === 0.25 ? 'selected' : ''}>1/4x</option>
+            <option value="0.125" ${scale === 0.125 ? 'selected' : ''}>1/8x</option>
+        </select>
+        <button type="button" class="remove-scale-btn">-</button>
+    `;
+
+    row.querySelector('.remove-scale-btn').addEventListener('click', () => {
+        row.remove();
+        document.getElementById('add-scale-factor').disabled = false;
+    });
+
+    container.appendChild(row);
+     if (container.children.length >= 4) {
+        document.getElementById('add-scale-factor').disabled = true;
+    }
+}
+
+function getScalingFactors() {
+    const scales = [];
+    document.querySelectorAll('.scale-factor-row').forEach(row => {
+        const tftWidth = parseInt(row.querySelector('.scale-tft-width').value, 10);
+        const scale = parseFloat(row.querySelector('.scale-factor-value').value);
+        if (!isNaN(tftWidth)) {
+            scales.push({ tftWidth, scale });
+        }
+    });
+    return scales;
+}
+
+
+// --- INITIALIZATION ---
+
+document.addEventListener('DOMContentLoaded', () => {
+    form.addEventListener('input', updateAll);
+
+    document.getElementById('download-outer-svg').addEventListener('click', () => downloadSVG(outerSvgContainer.querySelector('svg'), 'probe-outer.svg'));
+    document.getElementById('download-outer-png').addEventListener('click', () => downloadPNG(outerSvgContainer.querySelector('svg'), 'probe-outer.png'));
+    document.getElementById('download-inner-svg').addEventListener('click', () => downloadSVG(innerSvgContainer.querySelector('svg'), 'probe-inner.svg'));
+    document.getElementById('download-inner-png').addEventListener('click', () => downloadPNG(innerSvgContainer.querySelector('svg'), 'probe-inner.png'));
+
+    document.getElementById('save-settings').addEventListener('click', saveSettings);
+    const loadFileInput = document.getElementById('load-file');
+    document.getElementById('load-settings').addEventListener('click', () => loadFileInput.click());
+    loadFileInput.addEventListener('change', loadSettings);
+
+    document.getElementById('download-c-files').addEventListener('click', downloadAllCFiles);
+    document.getElementById('add-scale-factor').addEventListener('click', () => addScaleFactor());
+
+    // Add default scaling factors
+    addScaleFactor(480, 1.0);
+    addScaleFactor(320, 0.5);
+    addScaleFactor(0, 0.25);
+
+
+    updateAll(); // Initial render
+});
+</script>
+
+</body>
+</html>

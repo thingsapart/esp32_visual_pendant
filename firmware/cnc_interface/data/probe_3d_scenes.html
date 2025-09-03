@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D CNC Probe Mode Visualizer</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --text-color: #d4d4d4;
+            --panel-bg: #2a2a2a;
+            --border-color: #444;
+            --accent-color: #00aaff;
+            --input-bg: #3c3c3c;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            gap: 20px;
+            height: calc(100vh - 40px);
+            overflow: hidden;
+        }
+        .preview-panel {
+            flex: 3;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-auto-rows: min-content;
+            gap: 15px;
+            overflow-y: auto;
+            padding-bottom: 20px;
+        }
+        .controls-panel {
+            flex: 1;
+            min-width: 350px;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 100%;
+        }
+        .preview-box {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            width: fit-content;
+        }
+        .preview-box h3 {
+            margin: 10px 15px;
+            font-size: 1em;
+            color: #fff;
+            text-align: center;
+        }
+        .canvas-container {
+            flex-grow: 1;
+            position: relative;
+            background-color: #f0f0f0;
+            border-radius: 0 0 7px 7px;
+            overflow: hidden;
+        }
+        .canvas-container canvas {
+            display: block;
+        }
+        .download-button-container {
+            padding: 10px;
+            text-align: center;
+        }
+        h1 {
+            margin: 0 0 15px 0;
+            color: #fff;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 5px;
+        }
+        button {
+            padding: 8px 15px;
+            border: 1px solid var(--accent-color);
+            background-color: transparent;
+            color: var(--accent-color);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        button:hover {
+            background-color: var(--accent-color);
+            color: var(--bg-color);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        button.success {
+             background-color: #28a745;
+             border-color: #28a745;
+             color: #fff;
+        }
+        fieldset {
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            margin-bottom: 20px;
+            padding: 15px;
+        }
+        legend {
+            color: var(--accent-color);
+            font-weight: bold;
+            padding: 0 10px;
+        }
+        .control-group {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        label {
+            font-size: 0.9em;
+        }
+        input[type="number"], input[type="range"], select {
+            width: 100%;
+            box-sizing: border-box;
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 5px;
+        }
+        input[type="color"] {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 30px;
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        input[type="color"]::-webkit-color-swatch {
+            border-radius: 3px;
+            border: none;
+        }
+        input[type="color"]::-moz-color-swatch {
+            border-radius: 3px;
+            border: none;
+        }
+        .settings-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .settings-buttons div {
+            display: flex;
+            gap: 10px;
+        }
+         .scale-factor-row {
+            display: grid;
+            grid-template-columns: 100px 1fr 1fr 40px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .scale-factor-row label {
+             white-space: nowrap;
+             font-size: 0.9em;
+        }
+        .scale-factor-row button {
+            padding: 4px 8px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="preview-panel" id="preview-grid">
+        <!-- Preview boxes will be generated by JS -->
+    </div>
+
+    <div class="controls-panel">
+        <h1>3D Visualizer</h1>
+        <form id="controls-form">
+            <fieldset>
+                <legend>Scene Controls</legend>
+                 <div class="control-group">
+                    <label for="canvasWidth">Canvas Width</label>
+                    <input type="number" id="canvasWidth" value="400" min="100" step="10">
+                </div>
+                 <div class="control-group">
+                    <label for="canvasHeight">Canvas Height</label>
+                    <input type="number" id="canvasHeight" value="300" min="100" step="10">
+                </div>
+                <div class="control-group">
+                    <label for="zoom">Zoom</label>
+                    <input type="range" id="zoom" value="1.5" min="0.5" max="5" step="0.1">
+                </div>
+                <div class="control-group">
+                    <label for="workpieceHeight">Workpiece Height</label>
+                    <input type="range" id="workpieceHeight" value="50" min="10" max="100" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="stylusStandoff">Stylus Standoff</label>
+                    <input type="range" id="stylusStandoff" value="20" min="5" max="50" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="cornerOffsetX">Corner Offset X</label>
+                    <input type="range" id="cornerOffsetX" value="10" min="0" max="50" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="cornerOffsetZ">Corner Offset Z</label>
+                    <input type="range" id="cornerOffsetZ" value="10" min="0" max="50" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="workpieceColor">Workpiece Color</label>
+                    <input type="color" id="workpieceColor" value="#0077ff">
+                </div>
+                <div class="control-group">
+                    <label for="redDotColor">Result Color</label>
+                    <input type="color" id="redDotColor" value="#ff0000">
+                </div>
+                <div class="control-group">
+                    <label for="greenDotColor">Probe Point Color</label>
+                    <input type="color" id="greenDotColor" value="#00cc00">
+                </div>
+                <div class="control-group">
+                    <label for="markerStyle">Use Crosshairs</label>
+                    <input type="checkbox" id="markerStyle">
+                </div>
+                <div class="control-group">
+                    <label for="ghostedView">Ghosted View</label>
+                    <input type="checkbox" id="ghostedView">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Camera Controls</legend>
+                <div class="control-group">
+                    <label for="cameraX">Camera X Pan</label>
+                    <input type="range" id="cameraX" value="0" min="-100" max="100" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="cameraY">Camera Y Pan</label>
+                    <input type="range" id="cameraY" value="0" min="-100" max="100" step="1">
+                </div>
+                <div class="control-group">
+                    <label for="cameraZ">Camera Z Pan</label>
+                    <input type="range" id="cameraZ" value="0" min="-100" max="100" step="1">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Stylus Controls</legend>
+                <div class="control-group">
+                    <label for="stylusDiameter">Stylus Diameter</label>
+                    <input type="number" id="stylusDiameter" value="3" min="1" max="10" step="0.1">
+                </div>
+                <div class="control-group">
+                    <label for="tipDiameter">Tip Diameter</label>
+                    <input type="number" id="tipDiameter" value="8" min="2" max="20" step="0.1">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>C-File Export</legend>
+                <div class="control-group">
+                    <label for="lvglFormat">Color Format</label>
+                    <select id="lvglFormat" style="width: auto;">
+                        <option value="RGB565">RGB565</option>
+                        <option value="RGB888">RGB888</option>
+                    </select>
+                </div>
+                 <div>
+                    <label>Scaling Factors (largest TFT_WIDTH first)</label>
+                    <div id="scaling-factors-container" style="margin-top: 10px;">
+                        <!-- Scaling factor rows will be added here -->
+                    </div>
+                    <div class="settings-buttons">
+                        <button type="button" id="add-scale-factor">Add Scale Factor</button>
+                    </div>
+                 </div>
+                 <div class="settings-buttons" style="margin-top: 20px;">
+                    <button type="button" id="download-c-files">Download All C-Files</button>
+                 </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Settings</legend>
+                 <div class="settings-buttons">
+                     <div>
+                        <button type="button" id="save-settings">Save Settings</button>
+                        <button type="button" id="load-settings">Load Settings</button>
+                        <input type="file" id="load-file" accept=".json" style="display: none;">
+                     </div>
+                 </div>
+            </fieldset>
+        </form>
+    </div>
+
+<script>
+// Load Three.js dynamically
+const threeJsUrl = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+let threeScriptLoaded = false;
+const script = document.createElement('script');
+script.src = threeJsUrl;
+document.head.appendChild(script);
+script.onload = () => {
+    threeScriptLoaded = true;
+    document.dispatchEvent(new Event('threeLoaded'));
+};
+
+const scenes = [];
+const controlsForm = document.getElementById('controls-form');
+
+const probeModes = [
+    { id: 'vise-corner', title: 'Vise Corner' },
+    { id: 'circular-bore', title: 'Circular Bore' },
+    { id: 'circular-boss', title: 'Circular Boss' },
+    { id: 'rect-pocket', title: 'Rectangle Pocket' },
+    { id: 'rect-block', title: 'Rectangle Block' },
+    { id: 'outside-corner', title: 'Outside Corner' },
+    { id: 'single-surface', title: 'Single Surface' }
+];
+
+function createWorkpieceMaterial(color, isGhosted) {
+    const mat = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(color),
+        shininess: 80,
+        specular: 0x222222,
+    });
+    if (isGhosted) {
+        mat.transparent = true;
+        mat.opacity = 0.15;
+        mat.depthWrite = false;
+    }
+    return mat;
+}
+
+function createProbe(config) {
+    const group = new THREE.Group();
+    const stylusRadius = config.stylusDiameter / 2;
+    const tipRadius = config.tipDiameter / 2;
+
+    const shaftGeo = new THREE.CylinderGeometry(stylusRadius, stylusRadius, 80, 32);
+    const shaftMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8, roughness: 0.2 });
+    const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+    shaft.position.y = 40 + tipRadius;
+
+    const tipGeo = new THREE.SphereGeometry(tipRadius, 32, 32);
+    const tipMat = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.1, roughness: 0.1, emissive: 0x880000 });
+    const tip = new THREE.Mesh(tipGeo, tipMat);
+    tip.position.y = tipRadius;
+
+    group.add(shaft, tip);
+    return group;
+}
+
+function createMarker(type, color) {
+    const group = new THREE.Group();
+    if (type === 'red-dot') {
+        const geo = new THREE.SphereGeometry(3, 16, 16);
+        const mat = new THREE.MeshBasicMaterial({ color: color });
+        group.add(new THREE.Mesh(geo, mat));
+    } else if (type === 'green-dot') {
+        const geo = new THREE.SphereGeometry(2.5, 16, 16);
+        const mat = new THREE.MeshBasicMaterial({ color: color });
+        group.add(new THREE.Mesh(geo, mat));
+    } else if (type === 'crosshairs') {
+        const lineMat = new THREE.LineBasicMaterial({ color: color, linewidth: 2 });
+        lineMat.depthTest = false;
+        const points = [
+            new THREE.Vector3(-10, 0, 0), new THREE.Vector3(10, 0, 0),
+            new THREE.Vector3(0, -10, 0), new THREE.Vector3(0, 10, 0)
+        ];
+        const geo = new THREE.BufferGeometry().setFromPoints(points);
+        const cross = new THREE.LineSegments(geo, lineMat);
+        cross.rotation.x = Math.PI / 2;
+        group.add(cross);
+        group.renderOrder = 1;
+    }
+    return group;
+}
+
+function buildScene(sceneInfo, config) {
+    const { scene, mode } = sceneInfo;
+    while(scene.children.length > 0){ scene.remove(scene.children[0]); }
+
+    // Lighting Setup
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const keyLight = new THREE.PointLight(0xffffff, 0.7, 500);
+    keyLight.position.set(50, 60, 80);
+    const fillLight = new THREE.PointLight(0xffffff, 0.4, 500);
+    fillLight.position.set(-70, 40, 40);
+    scene.add(keyLight, fillLight);
+
+    sceneInfo.cameraLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    scene.add(sceneInfo.cameraLight);
+
+    const mat = createWorkpieceMaterial(config.workpieceColor, config.ghostedView);
+    const baseWidth = 100;
+    const baseDepth = 100;
+    const height = config.workpieceHeight;
+    const standoff = config.stylusStandoff;
+    const redColor = config.redDotColor;
+    const greenColor = config.greenDotColor;
+    const markerType = config.markerStyle ? 'crosshairs' : 'red-dot';
+
+    const probe = createProbe(config);
+    // Add a dedicated light that moves with the stylus
+    const stylusLight = new THREE.PointLight(0xffffff, 0.6, 150);
+    stylusLight.position.set(30, 60, 30); // Position relative to probe, towards default camera
+    probe.add(stylusLight);
+    scene.add(probe);
+
+
+    let workpiece;
+
+    switch(mode.id) {
+        case 'vise-corner':
+            workpiece = new THREE.Mesh(new THREE.BoxGeometry(baseWidth, height, baseDepth), mat);
+            workpiece.position.y = height / 2;
+            scene.add(workpiece);
+
+            const redMarkerVC = createMarker(markerType, redColor);
+            redMarkerVC.position.set(baseWidth/2, height, baseDepth/2);
+
+            const greenMarkerFrontVC = createMarker('green-dot', greenColor);
+            greenMarkerFrontVC.position.set(baseWidth/2 - 20, height/2, baseDepth/2);
+
+            const greenMarkerSideVC = createMarker('green-dot', greenColor);
+            greenMarkerSideVC.position.set(baseWidth/2, height/2, baseDepth/2 - 20);
+
+            const greenMarkerTopVC = createMarker('green-dot', greenColor);
+            greenMarkerTopVC.position.set(baseWidth/2 - 20, height, baseDepth/2 - 20);
+
+            scene.add(redMarkerVC, greenMarkerFrontVC, greenMarkerSideVC, greenMarkerTopVC);
+
+            const totalCornerStandoffXVC = standoff + config.cornerOffsetX;
+            const totalCornerStandoffZVC = standoff + config.cornerOffsetZ;
+            probe.position.set(baseWidth/2 + totalCornerStandoffXVC, height + standoff, baseDepth/2 + totalCornerStandoffZVC);
+            break;
+
+        case 'circular-bore':
+        case 'rect-pocket':
+            const isCircle = mode.id === 'circular-bore';
+            const shape = new THREE.Shape();
+            shape.moveTo(-baseWidth/2, -baseDepth/2); shape.lineTo(baseWidth/2, -baseDepth/2);
+            shape.lineTo(baseWidth/2, baseDepth/2); shape.lineTo(-baseWidth/2, baseDepth/2);
+            shape.lineTo(-baseWidth/2, -baseDepth/2);
+
+            const holePath = new THREE.Path();
+            if (isCircle) { holePath.absarc(0, 0, 25, 0, Math.PI * 2, false); }
+            else { holePath.moveTo(-25, -25); holePath.lineTo(25, -25); holePath.lineTo(25, 25); holePath.lineTo(-25, 25); holePath.lineTo(-25, -25); }
+            shape.holes.push(holePath);
+
+            workpiece = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, {depth: height, bevelEnabled: false}), mat);
+            workpiece.rotation.x = -Math.PI / 2;
+            workpiece.position.y = 0;
+            scene.add(workpiece);
+
+            const centerMarkerHole = createMarker(markerType, redColor);
+            centerMarkerHole.position.set(0, height, 0);
+            scene.add(centerMarkerHole);
+            probe.position.set(0, height + standoff, 0);
+            break;
+
+        case 'circular-boss':
+            const bossHeight = 30;
+            const bossGroup = new THREE.Group();
+            const base = new THREE.Mesh(new THREE.BoxGeometry(baseWidth, height, baseDepth), mat);
+            base.position.y = height / 2;
+            const boss = new THREE.Mesh(new THREE.CylinderGeometry(25, 25, bossHeight, 64), mat);
+            boss.position.y = height + bossHeight / 2;
+            bossGroup.add(base, boss);
+            workpiece = bossGroup;
+            scene.add(workpiece);
+
+            const centerMarkerBoss = createMarker(markerType, redColor);
+            centerMarkerBoss.position.set(0, height + bossHeight, 0);
+
+            const greenMarkerBossSide = createMarker('green-dot', greenColor);
+            greenMarkerBossSide.position.set(25, height + bossHeight/2, 0);
+
+            scene.add(centerMarkerBoss, greenMarkerBossSide);
+            probe.position.set(25 + standoff, height + bossHeight + standoff, 0);
+            break;
+
+        case 'rect-block':
+            workpiece = new THREE.Mesh(new THREE.BoxGeometry(baseWidth, height, baseDepth), mat);
+            workpiece.position.y = height / 2;
+            scene.add(workpiece);
+
+            const centerMarkerBlock = createMarker(markerType, redColor);
+            centerMarkerBlock.position.set(0, height, 0);
+            const greenMarkersBlock = [
+                new THREE.Vector3(baseWidth/2, height/2, 0), new THREE.Vector3(-baseWidth/2, height/2, 0),
+                new THREE.Vector3(0, height/2, baseDepth/2), new THREE.Vector3(0, height/2, -baseDepth/2)
+            ].map(pos => {
+                const marker = createMarker('green-dot', greenColor);
+                marker.position.copy(pos);
+                return marker;
+            });
+            scene.add(centerMarkerBlock, ...greenMarkersBlock);
+            probe.position.set(0, height + standoff, 0);
+            break;
+
+        case 'outside-corner':
+            workpiece = new THREE.Mesh(new THREE.BoxGeometry(baseWidth, height, baseDepth), mat);
+            workpiece.position.y = height / 2;
+            scene.add(workpiece);
+
+            const redMarkerCorner = createMarker(markerType, redColor);
+            redMarkerCorner.position.set(baseWidth/2, height/2, baseDepth/2);
+
+            const greenMarkerFrontOC = createMarker('green-dot', greenColor);
+            greenMarkerFrontOC.position.set(baseWidth/2 - 20, height/2, baseDepth/2);
+
+            const greenMarkerSideOC = createMarker('green-dot', greenColor);
+            greenMarkerSideOC.position.set(baseWidth/2, height/2, baseDepth/2 - 20);
+
+            scene.add(redMarkerCorner, greenMarkerFrontOC, greenMarkerSideOC);
+            const totalCornerStandoffXOC = standoff + config.cornerOffsetX;
+            const totalCornerStandoffZOC = standoff + config.cornerOffsetZ;
+            probe.position.set(baseWidth/2 + totalCornerStandoffXOC, height/2 + standoff, baseDepth/2 + totalCornerStandoffZOC);
+            break;
+
+        case 'single-surface':
+            workpiece = new THREE.Mesh(new THREE.BoxGeometry(baseWidth, height, baseDepth), mat);
+            workpiece.position.y = height / 2;
+            scene.add(workpiece);
+
+            const singleMarker = createMarker(markerType, redColor);
+            singleMarker.position.set(0, height/2, baseDepth/2);
+            scene.add(singleMarker);
+            probe.position.set(0, height/2, baseDepth/2 + standoff);
+            break;
+    }
+
+    if (workpiece && config.ghostedView) {
+        workpiece.traverse(child => {
+            if (child.isMesh) {
+                const wireframeGeo = new THREE.EdgesGeometry(child.geometry);
+                const wireframeMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 1 });
+                wireframeMat.depthTest = false;
+                const wireframe = new THREE.LineSegments(wireframeGeo, wireframeMat);
+                wireframe.renderOrder = 1;
+                child.add(wireframe);
+            }
+        });
+    }
+}
+
+function init() {
+    const grid = document.getElementById('preview-grid');
+
+    probeModes.forEach(mode => {
+        const box = document.createElement('div');
+        box.className = 'preview-box';
+        box.innerHTML = `
+            <h3>${mode.title}</h3>
+            <div class="canvas-container" id="container-${mode.id}"></div>
+            <div class="download-button-container">
+                <button id="download-${mode.id}">Download PNG</button>
+            </div>
+        `;
+        grid.appendChild(box);
+
+        const container = document.getElementById(`container-${mode.id}`);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f0f0);
+
+        const frustumSize = 150;
+        const camera = new THREE.OrthographicCamera(frustumSize / -2, frustumSize / 2, frustumSize / 2, frustumSize / -2, 1, 1000);
+
+        const baseCameraPos = new THREE.Vector3(120, 100, 120);
+        camera.position.copy(baseCameraPos);
+
+        const cameraTarget = new THREE.Vector3(0, 0, 0);
+        camera.lookAt(cameraTarget);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        scenes.push({ id: mode.id, scene, camera, renderer, container, box, mode, baseCameraPos, cameraTarget });
+
+        document.getElementById(`download-${mode.id}`).addEventListener('click', () => {
+            downloadPNG(renderer, `probe-${mode.id}.png`);
+        });
+    });
+
+    updateAll();
+    animate();
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    scenes.forEach(({ scene, camera, renderer }) => {
+        renderer.render(scene, camera);
+    });
+}
+
+function updateAll() {
+    if (!threeScriptLoaded) return;
+    const config = {};
+    const inputs = controlsForm.elements;
+    for (const input of inputs) {
+        if (input.id) {
+            if (input.type === 'number' || input.type === 'range') {
+                config[input.id] = parseFloat(input.value);
+            } else if (input.type === 'checkbox') {
+                config[input.id] = input.checked;
+            } else {
+                config[input.id] = input.value;
+            }
+        }
+    }
+
+    scenes.forEach(s => {
+        s.box.style.width = `${config.canvasWidth}px`;
+        s.container.style.width = `${config.canvasWidth}px`;
+        s.container.style.height = `${config.canvasHeight}px`;
+        s.renderer.setSize(config.canvasWidth, config.canvasHeight);
+
+        const aspect = config.canvasWidth / config.canvasHeight;
+        const frustumSize = 150;
+        s.camera.left = frustumSize * aspect / -2;
+        s.camera.right = frustumSize * aspect / 2;
+        s.camera.top = frustumSize / 2;
+        s.camera.bottom = frustumSize / -2;
+        s.camera.zoom = config.zoom;
+
+        const cameraOffset = new THREE.Vector3(config.cameraX, config.cameraY, config.cameraZ);
+        s.camera.position.copy(s.baseCameraPos).add(cameraOffset);
+        s.cameraTarget.set(0, 0, 0).add(cameraOffset);
+        s.camera.lookAt(s.cameraTarget);
+        s.camera.updateProjectionMatrix();
+
+        buildScene(s, config);
+
+        if (s.cameraLight) {
+            s.cameraLight.position.copy(s.camera.position);
+            s.cameraLight.target.position.copy(s.cameraTarget);
+        }
+    });
+}
+
+// --- DOWNLOAD AND SETTINGS ---
+function downloadPNG(renderer, filename) {
+    const dataURL = renderer.domElement.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+function saveSettings() {
+    const settings = {};
+    const inputs = controlsForm.elements;
+    for (const input of inputs) {
+        if (input.id) {
+            if (input.type === 'number' || input.type === 'range') {
+                settings[input.id] = parseFloat(input.value);
+            } else if (input.type === 'checkbox') {
+                settings[input.id] = input.checked;
+            } else {
+                settings[input.id] = input.value;
+            }
+        }
+    }
+    const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '3d-probe-settings.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function loadSettings(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const loadedSettings = JSON.parse(e.target.result);
+            for (const key in loadedSettings) {
+                const input = document.getElementById(key);
+                if (input) {
+                    if (input.type === 'checkbox') {
+                        input.checked = loadedSettings[key];
+                    } else {
+                        input.value = loadedSettings[key];
+                    }
+                }
+            }
+            updateAll();
+        } catch (error) {
+            alert('Error: Could not parse JSON file.');
+            console.error(error);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+// --- LVGL C-FILE GENERATION ---
+
+function getCanvasImageData(renderer, targetWidth, targetHeight) {
+    const sourceCanvas = renderer.domElement;
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = targetWidth;
+    exportCanvas.height = targetHeight;
+    const ctx = exportCanvas.getContext('2d');
+    ctx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+    return ctx.getImageData(0, 0, targetWidth, targetHeight);
+}
+
+
+function encodePixelsToCArray(imageData, format) {
+    const pixels = imageData.data;
+    const bytes = [];
+    let stride = 0;
+
+    if (format === 'RGB888') {
+        stride = imageData.width * 3;
+        for (let i = 0; i < pixels.length; i += 4) {
+            bytes.push(pixels[i], pixels[i + 1], pixels[i + 2]); // R, G, B
+        }
+    } else { // RGB565
+        stride = imageData.width * 2;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i] >> 3;
+            const g = pixels[i + 1] >> 2;
+            const b = pixels[i + 2] >> 3;
+            const value = (r << 11) | (g << 5) | b;
+            bytes.push(value & 0xFF, (value >> 8) & 0xFF); // Little-endian
+        }
+    }
+
+    const hexBytes = bytes.map(b => `0x${b.toString(16).padStart(2, '0')}`);
+    let cArrayString = '    ';
+    for (let i = 0; i < hexBytes.length; i++) {
+        cArrayString += hexBytes[i] + ',';
+        if ((i + 1) % 12 === 0) {
+            cArrayString += '\n    ';
+        } else {
+            cArrayString += ' ';
+        }
+    }
+    cArrayString = cArrayString.trim().replace(/,$/, '');
+
+    return { cArrayString, stride };
+}
+
+function generateCFileString(baseName, tileIndex, lvglFormat, scaledVersions) {
+    const varName = `${baseName}_${tileIndex}`;
+    const lvglCf = lvglFormat === 'RGB888' ? "LV_COLOR_FORMAT_RGB888" : "LV_COLOR_FORMAT_RGB565";
+
+    let content = `#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_LVGL_H_INCLUDE_SYSTEM)
+#include <lvgl.h>
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+#define LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+#endif
+
+`;
+    if (scaledVersions.length === 0) {
+        return `// No scaling factors defined for ${varName}`;
+    }
+
+    scaledVersions.forEach((version, index) => {
+        const condition = index === 0 ? '#if' : '#elif';
+        content += `${condition} TFT_WIDTH > ${version.tftWidth}\n`;
+        content += `// ${version.width}x${version.height} version for TFT_WIDTH > ${version.tftWidth}\n`;
+        content += `static const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+uint8_t ${varName}_map[] = {
+${version.cArrayString}
+};
+
+const lv_image_dsc_t ${varName} = {
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = ${lvglCf},
+    .flags = 0,
+    .w = ${version.width},
+    .h = ${version.height},
+    .stride = ${version.stride},
+    .reserved_2 = 0,
+  },
+  .data_size = sizeof(${varName}_map),
+  .data = ${varName}_map,
+  .reserved = NULL,
+};
+`;
+    });
+
+    const smallest = scaledVersions[scaledVersions.length - 1];
+    content += `#else // Fallback for TFT_WIDTH <= ${smallest.tftWidth}\n`;
+    content += `// Fallback ${smallest.width}x${smallest.height} version\n`;
+    content += `static const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_${varName.toUpperCase()}
+uint8_t ${varName}_map[] = {
+${smallest.cArrayString}
+};
+
+const lv_image_dsc_t ${varName} = {
+  .header = {
+    .magic = LV_IMAGE_HEADER_MAGIC,
+    .cf = ${lvglCf},
+    .flags = 0,
+    .w = ${smallest.width},
+    .h = ${smallest.height},
+    .stride = ${smallest.stride},
+    .reserved_2 = 0,
+  },
+  .data_size = sizeof(${varName}_map),
+  .data = ${varName}_map,
+  .reserved = NULL,
+};
+`;
+
+    content += `\n#endif /*TFT_WIDTH*/\n`;
+    return content;
+}
+
+function downloadFile(content, fileName, contentType) {
+    const a = document.createElement("a");
+    const file = new Blob([content], { type: contentType });
+    a.href = URL.createObjectURL(file);
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+async function downloadAllCFiles() {
+    const btn = document.getElementById('download-c-files');
+    const originalText = btn.textContent;
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+
+    try {
+        const lvglFormat = document.getElementById('lvglFormat').value;
+        const baseWidth = parseInt(document.getElementById('canvasWidth').value);
+        const baseHeight = parseInt(document.getElementById('canvasHeight').value);
+
+        const scales = getScalingFactors();
+        if (scales.length === 0) {
+            alert('Please add at least one scaling factor.');
+            throw new Error("No scaling factors defined.");
+        }
+        scales.sort((a, b) => b.tftWidth - a.tftWidth);
+
+        let masterOutput = '';
+
+        for (let i = 0; i < scenes.length; i++) {
+            const sceneInfo = scenes[i];
+            const baseName = 'img_probe_icon';
+
+            const scaledVersions = [];
+            for (const scaleInfo of scales) {
+                const scaledWidth = Math.round(baseWidth * scaleInfo.scale);
+                const scaledHeight = Math.round(baseHeight * scaleInfo.scale);
+                if (scaledWidth < 1 || scaledHeight < 1) continue;
+
+                // Temporarily resize renderer, render, and get data
+                sceneInfo.renderer.setSize(scaledWidth, scaledHeight);
+                sceneInfo.camera.aspect = scaledWidth / scaledHeight;
+                sceneInfo.camera.updateProjectionMatrix();
+                sceneInfo.renderer.render(sceneInfo.scene, sceneInfo.camera);
+
+                const imageData = getCanvasImageData(sceneInfo.renderer, scaledWidth, scaledHeight);
+                const { cArrayString, stride } = encodePixelsToCArray(imageData, lvglFormat);
+
+                scaledVersions.push({
+                    tftWidth: scaleInfo.tftWidth,
+                    scale: scaleInfo.scale,
+                    cArrayString: cArrayString,
+                    width: imageData.width,
+                    height: imageData.height,
+                    stride: stride,
+                });
+            }
+
+            // Restore original renderer size for display
+            sceneInfo.renderer.setSize(baseWidth, baseHeight);
+            sceneInfo.camera.aspect = baseWidth / baseHeight;
+            sceneInfo.camera.updateProjectionMatrix();
+
+
+            if (scaledVersions.length > 0) {
+                const cFileContent = generateCFileString(baseName, i, lvglFormat, scaledVersions);
+                masterOutput += `!>>> ${baseName}_${i}.c\n\`\`\`c\n${cFileContent}\n\`\`\`\n!<<< end\n\n`;
+            }
+        }
+
+        downloadFile(masterOutput, 'lvgl_probe_images_3d.c', 'text/plain;charset=utf-8');
+
+        btn.textContent = 'Success!';
+        btn.classList.add('success');
+
+    } catch (error) {
+        console.error('Failed to generate C-files:', error);
+        if (error.message !== "No scaling factors defined.") {
+            alert('An error occurred during C-file generation. See console for details.');
+        }
+        btn.textContent = 'Failed!';
+    } finally {
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.disabled = false;
+            btn.classList.remove('success');
+        }, 2000);
+    }
+}
+
+// --- SCALING FACTOR UI ---
+function addScaleFactor(tftWidth = 0, scale = 1.0) {
+    const container = document.getElementById('scaling-factors-container');
+    if (container.children.length >= 4) {
+        document.getElementById('add-scale-factor').disabled = true;
+        return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'scale-factor-row';
+
+    row.innerHTML = `
+        <label>If TFT_WIDTH &gt;</label>
+        <input type="number" class="scale-tft-width" value="${tftWidth}" placeholder="e.g., 480">
+        <select class="scale-factor-value">
+            <option value="1" ${scale === 1.0 ? 'selected' : ''}>1x (Full Size)</option>
+            <option value="0.5" ${scale === 0.5 ? 'selected' : ''}>1/2x</option>
+            <option value="0.25" ${scale === 0.25 ? 'selected' : ''}>1/4x</option>
+            <option value="0.125" ${scale === 0.125 ? 'selected' : ''}>1/8x</option>
+        </select>
+        <button type="button" class="remove-scale-btn">-</button>
+    `;
+
+    row.querySelector('.remove-scale-btn').addEventListener('click', () => {
+        row.remove();
+        document.getElementById('add-scale-factor').disabled = false;
+    });
+
+    container.appendChild(row);
+     if (container.children.length >= 4) {
+        document.getElementById('add-scale-factor').disabled = true;
+    }
+}
+
+function getScalingFactors() {
+    const scales = [];
+    document.querySelectorAll('.scale-factor-row').forEach(row => {
+        const tftWidth = parseInt(row.querySelector('.scale-tft-width').value, 10);
+        const scale = parseFloat(row.querySelector('.scale-factor-value').value);
+        if (!isNaN(tftWidth)) {
+            scales.push({ tftWidth, scale });
+        }
+    });
+    return scales;
+}
+
+
+document.addEventListener('threeLoaded', () => {
+    init();
+    controlsForm.addEventListener('input', updateAll);
+    document.getElementById('save-settings').addEventListener('click', saveSettings);
+    const loadFileInput = document.getElementById('load-file');
+    document.getElementById('load-settings').addEventListener('click', () => loadFileInput.click());
+    loadFileInput.addEventListener('change', loadSettings);
+
+    document.getElementById('download-c-files').addEventListener('click', downloadAllCFiles);
+    document.getElementById('add-scale-factor').addEventListener('click', () => addScaleFactor());
+
+    // Add default scaling factors
+    addScaleFactor(480, 1.0);
+    addScaleFactor(320, 0.5);
+    addScaleFactor(0, 0.25);
+});
+</script>
+</body>
+</html>

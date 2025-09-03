@@ -1908,7 +1908,6 @@ void create_ui(lv_obj_t* parent) {
 
 
 
-/*
     // unnamed: obj_215 (obj)
     lv_obj_t* obj_215 = lv_tileview_add_tile(tileview_30, 2, 0, LV_DIR_LEFT);
 
@@ -1922,5 +1921,4 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_size(probing_wizard_216, lv_pct(100), lv_pct(100), 0);
     lv_probing_wizard_set_mode(probing_wizard_216, LV_PROBING_WIZARD_MODE_CIRCLE, true);
     lv_probing_wizard_set_active_step(probing_wizard_216, 0);
-*/
 }
