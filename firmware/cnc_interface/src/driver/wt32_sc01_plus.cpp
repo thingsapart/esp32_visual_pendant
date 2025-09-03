@@ -48,6 +48,7 @@ void lvgl_log(const char *buf) {
 // LVGL buffer (allocated in PSRAM)
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
 #define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 5 * BYTES_PER_PIXEL)
+
 static uint8_t *buf1 = NULL;
 
 // Global driver objects
@@ -78,9 +79,7 @@ static void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   }
 }
 
-void display_setup(lv_display_t *disp, lv_indev_t *indev) {
-  LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with ESP_Display_Panel");
-
+void display_alloc() {
   // Allocate LVGL draw buffer from PSRAM
   buf1 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -92,6 +91,11 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   }
   assert(buf1);
+
+}
+
+void display_setup(lv_display_t *disp, lv_indev_t *indev) {
+  LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with ESP_Display_Panel");
 
   // 1. Initialize Backlight
   esp_panel::drivers::BacklightPWM_LEDC::Config backlight_cfg = {
@@ -209,6 +213,8 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
 
 #include <LovyanGFX.hpp>
 
+#include "debug.h"
+
 // SETUP LGFX PARAMETERS FOR WT32-SC01-PLUS
 class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
   lgfx::Panel_ST7796 _panel_instance;
@@ -222,10 +228,12 @@ class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
     {
       auto cfg = _bus_instance.config();
 
-      //cfg.freq_write = 40000000;
-      //cfg.freq_read = 16000000;
-      cfg.freq_write = 16000000;
-      cfg.freq_read = 6250000;
+      //cfg.freq_write = 60000000;
+      //cfg.freq_read = 24000000;
+      cfg.freq_write = 40000000;
+      cfg.freq_read = 16000000;
+      //cfg.freq_write = 16000000;
+      //cfg.freq_read = 6250000;
       cfg.pin_wr = 47;  // pin number connecting WR
       cfg.pin_rd = -1;  // pin number connecting RD
       cfg.pin_rs = 0;   // Pin number connecting RS(D/C)
@@ -237,7 +245,6 @@ class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
       cfg.pin_d5 = 17;  // pin number connecting D5
       cfg.pin_d6 = 16;  // pin number connecting D6
       cfg.pin_d7 = 15;  // pin number connecting D7
-      // cfg.i2s_port = I2S_NUM_0; // (I2S_NUM_0 or I2S_NUM_1)
 
       _bus_instance.config(cfg);               // Apply the settings to the bus.
       _panel_instance.setBus(&_bus_instance);  // Sets the bus to the panel.
@@ -264,13 +271,13 @@ class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
       cfg.offset_x = 0;         // Panel offset in X direction
       cfg.offset_y = 0;         // Panel offset in Y direction
       cfg.offset_rotation = 0;  // was 2
-      cfg.dummy_read_pixel = 8;
+      cfg.dummy_read_pixel = 1;
       cfg.dummy_read_bits = 1;
-      cfg.readable = true;  // was false
+      cfg.readable = false;
       cfg.invert = true;
       cfg.rgb_order = false;
       cfg.dlen_16bit = false;
-      cfg.bus_shared = true;  // was false something to do with SD?
+      cfg.bus_shared = true;
 
       _panel_instance.config(cfg);
     }
@@ -335,9 +342,22 @@ void lvgl_log(const char *buf) {
 }
 #endif
 
-/* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
+
+// #define DEBUG_TOUCH
+// #define USE_DMA
+#define USE_DOUBLE
+#define USE_PSRAM
+
+/* Declare buffer for part of screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
 #define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
-static uint8_t buf1[TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL];
+#if !defined(USE_PSRAM) || defined(USE_DMA)
+#define DRAW_BUFFER_SIZE (TFT_WIDTH * TFT_HEIGHT / 20 * BYTES_PER_PIXEL)
+#else
+#define DRAW_BUFFER_SIZE (TFT_WIDTH * TFT_HEIGHT * BYTES_PER_PIXEL)
+#endif
+static uint8_t *buf1 = NULL;
+static uint8_t *buf2 = NULL;
+static bool has_dma = false;
 
 /* Display flushing */
 void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -350,9 +370,31 @@ void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   lv_disp_flush_ready(disp);
 }
 
-#include "debug.h"
+static int o_x = 0, o_y = 0, o_w = 0, o_h = 0;
 
-#define DEBUG_TOUCH 1
+void display_flush_dma(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
+    const uint32_t w = (area->x2 - area->x1 + 1);
+    const uint32_t h = (area->y2 - area->y1 + 1);
+    auto _mm = millis();
+
+    if (tft.getStartCount() == 0) {
+      tft.startWrite();
+    }
+
+    if (area->x1 != o_x || area->y1 != o_y || w != o_w || h != o_h) {
+      tft.setAddrWindow(area->x1, area->y1, w, h);
+    }
+
+    tft.pushImageDMA(area->x1, area->y1, w, h, (lgfx::rgb565_t *) px_map);
+    tft.endWrite();
+    
+    while (tft.dmaBusy()) {
+      tft.waitDMA();
+    }
+    lv_disp_flush_ready(disp);
+    auto _mo = millis();
+    //LOGI(TAG, "DMA: %d ms", _mo - _mm);
+}
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   uint16_t touchX, touchY;
@@ -373,8 +415,56 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   }
 }
 
+extern void ram_usage();
+
+void display_alloc() {
+  ram_usage();
+
+  const size_t buffer_size = DRAW_BUFFER_SIZE;
+  LOGI(TAG, "PRE: Allocating %d buffer (%d x %d @ %d bytes)", buffer_size, TFT_WIDTH, TFT_HEIGHT, BYTES_PER_PIXEL);
+
+  #ifdef USE_DMA
+  buf1 = (uint8_t *) heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+  #ifdef USE_DOUBLE
+  buf2 = (uint8_t *) heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+  #endif
+  has_dma = true;
+  #else
+  #ifdef USE_PSRAM
+  # define VDO_BUF_CAPS (MALLOC_CAP_SPIRAM)
+  #else
+  # define VDO_BUF_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+  #endif
+
+  buf1 = (uint8_t *) heap_caps_malloc(buffer_size, VDO_BUF_CAPS);
+  #ifdef USE_DOUBLE
+  buf2 = (uint8_t *) heap_caps_malloc(buffer_size, VDO_BUF_CAPS);
+  #endif
+  has_dma = false;
+  #endif
+
+  if (!buf1 || !buf2) {
+    LOGE(TAG, "FAILED: Alloc DMA.");
+    if (!buf1) { buf1 = (uint8_t *) heap_caps_malloc(buffer_size, MALLOC_CAP_8BIT); }
+    #ifdef USE_DOUBLE
+    if (!buf2) { buf2 = (uint8_t *) heap_caps_malloc(buffer_size, MALLOC_CAP_8BIT); }
+    #endif
+    has_dma = false;
+  } else if (!has_dma) {
+    has_dma = false;
+  } else {
+    LOGE(TAG, "DONE: Alloc DMA %p (%d).", buf1, sizeof(buf1));
+    has_dma = true;
+  }
+
+  ram_usage();
+}
+
 void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with LGFX");
+
+  tft.init();
+  tft.initDMA();
 
   tft.begin();
   tft.setRotation(1);
@@ -390,9 +480,18 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   LOGI(TAG, "DISPLAY SETUP WT32-SC01-PLUS with LGFX");
 
   /* Set display buffer for display. */
-  lv_display_set_buffers(disp, buf1, NULL, sizeof(buf1),
-                         LV_DISPLAY_RENDER_MODE_PARTIAL);
-  lv_display_set_flush_cb(disp, display_flush);
+  if (!has_dma) {
+    LOGE(TAG, "FAILED: Alloc DMA.");
+    lv_display_set_buffers(disp, buf1, buf2, DRAW_BUFFER_SIZE,
+                          LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(disp, display_flush);
+  } else {
+    lv_display_set_buffers(disp, buf1, buf2, DRAW_BUFFER_SIZE,
+                          LV_DISPLAY_RENDER_MODE_PARTIAL);
+    LOGE(TAG, "DONE: Set DMA Buffers.");
+    lv_display_set_flush_cb(disp, display_flush_dma);
+    LOGE(TAG, "DONE: Set DMA Flush.");
+  }
 
   /*Initialize the input device driver*/
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);

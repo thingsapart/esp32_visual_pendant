@@ -18,6 +18,37 @@
 
 static const char *TAG = "mcu_esp32";
 
+void ram_usage() {
+    // --- Internal SRAM ---
+    size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t internal_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    Serial.printf("Internal SRAM:\n");
+    Serial.printf("  Total: %u bytes\n", internal_total);
+    Serial.printf("  Free: %u bytes\n", internal_free);
+    Serial.printf("  Largest Free Block: %u bytes\n", internal_largest_free);
+
+    // --- PSRAM ---
+    // Check if PSRAM is enabled in the config
+#if CONFIG_SPIRAM
+    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    if (psram_total > 0) {
+        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t psram_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        Serial.printf("PSRAM (SPIRAM):\n");
+        Serial.printf("  Total: %u bytes\n", psram_total);
+        Serial.printf("  Free: %u bytes\n", psram_free);
+        Serial.printf("  Largest Free Block: %u bytes\n", psram_largest_free);
+    } else {
+        Serial.println("PSRAM: Not available or size is 0.");
+    }
+#else
+    Serial.println("PSRAM: Not enabled in menuconfig/sdkconfig.");
+#endif
+    Serial.println("-------------------");
+    Serial.flush();
+}
+
 #ifdef HAS_CORE_DUMP
 
 void print_reset_reason() {

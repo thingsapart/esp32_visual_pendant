@@ -11,6 +11,9 @@ void mcu_startup();
 
 #include "lvgl.h"
 
+// Allocate Display buffers, called early to avoid memory fragmentation to fit larger bufs.
+void display_alloc();
+
 // Called to initialize the display and main input device.
 void display_setup(lv_display_t *disp, lv_indev_t *indev);
 

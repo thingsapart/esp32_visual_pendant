@@ -6,6 +6,7 @@ src/main/main.cpp
 src/tasks/*.c
 src/ui/*.c
 src/ui/*.h
+src/ui/components/*
 src/debug.h
 lvgl_ui/docs/data_binding.md
 platformio.ini

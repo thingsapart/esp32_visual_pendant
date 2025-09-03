@@ -25,6 +25,8 @@ static const char *TAG = "ESP32_CNC_HMI";
 #include "tasks/machine_send_task.h"
 #include "tasks/machine_task.h"
 
+extern void ram_usage();
+
 static bool uiMode = false;
 void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   /*
@@ -291,40 +293,9 @@ TaskHandle_t machine_dwc_task_handle = NULL;
 TaskHandle_t machine_send_task_handle = NULL;
 QueueHandle_t machine_send_queue = NULL;
 
-void ram_usage() {
-    // --- Internal SRAM ---
-    size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
-    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t internal_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    Serial.printf("Internal SRAM:\n");
-    Serial.printf("  Total: %u bytes\n", internal_total);
-    Serial.printf("  Free: %u bytes\n", internal_free);
-    Serial.printf("  Largest Free Block: %u bytes\n", internal_largest_free);
-
-    // --- PSRAM ---
-    // Check if PSRAM is enabled in the config
-#if CONFIG_SPIRAM
-    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
-    if (psram_total > 0) {
-        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        size_t psram_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-        Serial.printf("PSRAM (SPIRAM):\n");
-        Serial.printf("  Total: %u bytes\n", psram_total);
-        Serial.printf("  Free: %u bytes\n", psram_free);
-        Serial.printf("  Largest Free Block: %u bytes\n", psram_largest_free);
-    } else {
-        Serial.println("PSRAM: Not available or size is 0.");
-    }
-#else
-    Serial.println("PSRAM: Not enabled in menuconfig/sdkconfig.");
-#endif
-    Serial.println("-------------------");
-    Serial.flush();
-
-}
-
 void init_lvgl() {
   LOGI(TAG, "LV_INIT");
+
   lv_init();
 
   LOGI(TAG, "LV_INIT DISPLAY");
@@ -359,6 +330,8 @@ void setup() {
 
   mcu_setup();
   mcu_startup();
+
+  display_alloc();
 
   LOGI(TAG, "Loop task stack size high: %d\n",
        uxTaskGetStackHighWaterMark(NULL));
@@ -423,12 +396,13 @@ void setup() {
       NULL,   // Task handle (optional, can be used to control the
               // task)
       0);
+  LOGI(TAG, "DONE: Tick Task Pinned...\n");
 #elif defined(ESP32_HW)
   esp_register_freertos_tick_hook_for_cpu(&lv_tick_task_esp, 0);
+  LOGI(TAG, "DONE: Tick Task...\n");
 #endif
 #endif
 
-  LOGI(TAG, "DONE: Tick Task...\n");
   ram_usage();
 
 #ifdef DWC_MACHINE_MODE

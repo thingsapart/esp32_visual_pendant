@@ -46,6 +46,7 @@ typedef struct {
   // Dirty flags are set by machine callbacks (in machine thread)
   // and are processed by interface_tick (in UI thread).
   volatile uint32_t dirty_flags;
+  lv_obj_t* probing_wizard;
 } interface_t;
 
 /**
@@ -67,7 +68,7 @@ void interface_init(interface_t* interface, machine_interface_t* machine);
  *
  * This function is called periodically from the main LVGL task loop. It's used
  * to update UI elements that are not driven by machine state events, such as
- * the global 'time' variable used for animations.
+ * the global 'time' variable for animations.
  *
  * @param interface A pointer to the initialized interface_t structure.
  */

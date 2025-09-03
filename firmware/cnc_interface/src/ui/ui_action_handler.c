@@ -1,5 +1,5 @@
 #define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
-#include "ui_action_handler.h"
+#include "ui/ui_action_handler.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +7,8 @@
 #include "debug.h"
 #include "lvgl_ui.h"  // For data_binding functions
 #include "machine/machine_interface.h"
+#include "ui/components/lv_probing_wizard.h"
+
 
 static const char* TAG = "ui_action_handler";
 
@@ -20,6 +22,39 @@ static void ui_action_handler(const char* action_name, binding_value_t value,
                               void* user_data) {
   interface_t* interface = (interface_t*)user_data;
   machine_interface_t* machine = interface->machine;
+
+  if (strncmp(action_name, "probe_start_", 12) == 0) {
+      lv_obj_t* selection_view = obj_registry_get("probe_selection_view");
+      lv_obj_t* wizard_container = obj_registry_get("probe_wizard_view_container");
+      
+      if (!selection_view || !wizard_container || !interface->probing_wizard) {
+          return;
+      }
+      
+      const char* type = action_name + 12;
+      
+      if (strcmp(type, "rect_pocket") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_RECTANGLE, true);
+      } else if (strcmp(type, "rect_outside") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
+      } else if (strcmp(type, "circ_bore") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_CIRCLE, true);
+      } else if (strcmp(type, "circ_boss") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_CIRCLE, false);
+      } else if (strcmp(type, "corner_inside") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_CORNER, true);
+      } else if (strcmp(type, "corner_outside") == 0) {
+          lv_probing_wizard_set_mode(interface->probing_wizard, LV_PROBING_WIZARD_MODE_CORNER, false);
+      } else {
+          return; // Unknown probe type
+      }
+
+      lv_obj_add_flag(selection_view, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
+      
+      return; // Action handled
+  }
+
 
   LOGI(TAG, "action '%s'.", action_name);
   // --- Special Case: Homing Dialog Response ---

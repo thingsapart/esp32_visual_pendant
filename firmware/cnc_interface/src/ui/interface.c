@@ -7,6 +7,10 @@
 #include "lvgl_ui.h"
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
+#include "ui/components/lv_probing_wizard.h"
+#include "esp_log.h"
+
+static const char *TAG_INT = "UI_INTERFACE";
 
 #ifdef DWC_MACHINE_MODE
 #include "config/dwc_settings.h"
@@ -98,6 +102,18 @@ static const char* machine_status_to_mode_string(machine_status_t status) {
   }
 }
 
+static void probing_wizard_event_handler(lv_event_t* e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_CANCEL) {
+        lv_obj_t* selection_view = obj_registry_get("probe_selection_view");
+        lv_obj_t* wizard_container = obj_registry_get("probe_wizard_view_container");
+        if (selection_view && wizard_container) {
+            lv_obj_add_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(selection_view, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 // --- Public API ---
 
 void interface_init(interface_t* interface, machine_interface_t* machine) {
@@ -106,6 +122,16 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
+
+  // --- Get handle to the probing wizard created by the YAML UI ---
+  interface->probing_wizard = obj_registry_get("probing_wizard");
+  if (interface->probing_wizard) {
+      ESP_LOGI(TAG_INT, "Successfully found probing_wizard widget in registry: %p", interface->probing_wizard);
+      lv_obj_add_event_cb(interface->probing_wizard, probing_wizard_event_handler, LV_EVENT_ALL, interface);
+  } else {
+      ESP_LOGW(TAG_INT, "Failed to find probing_wizard widget in registry!");
+  }
+
 
   ui_action_handler_init(interface);
 
