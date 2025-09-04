@@ -1,3 +1,5 @@
+#include "debug.h"
+
 #include "ui/interface.h"
 
 #include <math.h>
@@ -8,7 +10,7 @@
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
 #include "ui/components/lv_probing_wizard.h"
-#include "esp_log.h"
+#include "ui/components/lv_probing_wizard_stubs.h"
 
 static const char *TAG_INT = "UI_INTERFACE";
 
@@ -107,6 +109,7 @@ static void probing_wizard_event_handler(lv_event_t* e) {
     if (code == LV_EVENT_CANCEL) {
         lv_obj_t* selection_view = obj_registry_get("probe_selection_view");
         lv_obj_t* wizard_container = obj_registry_get("probe_wizard_view_container");
+
         if (selection_view && wizard_container) {
             lv_obj_add_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(selection_view, LV_OBJ_FLAG_HIDDEN);
@@ -126,10 +129,10 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
   // --- Get handle to the probing wizard created by the YAML UI ---
   interface->probing_wizard = obj_registry_get("probing_wizard");
   if (interface->probing_wizard) {
-      ESP_LOGI(TAG_INT, "Successfully found probing_wizard widget in registry: %p", interface->probing_wizard);
+      LOGI(TAG_INT, "Successfully found probing_wizard widget in registry: %p", interface->probing_wizard);
       lv_obj_add_event_cb(interface->probing_wizard, probing_wizard_event_handler, LV_EVENT_ALL, interface);
   } else {
-      ESP_LOGW(TAG_INT, "Failed to find probing_wizard widget in registry!");
+      LOGW(TAG_INT, "Failed to find probing_wizard widget in registry!");
   }
 
 
@@ -179,6 +182,11 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
     }
   }
 #endif
+
+  lv_obj_t* wizard = obj_registry_get("probing_wizard");
+  if (wizard) {
+    lv_probing_wizard_register_stub_callbacks(wizard);
+  }
 }
 
 void interface_tick(interface_t* interface) {

@@ -288,7 +288,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_column(tileview_30, 0, 0);
     lv_obj_set_scrollbar_mode(tileview_30, LV_SCROLLBAR_MODE_ACTIVE);
     // unnamed: obj_31 (obj)
-    lv_obj_t* obj_31 = lv_tileview_add_tile(tileview_30, 0, 0, LV_DIR_RIGHT);
+    lv_obj_t* obj_31 = lv_tileview_add_tile(tileview_30, 0, 0, LV_DIR_BOTTOM);
 
     lv_obj_add_style(obj_31, container_7, 0);
     // main: main_32 (obj)
@@ -1258,7 +1258,7 @@ void create_ui(lv_obj_t* parent) {
 
 
     // unnamed: obj_133 (obj)
-    lv_obj_t* obj_133 = lv_tileview_add_tile(tileview_30, 1, 0, 3);
+    lv_obj_t* obj_133 = lv_tileview_add_tile(tileview_30, 0, 1, 12);
 
     lv_obj_add_style(obj_133, container_7, 0);
     // unnamed: obj_134 (obj)
@@ -1908,8 +1908,10 @@ void create_ui(lv_obj_t* parent) {
 
 
 
+
+
     // unnamed: obj_215 (obj)
-    lv_obj_t* obj_215 = lv_tileview_add_tile(tileview_30, 2, 0, LV_DIR_LEFT);
+    lv_obj_t* obj_215 = lv_tileview_add_tile(tileview_30, 0, 2, LV_DIR_TOP);
 
     lv_obj_add_style(obj_215, container_transp_8, 0);
     lv_obj_add_style(obj_215, bg_gradient_10, 0);
@@ -1919,6 +1921,9 @@ void create_ui(lv_obj_t* parent) {
 
     obj_registry_add("probing_wizard", probing_wizard_216);
     lv_obj_set_style_size(probing_wizard_216, lv_pct(100), lv_pct(100), 0);
-    lv_probing_wizard_set_mode(probing_wizard_216, LV_PROBING_WIZARD_MODE_CIRCLE, true);
+    lv_probing_wizard_set_mode(probing_wizard_216, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
     lv_probing_wizard_set_active_step(probing_wizard_216, 0);
+
+
+
 }

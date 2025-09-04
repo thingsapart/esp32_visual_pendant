@@ -131,6 +131,8 @@
         "lv_draw_ppa_private.h": "c",
         "unordered_set": "cpp",
         "ranges": "cpp",
-        "text_encoding": "cpp"
+        "text_encoding": "cpp",
+        "lv_probing_wizard_c": "cpp",
+        "lv_probing_wizard.h": "c"
     }
 }

@@ -42,6 +42,7 @@ typedef enum {
  * @brief Specifies which corner to probe in corner probing mode.
  */
 typedef enum {
+    LV_PROBING_CORNER_NONE,
     LV_PROBING_CORNER_FRONT_LEFT,
     LV_PROBING_CORNER_FRONT_RIGHT,
     LV_PROBING_CORNER_BACK_LEFT,
@@ -70,6 +71,7 @@ typedef enum {
  * @brief Defines the type of action for a given step in the probing routine.
  */
 typedef enum {
+    ACTION_AWAIT_START,     /**< Initial state. Shows "Start Probing" button. */
     ACTION_JOG_AND_CONFIRM, /**< User jogs to a position and clicks a confirm button. */
     ACTION_SELECT_CORNER,   /**< User clicks on a corner on the canvas to select it. */
     ACTION_PROBE_POINT,     /**< Triggers an automated XY probing move. */
@@ -106,6 +108,17 @@ typedef lv_probing_wizard_point_float_t (*get_current_jogged_position_cb_t)(void
  */
 typedef void (*execute_probe_cb_t)(lv_obj_t * wizard_obj, const lv_probing_action_t * action);
 
+/**
+ * @brief Callback for the wizard to command the machine to set a new Work Coordinate System origin.
+ * @param wizard_obj Pointer to the wizard object.
+ * @param wcs_index The WCS to set (1 for G54, 2 for G55, etc.).
+ * @param x The new X origin.
+ * @param y The new Y origin.
+ * @param z The new Z origin.
+ * @param apply_z A boolean indicating if the Z origin should be set.
+ */
+typedef void (*set_wcs_origin_cb_t)(lv_obj_t * wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
+
 
 // --- Public Functions ---
 
@@ -132,19 +145,20 @@ void lv_probing_wizard_set_mode(lv_obj_t * obj, lv_probing_wizard_mode_t mode, b
 void lv_probing_wizard_set_corner_type(lv_obj_t * obj, lv_probing_wizard_corner_t corner);
 
 /**
- * @brief Legacy function to satisfy generated UI code. Prefer advance_step.
+ * @brief Manually set the active step of the wizard. Use with caution.
  * @param obj Pointer to the probing wizard object.
  * @param step_index The 0-based index of the step to set.
  */
-void lv_probing_wizard_set_active_step(lv_obj_t * obj, uint8_t step_index);
+void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index);
 
 /**
  * @brief Register the necessary machine handler callbacks with the wizard.
  * @param obj Pointer to the probing wizard object.
  * @param get_pos_cb Function to get current machine position.
  * @param exec_probe_cb Function to execute a probe cycle.
+ * @param set_wcs_cb Function to set a new WCS origin.
  */
-void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb);
+void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb);
 
 /**
  * @brief Function for the machine handler to call after a probe is complete to report the result.
