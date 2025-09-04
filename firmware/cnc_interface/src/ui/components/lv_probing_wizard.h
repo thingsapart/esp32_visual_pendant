@@ -42,7 +42,7 @@ typedef enum {
  * @brief Specifies which corner to probe in corner probing mode.
  */
 typedef enum {
-    LV_PROBING_CORNER_NONE,
+    LV_PROBING_CORNER_NONE = 0,
     LV_PROBING_CORNER_FRONT_LEFT,
     LV_PROBING_CORNER_FRONT_RIGHT,
     LV_PROBING_CORNER_BACK_LEFT,
@@ -111,7 +111,7 @@ typedef void (*execute_probe_cb_t)(lv_obj_t * wizard_obj, const lv_probing_actio
 /**
  * @brief Callback for the wizard to command the machine to set a new Work Coordinate System origin.
  * @param wizard_obj Pointer to the wizard object.
- * @param wcs_index The WCS to set (1 for G54, 2 for G55, etc.).
+ * @param wcs_index The WCS to set (e.g., 2 for G55, 3 for G56, etc.).
  * @param x The new X origin.
  * @param y The new Y origin.
  * @param z The new Z origin.
@@ -170,6 +170,15 @@ void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_pos
 void lv_probing_wizard_report_probe_result(lv_obj_t * obj, uint8_t probe_index, float x, float y);
 
 /**
+ * @brief Function for the machine handler to call after a full routine (e.g. circle find) to report the final result.
+ * This sets the final calculated result and marks it as valid.
+ * @param obj Pointer to the probing wizard object.
+ * @param x The final calculated X coordinate.
+ * @param y The final calculated Y coordinate.
+ */
+void lv_probing_wizard_report_final_result(lv_obj_t * obj, float x, float y);
+
+/**
  * @brief Function for the machine handler to call to set the measured Z-top of the workpiece.
  * @param obj Pointer to the probing wizard object.
  * @param z_top The measured Z coordinate.
@@ -202,6 +211,27 @@ float lv_probing_wizard_get_z_top(lv_obj_t * obj);
  * @return A point containing the calculated center coordinates. Returns {0,0} if result is not yet valid.
  */
 lv_probing_wizard_point_float_t lv_probing_wizard_get_result(lv_obj_t * obj);
+
+/**
+ * @brief Gets the current probing mode.
+ * @param obj Pointer to the probing wizard object.
+ * @return The current lv_probing_wizard_mode_t.
+ */
+lv_probing_wizard_mode_t lv_probing_wizard_get_mode(lv_obj_t * obj);
+
+/**
+ * @brief Gets the current probing variant (inside/outside).
+ * @param obj Pointer to the probing wizard object.
+ * @return True if probing an internal feature, false otherwise.
+ */
+bool lv_probing_wizard_get_is_inside(lv_obj_t * obj);
+
+/**
+ * @brief Gets the currently selected corner for corner probing.
+ * @param obj Pointer to the probing wizard object.
+ * @return The currently selected lv_probing_wizard_corner_t.
+ */
+lv_probing_wizard_corner_t lv_probing_wizard_get_corner_type(lv_obj_t * obj);
 
 
 #ifdef __cplusplus
