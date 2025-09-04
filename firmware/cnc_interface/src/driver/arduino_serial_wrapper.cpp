@@ -232,23 +232,23 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
 #if defined(ESP32_HW)
   if (uart_num == -1 && rx_pin == -1) {  // Standard Serial (usually UART0)
     serial_stream = &Serial;
-    is_hw = false;  // Serial is typically HardwareSerial
-    // Check if Serial was already begun externally
-    if (!Serial) {  // Heuristic: Check if Serial object is valid (might not be
-                    // perfect)
-                    // If Serial.begin() wasn't called, call it now.
-      // Note: Standard Serial pins might be fixed or configured elsewhere.
-      // Using provided pins might conflict if they differ from default
-      // USB/UART0 pins. Be cautious when re-initializing Serial.
-      // Serial.begin(baud, config, rx_pin, tx_pin);
-      Serial.setRxBufferSize(RING_BUFFER_SIZE /
-                             2);  // Increase buffer if possible
-      Serial.begin(baud);
-      LOGI(TAG, "Standard Serial initialized internally.");
+    is_hw = false;  // Serial is typically not HardwareSerial in this wrapper's logic
+    
+    // Check if Serial is connected. For ESP32-S3 CDC, this avoids hanging
+    // if the serial monitor isn't open. We wait for a short period.
+    unsigned long start_time = millis();
+    while (!Serial && (millis() - start_time < 500)) {
+        delay(10); // Wait up to 500ms
+    }
+
+    // Now, check if Serial was already begun externally or if it became available.
+    // If it's still not available, we can begin it, but it might not be usable.
+    if (!Serial) { 
+        LOGI(TAG, "Standard Serial not connected, initializing anyway.");
+        Serial.setRxBufferSize(RING_BUFFER_SIZE / 2);
+        Serial.begin(baud);
     } else {
-      LOGW(TAG, "Standard Serial already initialized externally.");
-      // Consider if baud/config/pins need checking/adjusting - potentially
-      // risky.
+        LOGI(TAG, "Standard Serial already initialized or connected.");
     }
   } else {  // HardwareSerial UART 1 or 2 etc.
     HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
@@ -265,7 +265,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
     serial_stream = hw_serial;
     is_hw = true;
     owns_stream = true;  // We created it, we own it.
-    LOGE(TAG, "HardwareSerial UART %d initialized.", uart_num);
+    LOGI(TAG, "HardwareSerial UART %d initialized.", uart_num);
   }
 #else  // Non-ESP32 (e.g., RRF Sim)
   if (uart_num == RRF_SIM_UART_NUM) {
@@ -315,6 +315,10 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   if (is_hw) {
     HardwareSerial *hw_serial = static_cast<HardwareSerial *>(serial_stream);
     // Pass port_data as the argument to the callback
+    if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
+        g_isr_port_data[uart_num] = port_data;
+    }
+
     if (uart_num == 0) {
       hw_serial->onReceive(onReceive0, false);
       LOGI(TAG, "OnReceive 0 %p", port_data);
@@ -503,15 +507,15 @@ void add_standard_serial() {
   }
   memset(port_data, 0, sizeof(serial_port_data_t));
 
-  /*if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
+  if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
       LOGE(TAG,  "Failed to allocate ring buffer for standard serial");
       delete port_data;
       return;
-  }*/
+  }
 
   port_data->stream = serial_stream;
   port_data->uart_num = uart_num;
-  port_data->is_hw_serial = false;  // Assume standard Serial is HardwareSerial
+  port_data->is_hw_serial = false;  // Assume standard Serial is not HardwareSerial
   port_data->owns_stream = false;   // We don't own the global Serial object
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
@@ -559,8 +563,10 @@ serial_handle_t get_serial_handle(int uart_num) {
     return it->second;
   }
 #ifdef ESP32_HW
-  Serial.write("get_serial_handle: Handle for UART not found: ");
-  Serial.write(uart_num);
+  if (Serial) {
+      String msg = "get_serial_handle: Handle for UART not found: " + String(uart_num);
+      Serial.println(msg);
+  }
 #endif
   return NULL;
 }
@@ -574,8 +580,10 @@ void default_serial_write(const uint8_t *buf, size_t len) {
     // Fallback if standard serial wasn't initialized/added
     // printf("%.*s", (int)len, (const char *)buf);
 #ifdef ESP32_HW
-    Serial.write("Unable to find standard serial");
-    Serial.flush();
+    if (Serial) {
+        Serial.write("Unable to find standard serial");
+        Serial.flush();
+    }
 #endif
     //_d(0, "default_serial_write: Standard serial handle not found, writing to
     //"

@@ -41,9 +41,7 @@ bool wifi_manager_connect(const char* ssid, const char* password,
       WiFi.disconnect();
       return false;
     }
-    delay(500);
-    // Let's not spam the log, a single dot is fine.
-    // LOGI(TAG, ".");
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 
   LOGI(TAG, "Connected! IP Address: %s", WiFi.localIP().toString().c_str());
@@ -95,7 +93,7 @@ bool wifi_manager_resolve_host(const char* host, char* ip_buffer,
       ip_buffer[0] = '\0';
       return false;
     }
-    delay(50);  // Don't spinlock
+    vTaskDelay(pdMS_TO_TICKS(50));  // Don't spinlock
   }
 
   LOGE(TAG, "MDNS query for '%s' timed out.", host);

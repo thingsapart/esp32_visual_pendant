@@ -17,46 +17,41 @@ static const char * TAG = "probing-wizard";
 #define PROBING_WIZARD_DASH_LINE_LEN_PCT 25 // As a percentage of min(width, height)
 #define PROBING_WIZARD_DASH_LINE_WIDTH 2
 #define PROBING_WIZARD_PAD_PCT -5 // Additional padding percentage
-#define CIRCULAR_PROBE_DASHED_LINES 1 // Emulate dashed lines for circle probe, as LVGL only supports horiz/vert dashed lines
 
 #define MAX_SETUP_POINTS 2
 #define MAX_PROBE_POINTS 4
-
-// --- "Persistent" Storage for Last Probe Result ---
-// In a real application, this should be saved to and loaded from NVS (e.g., EEPROM, Flash).
-// For this example, we use static variables to simulate persistence across wizard instances.
-static probe_point_t last_probe_result = { .x = 0.0f, .y = 0.0f, .is_set = false };
-static float last_probe_z = 0.0f;
 
 // Helper macros for defining probe actions succinctly
 #define SETUP_PARAM(i) .param = {.setup_point_index = i}
 #define PROBE_PARAM(i) .param = {.probe_index = i}
 
 // --- Probe Routine Definitions ---
-// The first step is ACTION_AWAIT_START. The multiple ACTION_PROBE_POINT steps are
-// consolidated into one to match the single-macro execution model of the handler.
+
 static const lv_probing_action_t rectangle_probe_actions[] = {
-    {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
+    {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Jog to the back-left corner of the probing area.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
     {.instruction_text = "Jog to the front-right corner of the probing area.", .highlight_mask = HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(1)},
-    {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
-    {.instruction_text = "Probing workpiece...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_PROBE_POINT_3 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Probing negative X surface (PX1)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Probing positive X surface (PX2)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(1)},
+    {.instruction_text = "Probing positive Y surface (PY1)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(2)},
+    {.instruction_text = "Probing negative Y surface (PY2)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_3 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(3)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
 
 static const lv_probing_action_t circle_probe_actions[] = {
-    {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
-    {.instruction_text = "Jog roughly to the center of the circle.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
     {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
-    {.instruction_text = "Probing workpiece...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Jog roughly to the center of the circle.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
+    {.instruction_text = "Probing point 1...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Probing point 2...", .highlight_mask = HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(1)},
+    {.instruction_text = "Probing point 3...", .highlight_mask = HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(2)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
 
 static const lv_probing_action_t corner_probe_actions[] = {
-    {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Click on the corner you wish to probe.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_SELECT_CORNER},
     {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
-    {.instruction_text = "Probing corner...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Probing first surface (X)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
+    {.instruction_text = "Probing second surface (Y)...", .highlight_mask = HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(1)},
     {.instruction_text = "Probing complete. Corner is set.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
 
@@ -65,7 +60,7 @@ static const lv_probing_action_t * const probe_routines[] = {
     [LV_PROBING_WIZARD_MODE_CIRCLE] = circle_probe_actions,
     [LV_PROBING_WIZARD_MODE_CORNER] = corner_probe_actions,
 };
-const uint8_t probe_routine_sizes[] = {
+static const uint8_t probe_routine_sizes[] = {
     [LV_PROBING_WIZARD_MODE_RECTANGLE] = sizeof(rectangle_probe_actions) / sizeof(lv_probing_action_t),
     [LV_PROBING_WIZARD_MODE_CIRCLE] = sizeof(circle_probe_actions) / sizeof(lv_probing_action_t),
     [LV_PROBING_WIZARD_MODE_CORNER] = sizeof(corner_probe_actions) / sizeof(lv_probing_action_t),
@@ -82,7 +77,6 @@ typedef struct {
     lv_obj_t * instruction_label;
     lv_obj_t * result_label_x;
     lv_obj_t * result_label_y;
-    lv_obj_t * result_label_z;
 
     // Control Buttons
     lv_obj_t * btn_bar;
@@ -101,14 +95,6 @@ typedef struct {
     lv_obj_t * wcs_btnm;
     lv_obj_t * probe_point_labels[MAX_PROBE_POINTS];
     char probe_point_text[MAX_PROBE_POINTS][32];
-
-    // Last Probe Result Display
-    lv_obj_t * last_result_panel;
-    lv_obj_t * last_result_label_x;
-    lv_obj_t * last_result_label_y;
-    lv_obj_t * last_result_label_z;
-    lv_obj_t * apply_last_xy_btn;
-    lv_obj_t * apply_last_xyz_btn;
 
     lv_probing_wizard_mode_t mode;
     bool is_inside;
@@ -131,7 +117,6 @@ typedef struct {
 
     char result_label_x_text[32];
     char result_label_y_text[32];
-    bool machine_connected;
 } lv_probing_wizard_t;
 
 static void wizard_destructor(lv_event_t * e);
@@ -144,15 +129,11 @@ static void mode_selector_event_cb(lv_event_t * e);
 static void canvas_click_event_cb(lv_event_t * e);
 static void start_btn_event_cb(lv_event_t * e);
 static void apply_btn_event_cb(lv_event_t * e);
-static void apply_last_result_btn_event_cb(lv_event_t * e);
 
 static void update_ui_state(lv_obj_t * obj);
 static void update_progress_panel(lv_probing_wizard_t * wiz);
-static void update_last_result_display(lv_probing_wizard_t * wiz);
-
 
 static void create_mode_selectors(lv_obj_t * parent, lv_probing_wizard_t * wiz);
-static void create_last_result_display(lv_obj_t * parent, lv_probing_wizard_t * wiz);
 static void create_progress_panel(lv_obj_t * parent, lv_probing_wizard_t * wiz);
 static void create_wcs_selector(lv_obj_t * parent, lv_probing_wizard_t * wiz);
 static void create_results_display(lv_obj_t * parent, lv_probing_wizard_t * wiz);
@@ -165,7 +146,7 @@ static void draw_corner_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
 static inline void draw_result_crosshair(lv_layer_t * layer, lv_point_t center, lv_color_t color);
 
 // Helper function to manage object flags
-static void lv_obj_manage_flag(lv_obj_t *obj, lv_obj_flag_t flag, bool on) {
+static void lv_obj_manage_flag(lv_obj_t *obj, int flag, bool on) {
     if (on) {
         lv_obj_add_flag(obj, flag);
     } else {
@@ -184,14 +165,13 @@ static void create_left_panel(lv_obj_t * parent, lv_probing_wizard_t * wiz) {
     lv_obj_set_style_pad_gap(left_panel, 15, 0);
 
     create_mode_selectors(left_panel, wiz);
-    create_last_result_display(left_panel, wiz);
     create_progress_panel(left_panel, wiz);
     create_wcs_selector(left_panel, wiz);
     create_results_display(left_panel, wiz);
 }
 
 static void create_canvas_and_controls(lv_obj_t * parent, lv_probing_wizard_t * wiz) {
-    lv_obj_t* wizard_obj = lv_obj_get_parent(wiz->instruction_label);
+    lv_obj_t* wizard_obj = lv_obj_get_parent(parent);
 
     lv_obj_t * right_panel = lv_obj_create(parent);
     lv_obj_remove_style_all(right_panel);
@@ -218,14 +198,12 @@ static void create_canvas_and_controls(lv_obj_t * parent, lv_probing_wizard_t * 
     lv_obj_set_layout(wiz->btn_bar, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(wiz->btn_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(wiz->btn_bar, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(wiz->btn_bar, 5, 0);
-    lv_obj_clear_flag(wiz->btn_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     // --- Create all buttons, their visibility will be managed ---
     // Start Button
     wiz->start_btn = lv_btn_create(wiz->btn_bar);
-    lv_obj_set_width(wiz->start_btn, LV_PCT(100));
-    lv_obj_add_event_cb(wiz->start_btn, start_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
+    lv_obj_set_width(wiz->start_btn, 150);
+    lv_obj_add_event_cb(wiz->start_btn, start_btn_event_cb, LV_EVENT_ALL, wizard_obj);
     lv_obj_t * start_label = lv_label_create(wiz->start_btn);
     lv_label_set_text(start_label, "Start Probing");
     lv_obj_center(start_label);
@@ -234,26 +212,25 @@ static void create_canvas_and_controls(lv_obj_t * parent, lv_probing_wizard_t * 
     wiz->cancel_btn = lv_btn_create(wiz->btn_bar);
     lv_obj_add_event_cb(wiz->cancel_btn, cancel_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
     lv_obj_t * cancel_label = lv_label_create(wiz->cancel_btn);
-    lv_label_set_text(cancel_label, LV_SYMBOL_CLOSE);
+    lv_label_set_text(cancel_label, "Cancel");
     lv_obj_center(cancel_label);
 
     lv_obj_t* spacer = lv_obj_create(wiz->btn_bar);
     lv_obj_remove_style_all(spacer);
-    lv_obj_set_height(spacer, 10);
-    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_size(spacer, 30, 10);
 
     // Next Button
     wiz->next_btn = lv_btn_create(wiz->btn_bar);
     lv_obj_add_event_cb(wiz->next_btn, next_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
     lv_obj_t * next_label = lv_label_create(wiz->next_btn);
-    lv_label_set_text(next_label, "Next " LV_SYMBOL_RIGHT);
+    lv_label_set_text(next_label, "Next");
     lv_obj_center(next_label);
     
     // Apply XY Button
     wiz->apply_xy_btn = lv_btn_create(wiz->btn_bar);
     lv_obj_add_event_cb(wiz->apply_xy_btn, apply_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
     lv_obj_t* apply_xy_label = lv_label_create(wiz->apply_xy_btn);
-    lv_label_set_text(apply_xy_label, LV_SYMBOL_DOWNLOAD " XY");
+    lv_label_set_text(apply_xy_label, "Apply X/Y");
     lv_obj_center(apply_xy_label);
     lv_obj_set_user_data(wiz->apply_xy_btn, (void*)false); // apply_z = false
 
@@ -261,7 +238,7 @@ static void create_canvas_and_controls(lv_obj_t * parent, lv_probing_wizard_t * 
     wiz->apply_xyz_btn = lv_btn_create(wiz->btn_bar);
     lv_obj_add_event_cb(wiz->apply_xyz_btn, apply_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
     lv_obj_t* apply_xyz_label = lv_label_create(wiz->apply_xyz_btn);
-    lv_label_set_text(apply_xyz_label, LV_SYMBOL_DOWNLOAD " XYZ");
+    lv_label_set_text(apply_xyz_label, "Apply X/Y + Z");
     lv_obj_center(apply_xyz_label);
     lv_obj_set_user_data(wiz->apply_xyz_btn, (void*)true); // apply_z = true
 }
@@ -289,7 +266,7 @@ static void mode_selector_event_cb(lv_event_t * e) {
 }
 
 static void create_mode_selectors(lv_obj_t * parent, lv_probing_wizard_t * wiz) {
-    lv_obj_t* wizard_obj = lv_obj_get_parent(wiz->instruction_label);
+    lv_obj_t* wizard_obj = lv_obj_get_parent(parent);
 
     wiz->mode_select_panel = lv_obj_create(parent);
     lv_obj_set_style_bg_opa(wiz->mode_select_panel, LV_OPA_TRANSP, 0);
@@ -320,50 +297,6 @@ static void create_mode_selectors(lv_obj_t * parent, lv_probing_wizard_t * wiz) 
     lv_obj_set_style_text_font(wiz->variant_btnm, &lv_font_montserrat_14, 0);
     lv_obj_set_style_pad_all(wiz->variant_btnm, 2, 0);
 }
-
-static void create_last_result_display(lv_obj_t * parent, lv_probing_wizard_t * wiz) {
-    lv_obj_t* wizard_obj = lv_obj_get_parent(wiz->instruction_label);
-
-    wiz->last_result_panel = lv_obj_create(parent);
-    lv_obj_remove_style_all(wiz->last_result_panel);
-    lv_obj_set_width(wiz->last_result_panel, lv_pct(100));
-    lv_obj_set_layout(wiz->last_result_panel, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(wiz->last_result_panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_gap(wiz->last_result_panel, 2, 0);
-
-    lv_obj_t* title = lv_label_create(wiz->last_result_panel);
-    lv_label_set_text_static(title, "Last Probe Result");
-    lv_obj_set_style_text_color(title, lv_color_hex(0x888888), 0);
-
-    wiz->last_result_label_x = lv_label_create(wiz->last_result_panel);
-    wiz->last_result_label_y = lv_label_create(wiz->last_result_panel);
-    wiz->last_result_label_z = lv_label_create(wiz->last_result_panel);
-
-    lv_obj_t * btn_cont = lv_obj_create(wiz->last_result_panel);
-    lv_obj_remove_style_all(btn_cont);
-    lv_obj_set_width(btn_cont, lv_pct(100));
-    lv_obj_set_layout(btn_cont, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_top(btn_cont, 5, 0);
-    lv_obj_set_style_pad_gap(btn_cont, 5, 0);
-    
-    wiz->apply_last_xy_btn = lv_btn_create(btn_cont);
-    lv_obj_set_flex_grow(wiz->apply_last_xy_btn, 1);
-    lv_obj_add_event_cb(wiz->apply_last_xy_btn, apply_last_result_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
-    lv_obj_set_user_data(wiz->apply_last_xy_btn, (void*)false);
-    lv_obj_t* apply_last_xy_label = lv_label_create(wiz->apply_last_xy_btn);
-    lv_label_set_text_static(apply_last_xy_label, LV_SYMBOL_DOWNLOAD " XY");
-    lv_obj_center(apply_last_xy_label);
-
-    wiz->apply_last_xyz_btn = lv_btn_create(btn_cont);
-    lv_obj_set_flex_grow(wiz->apply_last_xyz_btn, 1);
-    lv_obj_add_event_cb(wiz->apply_last_xyz_btn, apply_last_result_btn_event_cb, LV_EVENT_CLICKED, wizard_obj);
-    lv_obj_set_user_data(wiz->apply_last_xyz_btn, (void*)true);
-    lv_obj_t* apply_last_xyz_label = lv_label_create(wiz->apply_last_xyz_btn);
-    lv_label_set_text_static(apply_last_xyz_label, LV_SYMBOL_DOWNLOAD " XYZ");
-    lv_obj_center(apply_last_xyz_label);
-}
-
 
 static void create_progress_panel(lv_obj_t * parent, lv_probing_wizard_t * wiz) {
     wiz->progress_panel = lv_obj_create(parent);
@@ -426,13 +359,10 @@ static void create_results_display(lv_obj_t * parent, lv_probing_wizard_t * wiz)
     lv_obj_set_style_text_color(res_label, lv_color_hex(0x888888), 0);
     wiz->result_label_x = lv_label_create(res_cont);
     wiz->result_label_y = lv_label_create(res_cont);
-    wiz->result_label_z = lv_label_create(res_cont);
     lv_obj_set_style_text_font(wiz->result_label_x, lv_theme_get_font_large(parent), 0);
     lv_obj_set_style_text_font(wiz->result_label_y, lv_theme_get_font_large(parent), 0);
-    lv_obj_set_style_text_font(wiz->result_label_z, lv_theme_get_font_large(parent), 0);
     lv_obj_set_style_text_color(wiz->result_label_x, lv_color_hex(0x007AFF), 0);
     lv_obj_set_style_text_color(wiz->result_label_y, lv_color_hex(0x007AFF), 0);
-    lv_obj_set_style_text_color(wiz->result_label_z, lv_color_hex(0x007AFF), 0);
 }
 
 lv_obj_t * lv_probing_wizard_create(lv_obj_t * parent) {
@@ -474,8 +404,12 @@ lv_obj_t * lv_probing_wizard_create(lv_obj_t * parent) {
     wiz->mode = LV_PROBING_WIZARD_MODE_RECTANGLE;
     wiz->is_inside = false;
     lv_probing_wizard_set_mode(main_container, wiz->mode, wiz->is_inside);
-    
-    update_last_result_display(wiz);
+
+    // IMPORTANT: Callbacks must be registered for the wizard to function.
+    // For a real application, replace this with your actual machine handlers.
+    // Example: lv_probing_wizard_register_callbacks(main_container, my_get_pos, my_exec_probe, my_set_wcs);
+    //
+    // For demonstration, call `lv_probing_wizard_register_stub_callbacks(wizard_object)` after creation.
 
     return main_container;
 }
@@ -484,22 +418,24 @@ static void reset_and_start_routine(lv_obj_t * obj) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if (!wiz) return;
 
-    LOGV(TAG, "Wizard reset. Active step: 0");
+    LOGV(TAG, "Wizard reset. Changing state to CONFIG. Active step: -1");
 
     for (int i = 0; i < MAX_SETUP_POINTS; i++) wiz->setup_points[i].is_set = false;
     for (int i = 0; i < MAX_PROBE_POINTS; i++) wiz->probe_results[i].is_set = false;
     
     wiz->result_valid = false;
     wiz->z_top_is_set = false;
-    wiz->active_step = -1; // Will be advanced to 0 by set_active_step
+    wiz->active_step = -1;
     wiz->wizard_state = WIZARD_STATE_CONFIG;
     wiz->corner_type = LV_PROBING_CORNER_NONE;
+    wiz->current_action = NULL;
 
     if (wiz->mode_btnm) lv_btnmatrix_set_btn_ctrl(wiz->mode_btnm, (uint16_t)wiz->mode, LV_BTNMATRIX_CTRL_CHECKED);
     if (wiz->variant_btnm) lv_btnmatrix_set_btn_ctrl(wiz->variant_btnm, wiz->is_inside ? 0 : 1, LV_BTNMATRIX_CTRL_CHECKED);
     
-    update_last_result_display(wiz);
-    set_active_step(obj, 0); // Start at the first step (config screen)
+    update_ui_state(obj);
+    lv_label_set_text(wiz->instruction_label, "Select probe mode and variant, then start.");
+    if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 }
 
 void lv_probing_wizard_set_mode(lv_obj_t * obj, lv_probing_wizard_mode_t mode, bool is_inside) {
@@ -525,20 +461,7 @@ void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_pos
     wiz->get_pos_cb = get_pos_cb;
     wiz->exec_probe_cb = exec_probe_cb;
     wiz->set_wcs_cb = set_wcs_cb;
-    LOGV(TAG, "Callbacks registered.");
-}
-
-void lv_probing_wizard_set_connected(lv_obj_t * obj, bool connected) {
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    if (!wiz) return;
-
-    if (wiz->machine_connected != connected) {
-        wiz->machine_connected = connected;
-        // The start button is only visible in config mode.
-        if (wiz->wizard_state == WIZARD_STATE_CONFIG) {
-            update_ui_state(obj);
-        }
-    }
+    LOGV(TAG, "Real callbacks registered.");
 }
 
 void lv_probing_wizard_set_z_top(lv_obj_t * obj, float z_top) {
@@ -560,16 +483,6 @@ void lv_probing_wizard_report_probe_result(lv_obj_t * obj, uint8_t probe_index, 
     calculate_result(obj);
     update_progress_panel(wiz);
 }
-
-void lv_probing_wizard_report_final_result(lv_obj_t * obj, float x, float y) {
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    if(!wiz) return;
-    wiz->result.x = x;
-    wiz->result.y = y;
-    wiz->result_valid = true;
-    LOGV(TAG, "Final result reported: X=%.3f, Y=%.3f", x, y);
-}
-
 
 void lv_probing_wizard_advance_step(lv_obj_t * obj) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
@@ -607,56 +520,26 @@ lv_probing_wizard_point_float_t lv_probing_wizard_get_result(lv_obj_t * obj) {
     return (lv_probing_wizard_point_float_t){0.0f, 0.0f};
 }
 
-lv_probing_wizard_mode_t lv_probing_wizard_get_mode(lv_obj_t * obj) {
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    return wiz->mode;
-}
-
-bool lv_probing_wizard_get_is_inside(lv_obj_t * obj) {
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    return wiz->is_inside;
-}
-
-lv_probing_wizard_corner_t lv_probing_wizard_get_corner_type(lv_obj_t * obj) {
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    return wiz->corner_type;
-}
-
-
 static void update_progress_panel(lv_probing_wizard_t * wiz) {
-    // This function is less relevant for single-macro probing, but kept for potential future use.
-    if (wiz->result_valid) {
-        snprintf(wiz->probe_point_text[0], sizeof(wiz->probe_point_text[0]),
-                 "Result: X: %.3f Y: %.3f", wiz->result.x, wiz->result.y);
-    } else {
-        snprintf(wiz->probe_point_text[0], sizeof(wiz->probe_point_text[0]), "Probing...");
+    for (int i = 0; i < MAX_PROBE_POINTS; i++) {
+        if (wiz->probe_results[i].is_set) {
+            snprintf(wiz->probe_point_text[i], sizeof(wiz->probe_point_text[i]),
+                     "P%d: X: %.2f Y: %.2f", i + 1, wiz->probe_results[i].x, wiz->probe_results[i].y);
+        } else {
+            snprintf(wiz->probe_point_text[i], sizeof(wiz->probe_point_text[i]),
+                     "P%d: - - -", i + 1);
+        }
+        lv_label_set_text(wiz->probe_point_labels[i], wiz->probe_point_text[i]);
+        lv_obj_clear_flag(wiz->probe_point_labels[i], LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(wiz->probe_point_labels[0], wiz->probe_point_text[0]);
-    lv_obj_clear_flag(wiz->probe_point_labels[0], LV_OBJ_FLAG_HIDDEN);
+    
+    uint8_t num_points = 0;
+    if (wiz->mode == LV_PROBING_WIZARD_MODE_RECTANGLE) num_points = 4;
+    else if (wiz->mode == LV_PROBING_WIZARD_MODE_CIRCLE) num_points = 3;
+    else if (wiz->mode == LV_PROBING_WIZARD_MODE_CORNER) num_points = 2;
 
-    for (int i = 1; i < MAX_PROBE_POINTS; i++) {
+    for (int i = num_points; i < MAX_PROBE_POINTS; i++) {
         lv_obj_add_flag(wiz->probe_point_labels[i], LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static void update_last_result_display(lv_probing_wizard_t * wiz) {
-    if (last_probe_result.is_set) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "X: %.3f", last_probe_result.x);
-        lv_label_set_text(wiz->last_result_label_x, buf);
-        snprintf(buf, sizeof(buf), "Y: %.3f", last_probe_result.y);
-        lv_label_set_text(wiz->last_result_label_y, buf);
-        snprintf(buf, sizeof(buf), "Z: %.3f", last_probe_z);
-        lv_label_set_text(wiz->last_result_label_z, buf);
-
-        lv_obj_clear_state(wiz->apply_last_xy_btn, LV_STATE_DISABLED);
-        lv_obj_clear_state(wiz->apply_last_xyz_btn, LV_STATE_DISABLED);
-    } else {
-        lv_label_set_text_static(wiz->last_result_label_x, "X:   - - -");
-        lv_label_set_text_static(wiz->last_result_label_y, "Y:   - - -");
-        lv_label_set_text_static(wiz->last_result_label_z, "Z:   - - -");
-        lv_obj_add_state(wiz->apply_last_xy_btn, LV_STATE_DISABLED);
-        lv_obj_add_state(wiz->apply_last_xyz_btn, LV_STATE_DISABLED);
     }
 }
 
@@ -670,33 +553,22 @@ static void update_ui_state(lv_obj_t * obj) {
 
     // Panels
     lv_obj_manage_flag(wiz->mode_select_panel, LV_OBJ_FLAG_HIDDEN, !config_mode);
-    lv_obj_manage_flag(wiz->last_result_panel, LV_OBJ_FLAG_HIDDEN, !config_mode);
     lv_obj_manage_flag(wiz->progress_panel, LV_OBJ_FLAG_HIDDEN, config_mode);
     lv_obj_manage_flag(wiz->wcs_select_panel, LV_OBJ_FLAG_HIDDEN, !complete_mode);
 
     // Buttons
     lv_obj_manage_flag(wiz->start_btn, LV_OBJ_FLAG_HIDDEN, !config_mode);
     lv_obj_manage_flag(wiz->next_btn, LV_OBJ_FLAG_HIDDEN, !probing_mode);
-    lv_obj_manage_flag(wiz->cancel_btn, LV_OBJ_FLAG_HIDDEN, !(probing_mode || complete_mode));
+    lv_obj_manage_flag(wiz->cancel_btn, LV_OBJ_FLAG_HIDDEN, !probing_mode);
     lv_obj_manage_flag(wiz->apply_xy_btn, LV_OBJ_FLAG_HIDDEN, !complete_mode);
     lv_obj_manage_flag(wiz->apply_xyz_btn, LV_OBJ_FLAG_HIDDEN, !complete_mode);
 
     if (config_mode) {
-        if (wiz->machine_connected) {
-            lv_obj_t * start_label = lv_obj_get_child(wiz->start_btn, 0);
-            lv_label_set_text(start_label, "Start Probing");
-            lv_obj_clear_state(wiz->start_btn, LV_STATE_DISABLED);
-        } else {
-            lv_obj_t * start_label = lv_obj_get_child(wiz->start_btn, 0);
-            lv_label_set_text(start_label, "Machine not connected");
-            lv_obj_add_state(wiz->start_btn, LV_STATE_DISABLED);
-        }
-         lv_label_set_text(wiz->result_label_x, "X:   - - -");
-         lv_label_set_text(wiz->result_label_y, "Y:   - - -");
-         lv_label_set_text(wiz->result_label_z, "Z:   - - -");
+         lv_label_set_text(wiz->result_label_x, "X=   - - -");
+         lv_label_set_text(wiz->result_label_y, "Y=   - - -");
     } else if (complete_mode) {
-        // Show cancel button to allow exiting the results screen
-        lv_obj_clear_flag(wiz->cancel_btn, LV_OBJ_FLAG_HIDDEN);
+        // Hide cancel, keep next hidden
+        lv_obj_add_flag(wiz->cancel_btn, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -715,24 +587,15 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
     lv_label_set_text(wiz->instruction_label, wiz->current_action->instruction_text);
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 
-    snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X:   - - -");
-    snprintf(wiz->result_label_y_text, sizeof(wiz->result_label_y_text), "Y:   - - -");
+    snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X=   - - -");
+    snprintf(wiz->result_label_y_text, sizeof(wiz->result_label_y_text), "Y=   - - -");
     lv_label_set_text(wiz->result_label_x, wiz->result_label_x_text);
     lv_label_set_text(wiz->result_label_y, wiz->result_label_y_text);
-    lv_label_set_text(wiz->result_label_z, "Z:   - - -");
-
-
-    // Default to enabled, disable as needed
-    lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
     
     switch (wiz->current_action->type) {
-        case ACTION_AWAIT_START:
-            wiz->wizard_state = WIZARD_STATE_CONFIG;
-            update_ui_state(obj);
-            break;
         case ACTION_JOG_AND_CONFIRM:
         case ACTION_MESSAGE:
-            // User must jog then press Next
+            lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
             break;
         case ACTION_SELECT_CORNER:
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED); // Must click canvas
@@ -740,30 +603,24 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
             break;
         case ACTION_PROBE_POINT:
         case ACTION_PROBE_Z_TOP:
-            lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED); // Disabled until probe completes
+            lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
             if (wiz->exec_probe_cb) {
                 LOGV(TAG, "Executing probe callback for action type %d", wiz->current_action->type);
                 wiz->exec_probe_cb(obj, wiz->current_action);
             } else {
-                LOGW(TAG, "Probe callback is NULL, cannot proceed.");
+                LOGV(TAG, "Probe callback is NULL, cannot proceed.");
             }
             break;
         case ACTION_COMPLETE:
             LOGV(TAG, "Reached COMPLETE step. Changing state to COMPLETE.");
             wiz->wizard_state = WIZARD_STATE_COMPLETE;
             update_ui_state(obj);
-            update_progress_panel(wiz);
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
             if (wiz->result_valid) {
-                snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X:   %.3f", wiz->result.x);
-                snprintf(wiz->result_label_y_text, sizeof(wiz->result_label_y_text), "Y:   %.3f", wiz->result.y);
+                snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X=   %.2f", wiz->result.x);
+                snprintf(wiz->result_label_y_text, sizeof(wiz->result_label_y_text), "Y=   %.2f", wiz->result.y);
                 lv_label_set_text(wiz->result_label_x, wiz->result_label_x_text);
                 lv_label_set_text(wiz->result_label_y, wiz->result_label_y_text);
-                if (wiz->z_top_is_set) {
-                    char z_buf[32];
-                    snprintf(z_buf, sizeof(z_buf), "Z:   %.3f", wiz->z_top);
-                    lv_label_set_text(wiz->result_label_z, z_buf);
-                }
             }
             break;
     }
@@ -772,8 +629,11 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
 static void start_btn_event_cb(lv_event_t * e) {
     lv_obj_t * obj = lv_event_get_user_data(e);
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    LOGE(TAG, "WIZ user data %p", wiz);
+    int *p = NULL;
+    *p = 1;
     if (!wiz) {
-        LOGE(TAG, "Start button clicked, but wizard user data is NULL!");
+        LOGE(TAG, "Failed to get wizard user data!");
         return;
     }
 
@@ -792,43 +652,13 @@ static void apply_btn_event_cb(lv_event_t * e) {
     
     bool apply_z = (bool)lv_obj_get_user_data(btn);
     LOGV(TAG, "Apply button clicked. apply_z: %d", apply_z);
-    if (apply_z && !wiz->z_top_is_set) {
-        LOGW(TAG, "Cannot apply Z, not probed.");
-        return;
-    }
+    if (apply_z && !wiz->z_top_is_set) return; // Cannot apply Z if not probed
 
-    // WCS index for G10 P... is 1-based, with G54=1, G55=2, etc.
-    // The btnmatrix index is 0-based for G55. So we add 2.
-    uint8_t wcs_p_val = lv_btnmatrix_get_selected_btn(wiz->wcs_btnm) + 2;
+    uint8_t wcs_index = lv_btnmatrix_get_selected_btn(wiz->wcs_btnm);
     
-    wiz->set_wcs_cb(obj, wcs_p_val, wiz->result.x, wiz->result.y, wiz->z_top, apply_z);
+    wiz->set_wcs_cb(obj, wcs_index + 1, wiz->result.x, wiz->result.y, wiz->z_top, apply_z);
     
-    // Save the new result as the "last probe result" for future use
-    last_probe_result.x = wiz->result.x;
-    last_probe_result.y = wiz->result.y;
-    if (apply_z) {
-        last_probe_z = wiz->z_top;
-    }
-    last_probe_result.is_set = true;
-    LOGV(TAG, "Saved last probe result: X=%.3f Y=%.3f Z=%.3f", last_probe_result.x, last_probe_result.y, last_probe_z);
-    
-    reset_and_start_routine(obj);
-}
-
-static void apply_last_result_btn_event_cb(lv_event_t * e) {
-    lv_obj_t * btn = lv_event_get_target(e);
-    lv_obj_t * obj = lv_event_get_user_data(e);
-    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    if (!wiz || !last_probe_result.is_set || !wiz->set_wcs_cb) return;
-    
-    bool apply_z = (bool)lv_obj_get_user_data(btn);
-    LOGV(TAG, "Apply last result button clicked. apply_z: %d", apply_z);
-
-    uint8_t wcs_p_val = lv_btnmatrix_get_selected_btn(wiz->wcs_btnm) + 2;
-    
-    wiz->set_wcs_cb(obj, wcs_p_val, last_probe_result.x, last_probe_result.y, last_probe_z, apply_z);
-    
-    // Applying the old result doesn't change it, so no save. Just reset.
+    // Reset after applying
     reset_and_start_routine(obj);
 }
 
@@ -869,16 +699,41 @@ static void wizard_destructor(lv_event_t * e) {
 }
 
 static void calculate_result(lv_obj_t* obj) {
-    // This function is no longer used to calculate the final result, as that comes
-    // directly from the machine handler. It's kept in case intermediate calculations
-    // for display purposes are ever needed.
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if(!wiz) return;
+
+    wiz->result_valid = false;
+    switch (wiz->mode) {
+        case LV_PROBING_WIZARD_MODE_RECTANGLE:
+            if (wiz->probe_results[0].is_set && wiz->probe_results[1].is_set && wiz->probe_results[2].is_set && wiz->probe_results[3].is_set) {
+                wiz->result.x = (wiz->probe_results[0].x + wiz->probe_results[1].x) / 2.0f;
+                wiz->result.y = (wiz->probe_results[2].y + wiz->probe_results[3].y) / 2.0f;
+                wiz->result_valid = true;
+            }
+            break;
+        case LV_PROBING_WIZARD_MODE_CIRCLE:
+            if (wiz->probe_results[0].is_set && wiz->probe_results[1].is_set && wiz->probe_results[2].is_set) {
+                 wiz->result.x = (wiz->probe_results[0].x + wiz->probe_results[1].x + wiz->probe_results[2].x) / 3.0f;
+                 wiz->result.y = (wiz->probe_results[0].y + wiz->probe_results[1].y + wiz->probe_results[2].y) / 3.0f;
+                 wiz->result_valid = true;
+            }
+            break;
+        case LV_PROBING_WIZARD_MODE_CORNER:
+            if (wiz->probe_results[0].is_set && wiz->probe_results[1].is_set) {
+                wiz->result.x = wiz->probe_results[0].x;
+                wiz->result.y = wiz->probe_results[1].y;
+                wiz->result_valid = true;
+            }
+            break;
+    }
+    if(wiz->result_valid) {
+        LOGV(TAG, "Result calculated: X=%.3f, Y=%.3f", wiz->result.x, wiz->result.y);
+    }
 }
 
 /***************************************************
  * DRAWING IMPLEMENTATION
  ***************************************************/
-
-// ... (Drawing implementation remains unchanged) ...
 
 static inline void draw_result_crosshair(lv_layer_t * layer, lv_point_t center, lv_color_t color) {
     lv_draw_line_dsc_t line_dsc;
@@ -920,11 +775,11 @@ static void draw_event_cb(lv_event_t * e) {
 }
 
 static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_area_t * draw_area) {
-    lv_color_t color_active = lv_theme_get_color_primary(wiz->canvas);
+    lv_color_t color_active = lv_color_hex(0xFF9500);
     lv_color_t color_done = lv_color_hex(0x888888);
     lv_color_t color_pending = lv_color_white();
     lv_color_t color_result = lv_color_hex(0x007AFF);
-    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_NONE;
+    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_OUTLINE;
 
     lv_area_t square_area;
     lv_coord_t side = LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area));
@@ -945,19 +800,7 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
          draw_result_crosshair(layer, center, wiz->result_valid ? color_result : color_active);
     }
     
-    // Draw corner highlight points
-    lv_point_t corners[] = { {square_area.x1, square_area.y1}, {square_area.x2, square_area.y1}, {square_area.x1, square_area.y2}, {square_area.x2, square_area.y2} };
-    uint32_t corner_masks[] = { HIGHLIGHT_CORNER_BL, HIGHLIGHT_CORNER_BR, HIGHLIGHT_CORNER_FL, HIGHLIGHT_CORNER_FR };
-    for(int i=0; i<4; i++) {
-        if(mask & corner_masks[i]) {
-            rect_dsc.bg_color = color_active;
-            rect_dsc.bg_opa = LV_OPA_COVER;
-            rect_dsc.border_width = 0;
-            rect_dsc.radius = LV_RADIUS_CIRCLE;
-            lv_area_t point_area = {corners[i].x - 4, corners[i].y - 4, corners[i].x + 4, corners[i].y + 4};
-            lv_draw_rect(layer, &rect_dsc, &point_area);
-        }
-    }
+    if (wiz->wizard_state == WIZARD_STATE_CONFIG) return;
     
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
@@ -965,26 +808,25 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
     line_dsc.dash_width = 6;
     line_dsc.dash_gap = 4;
 
-    lv_point_precise_t points[4] = {
+    lv_point_t points[4] = {
         {square_area.x1, (square_area.y1 + square_area.y2) / 2}, {square_area.x2, (square_area.y1 + square_area.y2) / 2},
         {(square_area.x1 + square_area.x2) / 2, square_area.y2}, {(square_area.x1 + square_area.x2) / 2, square_area.y1},
     };
     int path_len = (side * PROBING_WIZARD_DASH_LINE_LEN_PCT) / 100;
-    lv_point_precise_t path_starts[4] = {
+    lv_point_t path_starts[4] = {
         {points[0].x + (wiz->is_inside ? path_len : -path_len), points[0].y}, {points[1].x + (wiz->is_inside ? -path_len : path_len), points[1].y},
         {points[2].x, points[2].y + (wiz->is_inside ? -path_len : path_len)}, {points[3].x, points[3].y + (wiz->is_inside ? path_len : -path_len)},
     };
     uint32_t highlight_flags[] = {HIGHLIGHT_PROBE_POINT_0, HIGHLIGHT_PROBE_POINT_1, HIGHLIGHT_PROBE_POINT_2, HIGHLIGHT_PROBE_POINT_3};
 
     for(int i=0; i < 4; i++) {
-        lv_color_t current_color = wiz->result_valid ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
+        lv_color_t current_color = wiz->probe_results[i].is_set ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
         line_dsc.color = current_color;
-        line_dsc.p1 = path_starts[i];
-        line_dsc.p2 = points[i];
+        line_dsc.p1.x = path_starts[i].x; line_dsc.p1.y = path_starts[i].y;
+        line_dsc.p2.x = points[i].x; line_dsc.p2.y = points[i].y;
         lv_draw_line(layer, &line_dsc);
         
         rect_dsc.bg_color = current_color;
-        rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.radius = LV_RADIUS_CIRCLE;
         rect_dsc.border_width = 0;
         lv_area_t point_area = {points[i].x - 4, points[i].y - 4, points[i].x + 4, points[i].y + 4};
@@ -993,11 +835,11 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
 }
 
 static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_area_t * draw_area) {
-    lv_color_t color_active = lv_theme_get_color_primary(wiz->canvas);
+    lv_color_t color_active = lv_color_hex(0xFF9500);
     lv_color_t color_done = lv_color_hex(0x888888);
     lv_color_t color_pending = lv_color_white();
     lv_color_t color_result = lv_color_hex(0x007AFF);
-    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_NONE;
+    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_OUTLINE;
 
     lv_draw_arc_dsc_t arc_dsc;
     lv_draw_arc_dsc_init(&arc_dsc);
@@ -1013,20 +855,20 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
     if (wiz->result_valid || (mask & HIGHLIGHT_CENTER)) {
          draw_result_crosshair(layer, center, wiz->result_valid ? color_result : color_active);
     }
+
+    if (wiz->wizard_state == WIZARD_STATE_CONFIG) return;
     
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
     line_dsc.width = PROBING_WIZARD_DASH_LINE_WIDTH;
-#if CIRCULAR_PROBE_DASHED_LINES
     line_dsc.dash_width = 6;
     line_dsc.dash_gap = 4;
-#endif
     
     lv_draw_rect_dsc_t rect_dsc;
     lv_draw_rect_dsc_init(&rect_dsc);
     
     float angles[] = { -90, 150, 30 };
-    lv_point_precise_t points[3];
+    lv_point_t points[3];
     int path_len = (radius * 2 * PROBING_WIZARD_DASH_LINE_LEN_PCT) / 100;
     uint32_t highlight_flags[] = {HIGHLIGHT_PROBE_POINT_0, HIGHLIGHT_PROBE_POINT_1, HIGHLIGHT_PROBE_POINT_2};
 
@@ -1036,64 +878,13 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
         points[i].y = center.y + radius * sinf(rad);
         
         int path_radius = radius + (wiz->is_inside ? -path_len : path_len);
-        lv_point_precise_t path_start = {center.x + path_radius * cosf(rad), center.y + path_radius * sinf(rad)};
+        lv_point_t path_start = {center.x + path_radius * cosf(rad), center.y + path_radius * sinf(rad)};
         
-        lv_color_t current_color = wiz->result_valid ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
+        lv_color_t current_color = wiz->probe_results[i].is_set ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
         line_dsc.color = current_color;
-
-#if CIRCULAR_PROBE_DASHED_LINES
-        if (i == 0) {
-            line_dsc.p1 = path_start;
-            line_dsc.p2 = points[i];
-            lv_draw_line(layer, &line_dsc);
-        } else {
-            // Emulate dashed line since LVGL can't draw them at an angle
-            // Calculate vector from high-precision float coordinates before they are truncated to integers.
-            float start_f_x = center.x + path_radius * cosf(rad);
-            float start_f_y = center.y + path_radius * sinf(rad);
-            float end_f_x = center.x + radius * cosf(rad);
-            float end_f_y = center.y + radius * sinf(rad);
-            float vec_x = end_f_x - start_f_x;
-            float vec_y = end_f_y - start_f_y;
-            float total_len = sqrtf(vec_x * vec_x + vec_y * vec_y);
-
-            if (total_len > 0.01f) {
-                float norm_x = vec_x / total_len;
-                float norm_y = vec_y / total_len;
-
-                float dash_len = line_dsc.dash_width;
-                float gap_len = line_dsc.dash_gap;
-                float pattern_len = dash_len + gap_len;
-
-                lv_draw_line_dsc_t solid_line_dsc = line_dsc;
-                solid_line_dsc.dash_width = 0;
-                solid_line_dsc.dash_gap = 0;
-
-                float current_pos = 0;
-                while (current_pos < total_len) {
-                    solid_line_dsc.p1.x = path_start.x + norm_x * current_pos;
-                    solid_line_dsc.p1.y = path_start.y + norm_y * current_pos;
-
-                    float end_pos = current_pos + dash_len;
-                    if (end_pos > total_len) {
-                        end_pos = total_len;
-                    }
-
-                    solid_line_dsc.p2.x = path_start.x + norm_x * end_pos;
-                    solid_line_dsc.p2.y = path_start.y + norm_y * end_pos;
-                    
-                    lv_draw_line(layer, &solid_line_dsc);
-
-                    current_pos += pattern_len;
-                }
-            }
-        }
-#else
-        // Original behavior: let LVGL try to draw it (will be solid)
-        line_dsc.p1 = path_start;
-        line_dsc.p2 = points[i];
+        line_dsc.p1.x = path_start.x; line_dsc.p1.y = path_start.y;
+        line_dsc.p2.x = points[i].x; line_dsc.p2.y = points[i].y;
         lv_draw_line(layer, &line_dsc);
-#endif
         
         rect_dsc.bg_color = current_color;
         rect_dsc.radius = LV_RADIUS_CIRCLE;
@@ -1104,11 +895,11 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
 }
 
 static void draw_corner_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_area_t * draw_area) {
-    lv_color_t color_active = lv_theme_get_color_primary(wiz->canvas);
+    lv_color_t color_active = lv_color_hex(0xFF9500);
     lv_color_t color_done = lv_color_hex(0x888888);
     lv_color_t color_pending = lv_color_white();
     lv_color_t color_result = lv_color_hex(0x007AFF);
-    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_NONE;
+    uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : probe_routines[LV_PROBING_WIZARD_MODE_CORNER][0].highlight_mask;
 
     if (wiz->corner_type == LV_PROBING_CORNER_NONE) {
         lv_draw_rect_dsc_t rect_dsc;
@@ -1124,39 +915,37 @@ static void draw_corner_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
 
         for(int i=0; i<4; i++) {
             if(mask & corner_masks[i]) {
+                lv_area_t corner_area = {corners[i].x-5, corners[i].y-5, corners[i].x+5, corners[i].y+5};
                 rect_dsc.bg_color = color_active;
-                rect_dsc.bg_opa = LV_OPA_COVER;
                 rect_dsc.border_width = 0;
                 rect_dsc.radius = LV_RADIUS_CIRCLE;
-                lv_area_t corner_area = {corners[i].x-5, corners[i].y-5, corners[i].x+5, corners[i].y+5};
                 lv_draw_rect(layer, &rect_dsc, &corner_area);
             }
         }
         return;
     }
 
-    lv_point_t corner_pt;
-    lv_point_precise_t h_end, v_end;
+    lv_point_t corner_pt, h_end, v_end;
     switch (wiz->corner_type) {
-        case LV_PROBING_CORNER_FRONT_LEFT: corner_pt = (lv_point_t){draw_area->x1, draw_area->y2}; h_end = (lv_point_precise_t){draw_area->x2, draw_area->y2}; v_end = (lv_point_precise_t){draw_area->x1, draw_area->y1}; break;
-        case LV_PROBING_CORNER_FRONT_RIGHT: corner_pt = (lv_point_t){draw_area->x2, draw_area->y2}; h_end = (lv_point_precise_t){draw_area->x1, draw_area->y2}; v_end = (lv_point_precise_t){draw_area->x2, draw_area->y1}; break;
-        case LV_PROBING_CORNER_BACK_LEFT: corner_pt = (lv_point_t){draw_area->x1, draw_area->y1}; h_end = (lv_point_precise_t){draw_area->x2, draw_area->y1}; v_end = (lv_point_precise_t){draw_area->x1, draw_area->y2}; break;
-        case LV_PROBING_CORNER_BACK_RIGHT: default: corner_pt = (lv_point_t){draw_area->x2, draw_area->y1}; h_end = (lv_point_precise_t){draw_area->x1, draw_area->y1}; v_end = (lv_point_precise_t){draw_area->x2, draw_area->y2}; break;
+        case LV_PROBING_CORNER_FRONT_LEFT: corner_pt = (lv_point_t){draw_area->x1, draw_area->y2}; h_end = (lv_point_t){draw_area->x2, draw_area->y2}; v_end = (lv_point_t){draw_area->x1, draw_area->y1}; break;
+        case LV_PROBING_CORNER_FRONT_RIGHT: corner_pt = (lv_point_t){draw_area->x2, draw_area->y2}; h_end = (lv_point_t){draw_area->x1, draw_area->y2}; v_end = (lv_point_t){draw_area->x2, draw_area->y1}; break;
+        case LV_PROBING_CORNER_BACK_LEFT: corner_pt = (lv_point_t){draw_area->x1, draw_area->y1}; h_end = (lv_point_t){draw_area->x2, draw_area->y1}; v_end = (lv_point_t){draw_area->x1, draw_area->y2}; break;
+        case LV_PROBING_CORNER_BACK_RIGHT: default: corner_pt = (lv_point_t){draw_area->x2, draw_area->y1}; h_end = (lv_point_t){draw_area->x1, draw_area->y1}; v_end = (lv_point_t){draw_area->x2, draw_area->y2}; break;
     }
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
     line_dsc.color = (mask & HIGHLIGHT_OUTLINE) ? color_active : color_pending;
     line_dsc.width = 2;
-    line_dsc.p1 = (lv_point_precise_t) { corner_pt.x, corner_pt.y }; line_dsc.p2 = h_end;
+    line_dsc.p1.x = corner_pt.x; line_dsc.p1.y = corner_pt.y; line_dsc.p2.x = h_end.x; line_dsc.p2.y = h_end.y;
     lv_draw_line(layer, &line_dsc);
-    line_dsc.p2 = v_end;
+    line_dsc.p2.x = v_end.x; line_dsc.p2.y = v_end.y;
     lv_draw_line(layer, &line_dsc);
 
     if (wiz->result_valid) {
         draw_result_crosshair(layer, corner_pt, color_result);
     }
-    
+
     line_dsc.width = PROBING_WIZARD_DASH_LINE_WIDTH;
     line_dsc.dash_width = 6; line_dsc.dash_gap = 4;
     lv_draw_rect_dsc_t rect_dsc;
@@ -1167,18 +956,19 @@ static void draw_corner_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
     lv_point_t points[2] = {{corner_pt.x, center_y}, {center_x, corner_pt.y}};
     int path_len = (LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area)) * PROBING_WIZARD_DASH_LINE_LEN_PCT) / 100;
 
-    lv_point_precise_t path_starts[2];
+    lv_point_t path_starts[2];
     int8_t dir_mult = wiz->is_inside ? 1 : -1;
-    path_starts[0] = (lv_point_precise_t){points[0].x + (points[0].x < center_x ? path_len : -path_len) * dir_mult, points[0].y};
-    path_starts[1] = (lv_point_precise_t){points[1].x, points[1].y + (points[1].y < center_y ? path_len : -path_len) * dir_mult};
+    path_starts[0] = (lv_point_t){points[0].x + (points[0].x < center_x ? path_len : -path_len) * dir_mult, points[0].y};
+    path_starts[1] = (lv_point_t){points[1].x, points[1].y + (points[1].y < center_y ? path_len : -path_len) * dir_mult};
+
 
     uint32_t highlight_flags[] = {HIGHLIGHT_PROBE_POINT_0, HIGHLIGHT_PROBE_POINT_1};
 
     for(int i=0; i<2; i++) {
-        lv_color_t current_color = wiz->result_valid ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
+        lv_color_t current_color = wiz->probe_results[i].is_set ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
         line_dsc.color = current_color;
-        line_dsc.p1 = path_starts[i];
-        line_dsc.p2 = (lv_point_precise_t) { points[i].x, points[i].y };
+        line_dsc.p1.x = path_starts[i].x; line_dsc.p1.y = path_starts[i].y;
+        line_dsc.p2.x = points[i].x; line_dsc.p2.y = points[i].y;
         lv_draw_line(layer, &line_dsc);
 
         rect_dsc.bg_color = current_color;
@@ -1200,18 +990,11 @@ static void canvas_click_event_cb(lv_event_t * e) {
     lv_area_t canvas_area;
     lv_obj_get_coords(wiz->canvas, &canvas_area);
 
-    // Use a larger touch area for better usability
-    lv_coord_t touch_area_size = 50; 
-    
-    lv_area_t draw_area = canvas_area;
-    int32_t min_dim = LV_MIN(lv_area_get_width(&canvas_area), lv_area_get_height(&canvas_area));
-    int32_t pad = (min_dim * (PROBING_WIZARD_DASH_LINE_LEN_PCT + PROBING_WIZARD_PAD_PCT)) / 100;
-    lv_area_increase(&draw_area, -pad, -pad);
-
-    lv_area_t bl = {draw_area.x1 - touch_area_size/2, draw_area.y1 - touch_area_size/2, draw_area.x1 + touch_area_size/2, draw_area.y1 + touch_area_size/2};
-    lv_area_t br = {draw_area.x2 - touch_area_size/2, draw_area.y1 - touch_area_size/2, draw_area.x2 + touch_area_size/2, draw_area.y1 + touch_area_size/2};
-    lv_area_t fl = {draw_area.x1 - touch_area_size/2, draw_area.y2 - touch_area_size/2, draw_area.x1 + touch_area_size/2, draw_area.y2 + touch_area_size/2};
-    lv_area_t fr = {draw_area.x2 - touch_area_size/2, draw_area.y2 - touch_area_size/2, draw_area.x2 + touch_area_size/2, draw_area.y2 + touch_area_size/2};
+    lv_coord_t touch_area_size = 40;
+    lv_area_t bl = {canvas_area.x1, canvas_area.y1, canvas_area.x1 + touch_area_size, canvas_area.y1 + touch_area_size};
+    lv_area_t br = {canvas_area.x2 - touch_area_size, canvas_area.y1, canvas_area.x2, canvas_area.y1 + touch_area_size};
+    lv_area_t fl = {canvas_area.x1, canvas_area.y2 - touch_area_size, canvas_area.x1 + touch_area_size, canvas_area.y2};
+    lv_area_t fr = {canvas_area.x2 - touch_area_size, canvas_area.y2 - touch_area_size, canvas_area.x2, canvas_area.y2};
 
     lv_probing_wizard_corner_t corner = wiz->corner_type;
     if(lv_area_is_point_on(&bl, &p, 0)) corner = LV_PROBING_CORNER_BACK_LEFT;

@@ -161,6 +161,13 @@ void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index);
 void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb);
 
 /**
+ * @brief Sets the connection status of the machine, updating the UI accordingly.
+ * @param obj Pointer to the probing wizard object.
+ * @param connected True if the machine is connected, false otherwise.
+ */
+void lv_probing_wizard_set_connected(lv_obj_t * obj, bool connected);
+
+/**
  * @brief Function for the machine handler to call after a probe is complete to report the result.
  * @param obj Pointer to the probing wizard object.
  * @param probe_index The index of the probe point that was measured.

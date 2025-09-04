@@ -19,6 +19,13 @@
 static const char *TAG = "mcu_esp32";
 
 void ram_usage() {
+    // Wait for serial connection with a timeout before printing
+    unsigned long start_time = millis();
+    while (!Serial && (millis() - start_time < 1000)) {
+        delay(10);
+    }
+    if (!Serial) return; // Don't print if not connected
+
     // --- Internal SRAM ---
     size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -52,6 +59,7 @@ void ram_usage() {
 #ifdef HAS_CORE_DUMP
 
 void print_reset_reason() {
+  if (!Serial) return;
   Serial.println("");
   esp_reset_reason_t reason = esp_reset_reason();
   Serial.print("Reset Reason was: ");
@@ -157,6 +165,7 @@ void read_core_dump() {
 #endif
 
 void print_mac_address() {
+  if (!Serial) return;
   uint8_t baseMac[6];
   esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
   if (ret == ESP_OK) {
@@ -170,6 +179,11 @@ void print_mac_address() {
 void mcu_setup() {
 #ifndef USB_UART_PIN_TX
   Serial.begin(115200);
+  // Optional: Wait a very short time for serial, but don't block boot
+  unsigned long start_time = millis();
+  while (!Serial && (millis() - start_time < 500)) {
+    delay(10);
+  }
   add_standard_serial();
 #else
   init_standard_serial(115200, CFG_SERIAL_8N1, USB_UART_PIN_RX,
