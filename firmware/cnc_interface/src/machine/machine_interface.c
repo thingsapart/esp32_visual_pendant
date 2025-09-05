@@ -272,7 +272,8 @@ machine_interface_t *machine_interface_init(machine_interface_t *self,
   self->last_continuous_tick = 0;
 
   self->current_move_axis = AXIS_OFF;
-  self->current_move_step = 1.0;
+  self->current_move_step_xy = 1.0;
+  self->current_move_step_z = 0.1;
 
   return self;
 }
@@ -482,7 +483,13 @@ axis_t machine_interface_step_current_axis(machine_interface_t *self,
   char axis = idx_to_axis(axi);
   LOGI(TAG, "  axis: %c", axis);
 
-  float dist = self->current_move_step * steps;
+  float step_dist;
+  if (axi == 2) {  // AXIS_Z
+    step_dist = self->current_move_step_z;
+  } else {  // AXIS_X or AXIS_Y
+    step_dist = self->current_move_step_xy;
+  }
+  float dist = step_dist * steps;
   LOGI(TAG, ">> MOVE_CURR_AX: %d, %c [%c, %c, %c].\n", axi, axis, axes[0],
        axes[1], axes[2]);
   _default_move_to(self, axis, feed, dist, true);
@@ -730,3 +737,4 @@ add_callback_fn(machine_interface, state_change)
                                                 connected_changed)
                                     add_callback_fn(machine_interface,
                                                     current_move_axis_changed)
+

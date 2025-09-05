@@ -135,7 +135,8 @@ typedef struct machine_interface_t {
   float target_position[3];
   float moving_target_position[3];
   axis_t current_move_axis;
-  float current_move_step;
+  float current_move_step_xy;
+  float current_move_step_z;
   int wcs;
   const char *tool;
   float z_offs;
@@ -331,3 +332,4 @@ add_callback_proto(machine_interface, current_move_axis_changed);
 #endif
 
 #endif  // MACHINE_INTERFACE_H
+

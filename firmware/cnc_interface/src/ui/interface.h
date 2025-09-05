@@ -41,10 +41,6 @@ typedef struct {
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow
 #endif
-
-  // UI-specific state not present in the machine model
-  float jog_step_xy;
-  float jog_step_z;
 } interface_t;
 
 /**

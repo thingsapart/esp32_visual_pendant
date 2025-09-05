@@ -13,9 +13,8 @@
 #include <string.h>
 
 #include "debug.h"
-#include "esp_log.h"
 
-    static const char *TAG = "remote_comms_wrapper";
+static const char *TAG = "remote_comms_wrapper";
 
 static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -194,7 +193,7 @@ bool remote_wrapper_add_peer(const uint8_t *mac_addr) {
   // Add the peer
   esp_err_t res = ESP_OK;
   if ((res = esp_now_add_peer(&peer_info)) != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to add peer %d", res);
+    LOGE(TAG, "Failed to add peer %d", res);
     return false;
   }
   return true;
@@ -241,7 +240,7 @@ bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
   assert(len <= ESP_NOW_MAX_DATA_LEN);
   esp_err_t res = ESP_OK;
   if ((res = esp_now_send(mac_addr, data, len)) != ESP_OK) {
-    ESP_LOGE(TAG, "Error sending ESP-NOW data (%d)", res);
+    LOGE(TAG, "Error sending ESP-NOW data (%d)", res);
     return false;
   }
 

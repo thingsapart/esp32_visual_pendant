@@ -72,12 +72,14 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     machine_interface_set_current_move_axis(machine, AXIS_Z);
   }
 
-  // --- Jog Step Cycling (Managed locally in UI layer) ---
+  // --- Jog Step Cycling ---
   else if (strcmp(action_name, "action.jog.cycle_step_xy") == 0) {
-    interface->jog_step_xy = get_next_jog_step(interface->jog_step_xy);
+    machine->current_move_step_xy =
+        get_next_jog_step(machine->current_move_step_xy);
     interface->dirty_flags |= UI_DIRTY_JOG_STATE;
   } else if (strcmp(action_name, "action.jog.cycle_step_z") == 0) {
-    interface->jog_step_z = get_next_jog_step(interface->jog_step_z);
+    machine->current_move_step_z =
+        get_next_jog_step(machine->current_move_step_z);
     interface->dirty_flags |= UI_DIRTY_JOG_STATE;
   }
 

@@ -102,8 +102,6 @@ static const char *machine_status_to_string(machine_status_t status) {
 void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->machine = machine;
   interface->dirty_flags = UI_DIRTY_ALL;  // Mark all as dirty for initial sync
-  interface->jog_step_xy = 1.0f;
-  interface->jog_step_z = 1.0f;
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
@@ -308,12 +306,12 @@ void interface_tick(interface_t *interface) {
         (binding_value_t){.type = BINDING_TYPE_BOOL,
                           .as.b_val = (current_axis == AXIS_Z)});
 
-    // Update UI with local jog step state
     data_binding_notify_state_changed(
-        "motion.jog.step_xy", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                                .as.f_val = interface->jog_step_xy});
+        "motion.jog.step_xy",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = machine->current_move_step_xy});
     data_binding_notify_state_changed(
         "motion.jog.step_z", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                               .as.f_val = interface->jog_step_z});
+                                               .as.f_val = machine->current_move_step_z});
   }
 }
