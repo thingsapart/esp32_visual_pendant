@@ -487,6 +487,12 @@ void setup() {
                     &machine_send_task_handle, &machine_send_queue,
                     TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 5)) {
     machine.base.gcode_queue = machine_send_queue;
+    // Propagate the queue handle to all child machine interfaces
+    for (size_t i = 0; i < machine.num_machines; ++i) {
+      if (machine.machines[i]) {
+        machine.machines[i]->gcode_queue = machine_send_queue;
+      }
+    }
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "FAIL: Could not create Machine GCode Sending Task: error");

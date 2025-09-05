@@ -1,22 +1,18 @@
-#include "debug.h"
-
 #include "ui/interface.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "debug.h"
 #include "lvgl_ui.h"
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
-#include "ui/components/lv_probing_wizard.h"
-#include "ui/components/lv_probing_wizard_stubs.h"
 
-static const char *TAG_INT = "UI_INTERFACE";
+static const char *TAG = "UI_INTERFACE";
 
 #ifdef DWC_MACHINE_MODE
-#include "config/dwc_settings.h"
-// Global flags from main.cpp to indicate startup connection failure
+// Global flags from main.c to indicate startup connection failure
 extern bool g_dwc_startup_connection_failed;
 extern char g_dwc_startup_host[65];
 #endif
@@ -25,52 +21,49 @@ extern char g_dwc_startup_host[65];
 // These callbacks are executed in the machine thread. They should only
 // set a dirty flag to notify the UI thread that an update is needed.
 
-static void on_machine_state_change(machine_interface_t* machine,
-                                    void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_STATE;
+static void on_machine_state_change(machine_interface_t *machine,
+                                    void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_MACHINE_STATE;
 }
 
-void on_dialogs_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_DIALOGS;
+static void on_dialogs_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_DIALOGS;
 }
 
-static void on_position_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_POS;
+static void on_position_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_POSITION;
 }
 
-static void on_homed_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_HOME;
+static void on_homed_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_HOMING;
 }
 
-static void on_wcs_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_WCS;
+static void on_wcs_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_WCS;
 }
 
-static void on_feed_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_FEED;
+static void on_feed_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |=
+      (UI_DIRTY_FEEDRATE | UI_DIRTY_OVERRIDES);
 }
 
-static void on_spindle_tool_change(machine_interface_t* machine,
-                                   void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_SPINDLES_TOOLS;
+static void on_spindle_tool_change(machine_interface_t *machine,
+                                   void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_SPINDLE;
 }
 
-static void on_sensors_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_SENSORS;
+static void on_connected_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_CONNECTION;
 }
 
-static void on_connected_change(machine_interface_t* machine, void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_CONNECTED;
+static void on_current_move_axis_change(machine_interface_t *machine,
+                                        void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_JOG_STATE;
 }
 
-static void on_current_move_axis_change(machine_interface_t* machine,
-                                        void* user_data) {
-  ((interface_t*)user_data)->dirty_flags |= UI_DIRTY_MOVE_AXIS;
-}
-
-static void on_files_change(machine_interface_t* machine, void* user_data,
-                            const char* path, char** files) {
-  interface_t* interface = (interface_t*)user_data;
+static void on_files_change(machine_interface_t *machine, void *user_data,
+                            const char *path, char **files) {
+  interface_t *interface = (interface_t *)user_data;
   if (strstr(path, "gcode")) {
     interface->dirty_flags |= UI_DIRTY_FILES_GCODES;
   } else if (strstr(path, "macro")) {
@@ -78,13 +71,13 @@ static void on_files_change(machine_interface_t* machine, void* user_data,
   }
 }
 
-// --- Helper Functions ---
-static const char* machine_status_to_mode_string(machine_status_t status) {
+/**
+ * @brief Converts a machine_status_t enum to a human-readable string.
+ */
+static const char *machine_status_to_string(machine_status_t status) {
   switch (status) {
     case MACHINE_STATUS_RUNNING:
-      return "AUTO";
-    case MACHINE_STATUS_SIMULATING:
-      return "SIMULATE";
+      return "RUNNING";
     case MACHINE_STATUS_PAUSED:
     case MACHINE_STATUS_PAUSED_DEC:
     case MACHINE_STATUS_PAUSED_RESUME:
@@ -104,37 +97,21 @@ static const char* machine_status_to_mode_string(machine_status_t status) {
   }
 }
 
-static void probing_wizard_event_handler(lv_event_t* e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CANCEL) {
-        lv_obj_t* selection_view = obj_registry_get("probe_selection_view");
-        lv_obj_t* wizard_container = obj_registry_get("probe_wizard_view_container");
-
-        if (selection_view && wizard_container) {
-            lv_obj_add_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(selection_view, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-}
-
 // --- Public API ---
 
-void interface_init(interface_t* interface, machine_interface_t* machine) {
+void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->machine = machine;
-  interface->dirty_flags = 0xFFFFFFFF;  // Mark all as dirty for initial update
+  interface->dirty_flags = UI_DIRTY_ALL;  // Mark all as dirty for initial sync
+  interface->jog_step_xy = 1.0f;
+  interface->jog_step_z = 1.0f;
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
 
-  // --- Get handle to the probing wizard created by the YAML UI ---
   interface->probing_wizard = obj_registry_get("probing_wizard");
-  if (interface->probing_wizard) {
-      LOGI(TAG_INT, "Successfully found probing_wizard widget in registry: %p", interface->probing_wizard);
-      lv_obj_add_event_cb(interface->probing_wizard, probing_wizard_event_handler, LV_EVENT_ALL, interface);
-  } else {
-      LOGW(TAG_INT, "Failed to find probing_wizard widget in registry!");
+  if (!interface->probing_wizard) {
+    LOGW(TAG, "Failed to find 'probing_wizard' widget in registry!");
   }
-
 
   ui_action_handler_init(interface);
 
@@ -147,8 +124,6 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
   machine_interface_add_feed_changed_cb(machine, interface, on_feed_change);
   machine_interface_add_spindles_tools_changed_cb(machine, interface,
                                                   on_spindle_tool_change);
-  machine_interface_add_sensors_changed_cb(machine, interface,
-                                           on_sensors_change);
   machine_interface_add_dialogs_changed_cb(machine, interface,
                                            on_dialogs_change);
   machine_interface_add_connected_changed_cb(machine, interface,
@@ -161,15 +136,14 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
                                          on_files_change);
 
 #ifdef DWC_MACHINE_MODE
-  // Check if we need to show the setup screen
+  // Check if we need to show the DWC setup screen
   bool needs_config =
       !dwc_settings_are_valid() || g_dwc_startup_connection_failed;
   data_binding_notify_state_changed(
-      "dwc_needs_config",
-      (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = needs_config});
+      "dwc.needs_config", (binding_value_t){.type = BINDING_TYPE_BOOL,
+                                            .as.b_val = needs_config});
   if (needs_config) {
     memset(&interface->setup_settings, 0, sizeof(dwc_settings_t));
-
     ui_start_dwc_setup_flow(interface);
 
     if (g_dwc_startup_connection_failed) {
@@ -177,157 +151,169 @@ void interface_init(interface_t* interface, machine_interface_t* machine) {
       snprintf(error_msg, sizeof(error_msg), "Failed to auto-connect to\n%s",
                g_dwc_startup_host);
       data_binding_notify_state_changed(
-          "dwc_startup_error", (binding_value_t){.type = BINDING_TYPE_STRING,
-                                                 .as.s_val = error_msg});
+          "dwc.startup_error_text",
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = error_msg});
     }
   }
 #endif
-
-  lv_obj_t* wizard = obj_registry_get("probing_wizard");
-  if (wizard) {
-    lv_probing_wizard_register_stub_callbacks(wizard);
-  }
 }
 
-void interface_tick(interface_t* interface) {
+void interface_tick(interface_t *interface) {
   if (interface->dirty_flags == UI_DIRTY_NONE) {
     return;
   }
 
+  // Atomically copy and clear flags
   uint32_t flags_to_process = interface->dirty_flags;
   interface->dirty_flags = UI_DIRTY_NONE;
 
-  machine_interface_t* machine = interface->machine;
-
-  if (!machine) { return; }
-
-  if (flags_to_process & UI_DIRTY_STATE) {
-    data_binding_notify_state_changed(
-        "machine_mode",
-        (binding_value_t){.type = BINDING_TYPE_STRING,
-                          .as.s_val = machine_status_to_mode_string(
-                              machine->machine_status)});
-    data_binding_notify_state_changed(
-        "program_running",
-        (binding_value_t){
-            .type = BINDING_TYPE_BOOL,
-            .as.b_val = (machine->machine_status == MACHINE_STATUS_RUNNING)});
-    data_binding_notify_state_changed(
-        "program_paused",
-        (binding_value_t){
-            .type = BINDING_TYPE_BOOL,
-            .as.b_val = (machine->machine_status == MACHINE_STATUS_PAUSED)});
+  machine_interface_t *machine = interface->machine;
+  if (!machine) {
+    return;
   }
 
-  if (flags_to_process & UI_DIRTY_POS) {
+  // --- Update UI based on dirty flags ---
+
+  if (flags_to_process & UI_DIRTY_CONNECTION) {
     data_binding_notify_state_changed(
-        "display_pos_x", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                           .as.f_val = machine->position[0]});
+        "machine.connection_status",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = machine->is_connected(machine)});
+  }
+
+  if (flags_to_process & UI_DIRTY_MACHINE_STATE) {
     data_binding_notify_state_changed(
-        "display_pos_y", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                           .as.f_val = machine->position[1]});
+        "machine.status_text",
+        (binding_value_t){.type = BINDING_TYPE_STRING,
+                          .as.s_val =
+                              machine_status_to_string(machine->machine_status)});
     data_binding_notify_state_changed(
-        "display_pos_z", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                           .as.f_val = machine->position[2]});
+        "machine.program_is_running",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = (machine->machine_status ==
+                                       MACHINE_STATUS_RUNNING)});
     data_binding_notify_state_changed(
-        "display_wcs_pos_x",
+        "machine.program_is_paused",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = (machine->machine_status ==
+                                       MACHINE_STATUS_PAUSED)});
+  }
+
+  if (flags_to_process & UI_DIRTY_POSITION) {
+    data_binding_notify_state_changed(
+        "motion.position.machine_x",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = machine->position[0]});
+    data_binding_notify_state_changed(
+        "motion.position.machine_y",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = machine->position[1]});
+    data_binding_notify_state_changed(
+        "motion.position.machine_z",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = machine->position[2]});
+    data_binding_notify_state_changed(
+        "motion.position.work_x",
         (binding_value_t){.type = BINDING_TYPE_FLOAT,
                           .as.f_val = machine->wcs_position[0]});
     data_binding_notify_state_changed(
-        "display_wcs_pos_y",
+        "motion.position.work_y",
         (binding_value_t){.type = BINDING_TYPE_FLOAT,
                           .as.f_val = machine->wcs_position[1]});
     data_binding_notify_state_changed(
-        "display_wcs_pos_z",
+        "motion.position.work_z",
         (binding_value_t){.type = BINDING_TYPE_FLOAT,
                           .as.f_val = machine->wcs_position[2]});
   }
 
-  if (flags_to_process & UI_DIRTY_HOME) {
+  if (flags_to_process & UI_DIRTY_HOMING) {
     data_binding_notify_state_changed(
-        "x_is_homed", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                        .as.b_val = machine->axes_homed[0]});
+        "motion.homed.x", (binding_value_t){.type = BINDING_TYPE_BOOL,
+                                            .as.b_val = machine->axes_homed[0]});
     data_binding_notify_state_changed(
-        "y_is_homed", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                        .as.b_val = machine->axes_homed[1]});
+        "motion.homed.y", (binding_value_t){.type = BINDING_TYPE_BOOL,
+                                            .as.b_val = machine->axes_homed[1]});
     data_binding_notify_state_changed(
-        "z_is_homed", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                        .as.b_val = machine->axes_homed[2]});
+        "motion.homed.z", (binding_value_t){.type = BINDING_TYPE_BOOL,
+                                            .as.b_val = machine->axes_homed[2]});
   }
 
   if (flags_to_process & UI_DIRTY_WCS) {
     data_binding_notify_state_changed(
-        "wcs_name", (binding_value_t){.type = BINDING_TYPE_STRING,
-                                      .as.s_val = machine_interface_get_wcs_str(
-                                          machine, -1)});
+        "motion.wcs.active_name",
+        (binding_value_t){.type = BINDING_TYPE_STRING,
+                          .as.s_val =
+                              machine_interface_get_wcs_str(machine, -1)});
   }
 
-  if (flags_to_process & UI_DIRTY_FEED) {
+  if (flags_to_process & UI_DIRTY_OVERRIDES) {
     data_binding_notify_state_changed(
-        "feed", (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                                  .as.f_val = machine->feed});
-    data_binding_notify_state_changed(
-        "feed_override",
+        "overrides.feed_pct",
         (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                          .as.f_val = machine->feed_multiplier});
+                          .as.f_val = machine->feed_multiplier * 100.0f});
   }
 
-  if (flags_to_process & UI_DIRTY_SPINDLES_TOOLS) {
-    bool spindle_on = false;
-    if (machine->num_spindles > 0) {
-      data_binding_notify_state_changed(
-          "spindle_rpm",
-          (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                            .as.f_val = (float)machine->spindles[0].rpm});
-      spindle_on = (machine->spindles[0].rpm != 0);
+  if (flags_to_process & UI_DIRTY_FEEDRATE) {
+    data_binding_notify_state_changed(
+        "motion.feedrate_current",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = machine->feed});
+  }
+
+  if (flags_to_process & UI_DIRTY_SPINDLE) {
+    float rpm = 0.0f;
+    if (machine->num_spindles > 0 && machine->spindles) {
+      rpm = (float)machine->spindles[0].rpm;
     }
     data_binding_notify_state_changed(
-        "spindle_on",
-        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = spindle_on});
+        "spindle.speed_rpm",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = rpm});
+    data_binding_notify_state_changed(
+        "spindle.is_on",
+        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = (rpm > 1e-5)});
   }
 
   if (flags_to_process & UI_DIRTY_DIALOGS) {
     bool active = (machine->message_box != NULL);
     data_binding_notify_state_changed(
-        "dialog_active",
+        "dialog.is_active",
         (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = active});
     if (active) {
       data_binding_notify_state_changed(
-          "dialog_title",
-          (binding_value_t){.type = BINDING_TYPE_STRING,
-                            .as.s_val = machine->message_box->title});
+          "dialog.title", (binding_value_t){.type = BINDING_TYPE_STRING,
+                                             .as.s_val =
+                                                 machine->message_box->title});
       data_binding_notify_state_changed(
-          "dialog_text",
+          "dialog.text",
           (binding_value_t){.type = BINDING_TYPE_STRING,
                             .as.s_val = machine->message_box->text});
       data_binding_notify_state_changed(
-          "dialog_mode",
+          "dialog.mode",
           (binding_value_t){.type = BINDING_TYPE_FLOAT,
                             .as.f_val = (float)machine->message_box->mode});
     }
   }
 
-  if (flags_to_process & UI_DIRTY_CONNECTED) {
-    data_binding_notify_state_changed(
-        "is_connected",
-        (binding_value_t){.type = BINDING_TYPE_BOOL,
-                          .as.b_val = machine->is_connected(machine)});
-  }
-
-  if (flags_to_process & UI_DIRTY_MOVE_AXIS) {
+  if (flags_to_process & UI_DIRTY_JOG_STATE) {
     axis_t current_axis = machine_interface_get_current_move_axis(machine);
     data_binding_notify_state_changed(
-        "x_is_active", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                         .as.b_val = (current_axis == AXIS_X)});
+        "motion.jog.axis_is_x",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = (current_axis == AXIS_X)});
     data_binding_notify_state_changed(
-        "y_is_active", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                         .as.b_val = (current_axis == AXIS_Y)});
+        "motion.jog.axis_is_y",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = (current_axis == AXIS_Y)});
     data_binding_notify_state_changed(
-        "z_is_active", (binding_value_t){.type = BINDING_TYPE_BOOL,
-                                         .as.b_val = (current_axis == AXIS_Z)});
-  }
+        "motion.jog.axis_is_z",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = (current_axis == AXIS_Z)});
 
-  if (flags_to_process & (UI_DIRTY_FILES_GCODES | UI_DIRTY_FILES_MACROS)) {
-    // Not currently used by YAML, but kept for future use
+    // Update UI with local jog step state
+    data_binding_notify_state_changed(
+        "motion.jog.step_xy", (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                                                .as.f_val = interface->jog_step_xy});
+    data_binding_notify_state_changed(
+        "motion.jog.step_z", (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                                               .as.f_val = interface->jog_step_z});
   }
 }

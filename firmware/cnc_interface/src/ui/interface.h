@@ -1,78 +1,73 @@
 #ifndef UI_INTERFACE_H
 #define UI_INTERFACE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "lvgl.h"
 #include "machine/machine_interface.h"
-#include "ui/assets.h"
 
 #ifdef DWC_MACHINE_MODE
 #include "config/dwc_settings.h"
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/**
- * @brief Bitmask for tracking which parts of the machine state have changed
- *        and need to be reflected in the UI.
- */
+// Represents the UI's view of the machine state.
+// One or more flags are set by machine-thread callbacks when data changes.
+// The UI thread then reads these flags in `interface_tick()` and updates the UI.
 typedef enum {
   UI_DIRTY_NONE = 0,
-  UI_DIRTY_STATE = (1 << 0),
-  UI_DIRTY_POS = (1 << 1),
-  UI_DIRTY_HOME = (1 << 2),
-  UI_DIRTY_WCS = (1 << 3),
-  UI_DIRTY_FEED = (1 << 4),
-  UI_DIRTY_SENSORS = (1 << 5),
-  UI_DIRTY_DIALOGS = (1 << 6),
-  UI_DIRTY_SPINDLES_TOOLS = (1 << 7),
-  UI_DIRTY_CONNECTED = (1 << 8),
-  UI_DIRTY_MOVE_AXIS = (1 << 9),
+  UI_DIRTY_CONNECTION = (1 << 0),
+  UI_DIRTY_MACHINE_STATE = (1 << 1),  // Status, program running/paused
+  UI_DIRTY_POSITION = (1 << 2),      // Machine and WCS position
+  UI_DIRTY_HOMING = (1 << 3),        // Homing status for each axis
+  UI_DIRTY_WCS = (1 << 4),           // Active Work Coordinate System
+  UI_DIRTY_OVERRIDES = (1 << 5),     // Feed and spindle overrides
+  UI_DIRTY_SPINDLE = (1 << 6),       // Spindle RPM and status
+  UI_DIRTY_FEEDRATE = (1 << 7),      // Current feedrate
+  UI_DIRTY_DIALOGS = (1 << 8),       // Message boxes
+  UI_DIRTY_JOG_STATE = (1 << 9),     // Active jog axis and step values
   UI_DIRTY_FILES_GCODES = (1 << 10),
   UI_DIRTY_FILES_MACROS = (1 << 11),
+  UI_DIRTY_ALL = 0xFFFFFFFF,
 } ui_dirty_flags_t;
 
-/**
- * @brief A structure to hold the state of the UI interface, primarily
- *        a pointer to the machine it is controlling and observing.
- */
+// The main structure bridging the machine interface and the UI.
 typedef struct {
-  machine_interface_t* machine;
-#ifdef DWC_MACHINE_MODE
-  // Used to build up settings during the initial setup flow
-  dwc_settings_t setup_settings;
-#endif
-  // Dirty flags are set by machine callbacks (in machine thread)
-  // and are processed by interface_tick (in UI thread).
+  machine_interface_t *machine;
   volatile uint32_t dirty_flags;
-  lv_obj_t* probing_wizard;
+  lv_obj_t *probing_wizard;
+
+#ifdef DWC_MACHINE_MODE
+  dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow
+#endif
+
+  // UI-specific state not present in the machine model
+  float jog_step_xy;
+  float jog_step_z;
 } interface_t;
 
 /**
- * @brief Initializes the UI.
+ * @brief Initializes the UI-machine interface layer.
  *
- * This function sets up the LVGL UI by calling the generated `create_ui`
- * function, and it establishes the data binding between the UI and the machine
- * interface. It registers the necessary callbacks and the central action
- * handler.
+ * Sets up data-binding, creates the LVGL UI, and registers callbacks with the
+ * machine interface to listen for state changes.
  *
- * @param interface A pointer to the interface_t structure to initialize.
- * @param machine A pointer to the machine_interface_t that the UI will interact
- * with.
+ * @param interface Pointer to the interface_t struct to initialize.
+ * @param machine Pointer to the machine_interface_t object.
  */
-void interface_init(interface_t* interface, machine_interface_t* machine);
+void interface_init(interface_t *interface, machine_interface_t *machine);
 
 /**
- * @brief Ticks the UI interface.
+ * @brief Main tick function for the UI interface.
  *
- * This function is called periodically from the main LVGL task loop. It's used
- * to update UI elements that are not driven by machine state events, such as
- * the global 'time' variable for animations.
+ * This should be called periodically from the main UI thread/loop. It checks
+ * for dirty flags set by machine callbacks and updates the UI accordingly by
+ * notifying the data-binding system of state changes.
  *
- * @param interface A pointer to the initialized interface_t structure.
+ * @param interface Pointer to the interface_t struct.
  */
-void interface_tick(interface_t* interface);
+void interface_tick(interface_t *interface);
 
 #ifdef __cplusplus
 }

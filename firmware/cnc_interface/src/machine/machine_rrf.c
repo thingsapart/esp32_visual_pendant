@@ -349,13 +349,16 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     serial_write(self->transport_state.serial.uart, (const uint8_t *)line,
                  strlen(line));
     serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
+    LOGI(TAG, "Sending: %s", line);
     line = strtok_r(NULL, "\n", &saveptr);
   }
+
   free(gcode_copy);
 }
 
 static bool _serial_parse_json_response(machine_rrf_t *self,
                                         const char *json_response) {
+   LOGE(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
     LOGE(TAG, "Serial: Failed to parse JSON.");
@@ -375,6 +378,9 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
 }
 
 static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
+  // Process any data that has been received since the last poll.
+  serial_process_input(self->transport_state.serial.uart);
+
   // Commands are sent via the queue. The response is handled asynchronously.
   char cmd[128];
   if (poll_state & MACHINE_POSITION) {
@@ -877,3 +883,4 @@ bool machine_rrf_setup_response_processing_task(machine_rrf_t *self,
   return false;
 }
 #endif
+

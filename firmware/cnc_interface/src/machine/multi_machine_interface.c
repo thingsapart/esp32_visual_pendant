@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "config.h"
+#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 
 static const char *TAG = "multi_machine";
@@ -71,7 +72,7 @@ static void _multi_machine_send_gcode(machine_interface_t *self,
     LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode,
          multi_self->machines[i]->is_connected(multi_self->machines[i]));
 
-    if (multi_self->machines[i]->is_connected &&
+    if (!multi_self->machines[i]->is_connected ||
         multi_self->machines[i]->is_connected(multi_self->machines[i])) {
       if (multi_self->machines[i]->send_gcode) {  // Always check for NULL
         multi_self->machines[i]->send_gcode(multi_self->machines[i], gcode,
@@ -87,11 +88,11 @@ static void _multi_machine__send_gcode(machine_interface_t *self,
   for (size_t i = 0; i < multi_self->num_machines; i++) {
     LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode,
          multi_self->machines[i]->is_connected(multi_self->machines[i]));
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->_send_gcode) {  // Always check for NULL
-        multi_self->machines[i]->_send_gcode(multi_self->machines[i], gcode);
-      }
+    // The _send_gcode function is the raw send. It should not check for
+    // connection, as some commands (like status polls) are needed to establish
+    // the connection in the first place.
+    if (multi_self->machines[i] && multi_self->machines[i]->_send_gcode) {
+      multi_self->machines[i]->_send_gcode(multi_self->machines[i], gcode);
     }
   }
 }
@@ -100,13 +101,20 @@ static void _multi_machine_update_machine_state(machine_interface_t *self,
                                                 uint32_t poll_state) {
   multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
   for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]
-              ->_update_machine_state) {  // Always check for NULL
-        multi_self->machines[i]->_update_machine_state(multi_self->machines[i],
-                                                       poll_state);
-      }
+    // Propagate the G-code queue from the multi-machine parent to its children
+    // if it has been set. This handles late initialization of the queue.
+    if (multi_self->base.gcode_queue &&
+        !multi_self->machines[i]->gcode_queue) {
+      multi_self->machines[i]->gcode_queue = multi_self->base.gcode_queue;
+      LOGI(TAG, "Propagated gcode_queue to machine %d", (int)i);
+    }
+
+    // Do not check is_connected here. The update state function is responsible
+    // for establishing the connection if it is not already present.
+    if (multi_self->machines[i] &&
+        multi_self->machines[i]->_update_machine_state) {
+      multi_self->machines[i]->_update_machine_state(multi_self->machines[i],
+                                                     poll_state);
     }
   }
 }

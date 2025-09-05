@@ -124,8 +124,10 @@ static serial_port_data_t *find_port_data(serial_handle_t handle) {
 // Processes data from the ring buffer, assembling lines and calling callbacks
 static void process_received_data(serial_port_data_t *port_data) {
   if (!port_data) return;
+  if (rb_is_empty(&port_data->rx_buffer)) return;
 
   uint8_t byte;
+  LOGD(TAG, "Processing %d bytes from serial ring buffer for UART %d.", port_data->rx_buffer.count, port_data->uart_num);
   while (rb_pop(&port_data->rx_buffer, &byte)) {
     // Check for line buffer overflow before adding the character
     if (port_data->line_pos >= MAX_LINE_LENGTH - 1) {
@@ -142,8 +144,6 @@ static void process_received_data(serial_port_data_t *port_data) {
 
     if (byte == '\n') {
       port_data->line_buffer[port_data->line_pos] = '\0';  // Null-terminate
-      // LOGI(TAG, "RX Line (UART %d): %s", port_data->uart_num,
-      //  port_data->line_buffer); // Debug print
 
       // Call registered callbacks
       for (size_t i = 0; i < port_data->num_callbacks; ++i) {
@@ -412,9 +412,11 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
     LOGE(TAG, "serial_write: Invalid handle %p", handle);
     return 0;
   }
-  // LOGI(TAG, "TX (UART %d): %.*s", port_data->uart_num, size, buffer); //
-  // Debug
-  //  print
+  Serial.print("[I][SERIAL]TX UART");
+  Serial.print(port_data->uart_num);
+  Serial.print(", size ");
+  Serial.print(size);
+  Serial.print((char*)buffer); //
   return port_data->stream->write(buffer, size);
 }
 
@@ -630,3 +632,4 @@ void serial_process_input(serial_handle_t handle) {
 }
 
 }  // extern "C"
+

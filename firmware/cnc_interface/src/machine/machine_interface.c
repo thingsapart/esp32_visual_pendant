@@ -538,7 +538,7 @@ void machine_interface_setup_loop(machine_interface_t *self) {
   while (1) {
     machine_interface_process_gcode_q(self);
     if (i++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
-      // machine_interface_task_loop_iter(self);
+      machine_interface_task_loop_iter(self);
     }
     if (i % 10 == 0) {
 #ifdef MACHINE_INTERFACE_CALC_TICKS

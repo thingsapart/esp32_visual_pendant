@@ -4,14 +4,15 @@
 #include "ui/interface.h"
 
 /**
- * @brief Initializes and registers the global UI action handler.
+ * @brief Initializes the UI action handler system.
  *
- * This function registers the single callback that will receive all
- * actions dispatched from the UI via the data binding system.
+ * Registers the central action handler callback with the data-binding system.
+ * This function should be called once during UI initialization.
  *
- * @param interface A pointer to the main UI interface structure, which will
- *                  be passed as user_data to the action handler.
+ * @param interface Pointer to the main UI interface struct, which contains the
+ *                  machine handle and other shared state. This is passed as
+ *                  the user_data context to the action handler.
  */
-void ui_action_handler_init(interface_t* interface);
+void ui_action_handler_init(interface_t *interface);
 
 #endif  // UI_ACTION_HANDLER_H

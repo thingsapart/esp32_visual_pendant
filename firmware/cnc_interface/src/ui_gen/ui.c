@@ -288,7 +288,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_column(tileview_30, 0, 0);
     lv_obj_set_scrollbar_mode(tileview_30, LV_SCROLLBAR_MODE_ACTIVE);
     // unnamed: obj_31 (obj)
-    lv_obj_t* obj_31 = lv_tileview_add_tile(tileview_30, 0, 0, LV_DIR_BOTTOM);
+    lv_obj_t* obj_31 = lv_tileview_add_tile(tileview_30, 0, 0, LV_DIR_RIGHT);
 
     lv_obj_add_style(obj_31, container_7, 0);
     // main: main_32 (obj)
@@ -356,9 +356,9 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_bottom(button_36, 0, 0);
     lv_obj_set_style_pad_top(button_36, 0, 0);
     lv_obj_set_ext_click_area(button_36, 30);
-    data_binding_add_observer("x_is_homed", button_36, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
-    data_binding_add_observer("x_is_active", button_36, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
-    data_binding_add_action(button_36, "set_active_x", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.homed.x", button_36, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
+    data_binding_add_observer("motion.jog.axis_is_x", button_36, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
+    data_binding_add_action(button_36, "action.motion.jog.axis_select_x", 0, NULL, 0, NULL);
     // unnamed: label_37 (label)
     lv_obj_t* label_37 = lv_label_create(button_36);
 
@@ -387,7 +387,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_40, 1, 0);
     lv_obj_add_style(label_40, indicator_green_13, 0);
     lv_obj_set_style_text_align(label_40, LV_TEXT_ALIGN_RIGHT, 0);
-    data_binding_add_observer("display_wcs_pos_x", label_40, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.work_x", label_40, 0, "%4.2f", 0, NULL);
 
 
     // unnamed: obj_41 (obj)
@@ -404,7 +404,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_42, 1, 0);
     lv_obj_set_style_text_align(label_42, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_style(label_42, indicator_yellow_14, 0);
-    data_binding_add_observer("display_pos_x", label_42, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.machine_x", label_42, 0, "%4.2f", 0, NULL);
 
     // unnamed: label_43 (label)
     lv_obj_t* label_43 = lv_label_create(obj_41);
@@ -458,9 +458,9 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_bottom(button_47, 0, 0);
     lv_obj_set_style_pad_top(button_47, 0, 0);
     lv_obj_set_ext_click_area(button_47, 30);
-    data_binding_add_observer("y_is_homed", button_47, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
-    data_binding_add_observer("y_is_active", button_47, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
-    data_binding_add_action(button_47, "set_active_y", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.homed.y", button_47, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
+    data_binding_add_observer("motion.jog.axis_is_y", button_47, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
+    data_binding_add_action(button_47, "action.motion.jog.axis_select_y", 0, NULL, 0, NULL);
     // unnamed: label_48 (label)
     lv_obj_t* label_48 = lv_label_create(button_47);
 
@@ -489,7 +489,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_51, 1, 0);
     lv_obj_add_style(label_51, indicator_green_13, 0);
     lv_obj_set_style_text_align(label_51, LV_TEXT_ALIGN_RIGHT, 0);
-    data_binding_add_observer("display_wcs_pos_y", label_51, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.work_y", label_51, 0, "%4.2f", 0, NULL);
 
 
     // unnamed: obj_52 (obj)
@@ -506,7 +506,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_53, 1, 0);
     lv_obj_set_style_text_align(label_53, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_style(label_53, indicator_yellow_14, 0);
-    data_binding_add_observer("display_pos_y", label_53, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.machine_y", label_53, 0, "%4.2f", 0, NULL);
 
     // unnamed: label_54 (label)
     lv_obj_t* label_54 = lv_label_create(obj_52);
@@ -560,9 +560,9 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_bottom(button_58, 0, 0);
     lv_obj_set_style_pad_top(button_58, 0, 0);
     lv_obj_set_ext_click_area(button_58, 30);
-    data_binding_add_observer("z_is_homed", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
-    data_binding_add_observer("z_is_active", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
-    data_binding_add_action(button_58, "set_active_z", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.homed.z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
+    data_binding_add_observer("motion.jog.axis_is_z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
+    data_binding_add_action(button_58, "action.motion.jog.axis_select_z", 0, NULL, 0, NULL);
     // unnamed: label_59 (label)
     lv_obj_t* label_59 = lv_label_create(button_58);
 
@@ -591,7 +591,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_62, 1, 0);
     lv_obj_add_style(label_62, indicator_green_13, 0);
     lv_obj_set_style_text_align(label_62, LV_TEXT_ALIGN_RIGHT, 0);
-    data_binding_add_observer("display_wcs_pos_z", label_62, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.work_z", label_62, 0, "%4.2f", 0, NULL);
 
 
     // unnamed: obj_63 (obj)
@@ -608,7 +608,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_flex_grow(label_64, 1, 0);
     lv_obj_set_style_text_align(label_64, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_style(label_64, indicator_yellow_14, 0);
-    data_binding_add_observer("display_pos_z", label_64, 0, "%4.2f", 0, NULL);
+    data_binding_add_observer("motion.position.machine_z", label_64, 0, "%4.2f", 0, NULL);
 
     // unnamed: label_65 (label)
     lv_obj_t* label_65 = lv_label_create(obj_63);
@@ -646,38 +646,38 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: button_69 (button)
     lv_obj_t* button_69 = lv_button_create(obj_68);
 
-    data_binding_add_observer("program_running", button_69, 2, &(bool){NULL}, 0, NULL);
+    data_binding_add_observer("machine.program_is_running", button_69, 2, &(bool){NULL}, 0, NULL);
     // unnamed: label_70 (label)
     lv_obj_t* label_70 = lv_label_create(button_69);
 
     lv_label_set_text(label_70, "\xef\x81\x8b");
     lv_obj_set_style_width(label_70, 1073741823, 0);
-    data_binding_add_action(label_70, "program_run", 0, NULL, 0, NULL);
+    data_binding_add_action(label_70, "action.program.run", 0, NULL, 0, NULL);
 
 
     // unnamed: button_71 (button)
     lv_obj_t* button_71 = lv_button_create(obj_68);
 
-    data_binding_add_observer("program_running", button_71, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
+    data_binding_add_observer("machine.program_is_running", button_71, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
     // unnamed: label_72 (label)
     lv_obj_t* label_72 = lv_label_create(button_71);
 
     lv_label_set_text(label_72, "\xef\x81\x8d");
     lv_obj_set_style_width(label_72, 1073741823, 0);
-    data_binding_add_action(label_72, "program_stop", 0, NULL, 0, NULL);
+    data_binding_add_action(label_72, "action.program.stop", 0, NULL, 0, NULL);
 
 
     // unnamed: label_73 (label)
     lv_obj_t* label_73 = lv_label_create(obj_68);
 
-    data_binding_add_observer("machine_mode", label_73, 0, "MODE: %s", 0, NULL);
+    data_binding_add_observer("machine.status_text", label_73, 0, "MODE: %s", 0, NULL);
 
     // unnamed: label_74 (label)
     lv_obj_t* label_74 = lv_label_create(obj_68);
 
     lv_obj_add_style(label_74, indicator_yellow_14, 0);
-    data_binding_add_observer("wcs_name", label_74, 0, "- %s", 0, NULL);
-    data_binding_add_action(label_74, "cycle_wcs", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.wcs.active_name", label_74, 0, "- %s", 0, NULL);
+    data_binding_add_action(label_74, "action.motion.wcs.cycle", 0, NULL, 0, NULL);
 
 
 
@@ -831,7 +831,7 @@ void create_ui(lv_obj_t* parent) {
     lv_label_set_text(label_89, "65%%");
     lv_obj_set_style_text_font(label_89, font_kode_14_5, 0);
     lv_obj_add_style(label_89, indicator_yellow_14, 0);
-    data_binding_add_observer("feed_override_pct", label_89, 0, "%g%%", 0, NULL);
+    data_binding_add_observer("overrides.feed_pct", label_89, 0, "%g%%", 0, NULL);
 
 
 
@@ -1022,7 +1022,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_grid_cell(label_108, LV_GRID_ALIGN_START, 0, 1, LV_GRID_ALIGN_START, 0, 1);
     lv_obj_set_style_height(label_108, 1073741823, 0);
     lv_obj_add_flag(label_108, LV_OBJ_FLAG_CLICKABLE);
-    data_binding_add_action(label_108, "cycle_step_xy", 0, NULL, 0, NULL);
+    data_binding_add_action(label_108, "action.jog.cycle_step_xy", 0, NULL, 0, NULL);
 
     // unnamed: label_109 (label)
     lv_obj_t* label_109 = lv_label_create(obj_107);
@@ -1034,8 +1034,8 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_right(label_109, 10, 0);
     lv_obj_add_style(label_109, indicator_yellow_14, 0);
     lv_obj_add_flag(label_109, LV_OBJ_FLAG_CLICKABLE);
-    data_binding_add_action(label_109, "cycle_step_xy", 0, NULL, 0, NULL);
-    data_binding_add_observer("jog_step_xy", label_109, 0, "%g", 0, NULL);
+    data_binding_add_action(label_109, "action.jog.cycle_step_xy", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.jog.step_xy", label_109, 0, "%g", 0, NULL);
 
     // unnamed: label_110 (label)
     lv_obj_t* label_110 = lv_label_create(obj_107);
@@ -1045,7 +1045,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_grid_cell(label_110, LV_GRID_ALIGN_START, 2, 1, LV_GRID_ALIGN_START, 0, 1);
     lv_obj_set_style_height(label_110, 1073741823, 0);
     lv_obj_add_flag(label_110, LV_OBJ_FLAG_CLICKABLE);
-    data_binding_add_action(label_110, "cycle_step_z", 0, NULL, 0, NULL);
+    data_binding_add_action(label_110, "action.jog.cycle_step_z", 0, NULL, 0, NULL);
 
     // unnamed: label_111 (label)
     lv_obj_t* label_111 = lv_label_create(obj_107);
@@ -1056,8 +1056,8 @@ void create_ui(lv_obj_t* parent) {
     lv_label_set_text(label_111, " 5");
     lv_obj_add_style(label_111, indicator_yellow_14, 0);
     lv_obj_add_flag(label_111, LV_OBJ_FLAG_CLICKABLE);
-    data_binding_add_action(label_111, "cycle_step_z", 0, NULL, 0, NULL);
-    data_binding_add_observer("jog_step_z", label_111, 0, "%g", 0, NULL);
+    data_binding_add_action(label_111, "action.jog.cycle_step_z", 0, NULL, 0, NULL);
+    data_binding_add_observer("motion.jog.step_z", label_111, 0, "%g", 0, NULL);
 
 
 
@@ -1091,7 +1091,7 @@ void create_ui(lv_obj_t* parent) {
     lv_label_set_text(label_115, "100% ");
 
 
-    data_binding_add_observer("program_running", obj_104, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, NULL);
+    data_binding_add_observer("machine.program_is_running", obj_104, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, NULL);
 
     // unnamed: obj_116 (obj)
     lv_obj_t* obj_116 = lv_obj_create(obj_75);
@@ -1252,13 +1252,13 @@ void create_ui(lv_obj_t* parent) {
 
 
 
-    data_binding_add_observer("program_running", obj_116, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
+    data_binding_add_observer("machine.program_is_running", obj_116, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
 
 
 
 
     // unnamed: obj_133 (obj)
-    lv_obj_t* obj_133 = lv_tileview_add_tile(tileview_30, 0, 1, 12);
+    lv_obj_t* obj_133 = lv_tileview_add_tile(tileview_30, 1, 0, 3);
 
     lv_obj_add_style(obj_133, container_7, 0);
     // unnamed: obj_134 (obj)
@@ -1772,9 +1772,6 @@ void create_ui(lv_obj_t* parent) {
     // unnamed: obj_198 (obj)
     lv_obj_t* obj_198 = lv_tabview_add_tab(tabview_135, "Misc");
 
-    lv_obj_set_style_pad_all(obj_198, 0, 0);
-    lv_obj_add_style(obj_198, container_transp_8, 0);
-
 
     // unnamed: obj_199 (obj)
     lv_obj_t* obj_199 = lv_obj_create(obj_134);
@@ -1911,19 +1908,33 @@ void create_ui(lv_obj_t* parent) {
 
 
     // unnamed: obj_215 (obj)
-    lv_obj_t* obj_215 = lv_tileview_add_tile(tileview_30, 0, 2, LV_DIR_TOP);
+    lv_obj_t* obj_215 = lv_tileview_add_tile(tileview_30, 2, 0, LV_DIR_LEFT);
 
-    lv_obj_add_style(obj_215, container_transp_8, 0);
-    lv_obj_add_style(obj_215, bg_gradient_10, 0);
-    lv_obj_set_style_size(obj_215, lv_pct(100), lv_pct(100), 0);
+    lv_obj_add_style(obj_215, container_7, 0);
     // probing_wizard: probing_wizard_216 (probing_wizard)
     lv_obj_t* probing_wizard_216 = lv_probing_wizard_create(obj_215);
 
     obj_registry_add("probing_wizard", probing_wizard_216);
-    lv_obj_set_style_size(probing_wizard_216, lv_pct(100), lv_pct(100), 0);
     lv_probing_wizard_set_mode(probing_wizard_216, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
-    lv_probing_wizard_set_active_step(probing_wizard_216, 0);
 
+
+
+    // disconnected_overlay: disconnected_overlay_217 (obj)
+    lv_obj_t* disconnected_overlay_217 = lv_obj_create(parent);
+
+    obj_registry_add("disconnected_overlay", disconnected_overlay_217);
+    lv_obj_set_style_size(disconnected_overlay_217, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_style_bg_color(disconnected_overlay_217, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(disconnected_overlay_217, LV_OPA_70, 0);
+    lv_obj_add_flag(disconnected_overlay_217, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(disconnected_overlay_217, LV_OBJ_FLAG_HIDDEN);
+    data_binding_add_observer("machine.connection_status", disconnected_overlay_217, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, (const void*)&(bool){true});
+    // unnamed: label_218 (label)
+    lv_obj_t* label_218 = lv_label_create(disconnected_overlay_217);
+
+    lv_label_set_text(label_218, "Connecting...");
+    lv_obj_set_style_text_font(label_218, font_kode_34_1, 0);
+    lv_obj_center(label_218);
 
 
 }

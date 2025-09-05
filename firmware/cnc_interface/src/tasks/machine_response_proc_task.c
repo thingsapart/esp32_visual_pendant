@@ -29,7 +29,8 @@ extern "C" {
 #include "machine/machine_interface.h"
 
 #define TASK_STACK_SIZE (1024 * 7)
-#define TASK_PRIORITY (tskIDLE_PRIORITY + 1)
+#define TASK_PRIORITY \
+  (tskIDLE_PRIORITY + 4)  // Higher priority to ensure it can preempt UI task
 
 // --- Configuration Constants ---
 // RAM Use: ~ 8KB.
