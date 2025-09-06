@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "machine/machine_interface.h"
 
@@ -40,12 +41,14 @@ typedef enum {
   MSG_TYPE_SPINDLES_TOOLS,
   MSG_TYPE_SENSORS_CHANGED,
   MSG_TYPE_BINARY,  // Currently used for dialogs, file lists, sub-typed.
+  MSG_TYPE_LOG_MESSAGE,
 } remote_message_type_t;
 
 // MSG_TYPE_BINARY sub-types.
 typedef enum {
   MSG_SUB_TYPE_MESSAGE_BOX,
   MSG_SUB_TYPE_FILE_LIST,
+  MSG_SUB_TYPE_LOG_MESSAGE,
 } binary_payload_sub_type_t;
 
 typedef struct {
@@ -185,6 +188,12 @@ typedef struct {
 } home_all_cmd_t;
 
 typedef struct {
+  uint8_t type;   // MSG_TYPE_LOG_MESSAGE
+  char message[]; // Flexible array member for the log string
+} __attribute__((packed)) log_msg_t;
+
+
+typedef struct {
   uint8_t type;      // CMD_TYPE_HOME
   uint8_t axes_len;  // length of axes
   char axes[];       // Flexible array member for axes
@@ -250,6 +259,8 @@ bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
                          size_t len);
 bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
                              size_t len);
+bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub_type, const uint8_t *data, size_t len);
+bool remote_wrapper_broadcast_fragmented_message(uint8_t sub_type, const uint8_t *data, size_t len);
 void remote_wrapper_deinit();
 
 #ifdef __cplusplus

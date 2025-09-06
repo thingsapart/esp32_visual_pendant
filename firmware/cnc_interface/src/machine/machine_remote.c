@@ -3,6 +3,7 @@
 #include "machine_remote.h"
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -748,6 +749,16 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
 
       break;
     }
+    case MSG_TYPE_LOG_MESSAGE: {
+      if (len <= offsetof(log_msg_t, message)) {
+        LOGE(TAG, "Invalid log message length: %zu", len);
+        return;
+      }
+      log_msg_t *msg = (log_msg_t *)data;
+      machine_interface_log_message_updated(&self->base, msg->message);
+      LOGI(TAG, "Received log message: %s", msg->message);
+      break;
+    }
     case MSG_TYPE_BINARY: {
       uint8_t *ptr = (uint8_t *)data;
       uint8_t target_slot = data[1];
@@ -1159,6 +1170,10 @@ static void process_binary_payload(machine_interface_t *self, uint8_t sub_type,
       break;
     case MSG_SUB_TYPE_FILE_LIST:
       process_binary_msg_file_list(mach, data, size);
+      break;
+    case MSG_SUB_TYPE_LOG_MESSAGE:
+      machine_interface_log_message_updated(self, (const char *)data);
+      LOGI(TAG, "Received fragmented log message: %s", (const char *)data);
       break;
     default:
       LOGT(TAG, "Received unknown reassembled payload sub-type: %u", sub_type);

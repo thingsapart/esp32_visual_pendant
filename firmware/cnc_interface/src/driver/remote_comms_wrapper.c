@@ -247,6 +247,59 @@ bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
   return true;
 }
 
+bool remote_wrapper_broadcast_fragmented_message(uint8_t sub_type, const uint8_t *data, size_t len) {
+    return remote_wrapper_send_fragmented_message(broadcast_mac, sub_type, data, len);
+}
+
+
+bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub_type, const uint8_t *data, size_t len) {
+    static uint16_t seq_id_counter = 0;
+    const size_t max_payload_per_fragment = REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
+
+    if (max_payload_per_fragment <= 0) {
+        LOGE(TAG, "Cannot send fragmented message, max payload size is too small.");
+        return false;
+    }
+
+    uint16_t total_fragments = (len + max_payload_per_fragment - 1) / max_payload_per_fragment;
+    uint16_t current_seq_id = seq_id_counter++;
+
+    LOGI(TAG, "Sending fragmented message: seq=%u, total_size=%zu, fragments=%u to " MACSTR,
+         current_seq_id, len, total_fragments, MAC2STR(mac_addr));
+
+    for (uint16_t i = 0; i < total_fragments; i++) {
+        size_t offset = i * max_payload_per_fragment;
+        size_t fragment_len = (i == total_fragments - 1) ? (len - offset) : max_payload_per_fragment;
+
+        size_t total_msg_len = BINARY_FRAGMENT_MSG_HEADER_SIZE + fragment_len;
+        binary_fragment_msg_t *fragment_msg = malloc(total_msg_len);
+        if (!fragment_msg) {
+            LOGE(TAG, "Failed to allocate memory for fragment %u", i);
+            return false;
+        }
+
+        fragment_msg->type = MSG_TYPE_BINARY;
+        fragment_msg->sub_type = sub_type;
+        fragment_msg->seq_id = current_seq_id;
+        fragment_msg->total_payload_size = len;
+        fragment_msg->total_fragments = total_fragments;
+        fragment_msg->fragment_index = i;
+        fragment_msg->fragment_offset = offset;
+        fragment_msg->fragment_len = fragment_len;
+        memcpy(fragment_msg->data, data + offset, fragment_len);
+
+        if (!remote_wrapper_send(mac_addr, (const uint8_t*)fragment_msg, total_msg_len)) {
+            LOGW(TAG, "Failed to send fragment %u of seq %u", i, current_seq_id);
+            free(fragment_msg);
+            // We could attempt retries here, but for now we fail fast.
+            return false;
+        }
+
+        free(fragment_msg);
+    }
+    return true;
+}
+
 void remote_wrapper_deinit() {
   esp_now_deinit();
   // esp_wifi_stop();  // you may want to keep wifi running for other tasks.
@@ -300,6 +353,16 @@ bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
 bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
                              size_t len) {
   return true;
+}
+
+bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub_type, const uint8_t *data, size_t len) {
+    // Dummy implementation for non-ESP32 platforms
+    return true;
+}
+
+bool remote_wrapper_broadcast_fragmented_message(uint8_t sub_type, const uint8_t *data, size_t len) {
+    // Dummy implementation for non-ESP32 platforms
+    return true;
 }
 
 void remote_wrapper_deinit() {}

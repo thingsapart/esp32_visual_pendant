@@ -24,6 +24,8 @@ static const char *TAG = "machine_rrf";
 static machine_status_t machine_status_from_rrf_string(const char *rrf_status);
 void _free_modal(machine_interface_t *self, int modal_id);
 static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect);
+static void _machine_rrf_attempt_connect(machine_interface_t *self);
+
 
 // --- Generic "Virtual" Method Implementations ---
 // These are assigned to the base interface and call the transport-specific
@@ -221,7 +223,7 @@ static void _dwc_do_poll_key(machine_rrf_t *self, const char *key) {
 static void _dwc_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   if (!self->connected) {
     LOGD(TAG, "DWC: Not connected, attempting reconnect during poll cycle.");
-    _dwc_set_connected_impl(self, true);
+    _machine_rrf_attempt_connect(&self->base);
     // If connection failed, self->connected is still false, so we bail.
     if (!self->connected) {
       return;
@@ -367,7 +369,7 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
 
 static bool _serial_parse_json_response(machine_rrf_t *self,
                                         const char *json_response) {
-  LOGE(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
+  LOGD(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
     LOGE(TAG, "Serial: Failed to parse JSON.");
@@ -378,6 +380,20 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   bool succ = false;
   if (cJSON_GetObjectItemCaseSensitive(root, "key")) {
     succ = machine_rrf_parse_m409_response(self, root);
+  } else if (cJSON_GetObjectItemCaseSensitive(root, "seq") &&
+             cJSON_GetObjectItemCaseSensitive(root, "resp")) {
+    // This is a log message or simple response, not a full model query
+    cJSON *resp_json = cJSON_GetObjectItemCaseSensitive(root, "resp");
+    if (cJSON_IsString(resp_json) && resp_json->valuestring) {
+      // Trim trailing newline if it exists
+      char *resp_str = resp_json->valuestring;
+      size_t len = strlen(resp_str);
+      if (len > 0 && resp_str[len - 1] == '\n') {
+        resp_str[len - 1] = '\0';
+      }
+      machine_interface_log_message_updated(&self->base, resp_str);
+      succ = true;
+    }
   } else {
     LOGW(TAG, "Serial: Unrecognized JSON response: %s", json_response);
   }
@@ -460,6 +476,17 @@ static void _serial_proc_state_resp_impl(machine_interface_t *iself, void *data,
   }
 }
 
+static void _machine_rrf_attempt_connect(machine_interface_t *self) {
+    machine_rrf_t *rrf_self = (machine_rrf_t *)self;
+    if (rrf_self->connected) return;
+
+    // For serial, "connecting" is just checking for responses, which happens during polling.
+    // For DWC, we can trigger a connection attempt.
+    if (rrf_self->_set_connected_impl) {
+        rrf_self->_set_connected_impl(rrf_self, true);
+    }
+}
+
 // --- Common Modal/Action Functions ---
 // These format G-code and send it via the standard interface, so they
 // work for both transports.
@@ -532,6 +559,7 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->base._send_gcode = _machine_rrf_send_gcode;
   self->base._update_machine_state = _machine_rrf_update_machine_state;
   self->base.is_connected = _machine_rrf_is_connected;
+  self->base.attempt_connect = _machine_rrf_attempt_connect;
   self->base.set_connected = _machine_rrf_set_connected;
   self->base.list_files = _machine_rrf_list_files;
   self->base.process_machine_state_response =
@@ -623,7 +651,7 @@ machine_rrf_t *machine_rrf_init_dwc(machine_rrf_t *self, const char *host,
   self->_proc_state_resp_impl = _dwc_proc_state_resp_impl;
 
   // Attempt to connect immediately
-  _dwc_set_connected_impl(self, true);
+  _machine_rrf_attempt_connect(&self->base);
 
   return self;
 }
@@ -951,4 +979,3 @@ bool machine_rrf_setup_response_processing_task(machine_rrf_t *self,
   return false;
 }
 #endif
-

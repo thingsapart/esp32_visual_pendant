@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "driver/remote_comms_wrapper.h"
 #define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 
@@ -62,6 +63,7 @@ static void _multi_machine__continuous_move(machine_interface_t *self,
                                             int direction);
 static void _mach_copy_state(multi_machine_interface_t *mm,
                              machine_interface_t *mach);
+static void _multi_machine_attempt_connect(machine_interface_t *self);
 
 // --- Method Implementations ---
 
@@ -112,11 +114,8 @@ static void _multi_machine_update_machine_state(machine_interface_t *self,
     LOGV(TAG, "No active machine, polling all interfaces for reconnect...");
     for (size_t i = 0; i < multi_self->num_machines; i++) {
       machine_interface_t *mach = multi_self->machines[i];
-      if (mach && mach->_update_machine_state) {
-        if (multi_self->base.gcode_queue && !mach->gcode_queue) {
-          mach->gcode_queue = multi_self->base.gcode_queue;
-        }
-        mach->_update_machine_state(mach, poll_state);
+      if (mach && mach->attempt_connect) {
+          mach->attempt_connect(mach);
       }
     }
   }
@@ -125,6 +124,15 @@ static void _multi_machine_update_machine_state(machine_interface_t *self,
 static bool _multi_machine_is_connected(machine_interface_t *self) {
   multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
   return multi_self->active_machine_idx != -1;
+}
+
+static void _multi_machine_attempt_connect(machine_interface_t *self) {
+    multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
+    for (size_t i = 0; i < multi_self->num_machines; i++) {
+        if (multi_self->machines[i] && multi_self->machines[i]->attempt_connect) {
+            multi_self->machines[i]->attempt_connect(multi_self->machines[i]);
+        }
+    }
 }
 
 static void _multi_machine_list_files(machine_interface_t *self,
@@ -322,6 +330,7 @@ multi_machine_interface_t *multi_machine_interface_init(
   self->base._send_gcode = _multi_machine__send_gcode;
   self->base.is_connected = _multi_machine_is_connected;
   self->base._update_machine_state = _multi_machine_update_machine_state;
+  self->base.attempt_connect = _multi_machine_attempt_connect;
   self->base.list_files = _multi_machine_list_files;
   self->base.run_macro = _multi_machine_run_macro;
   self->base.start_job = _multi_machine_start_job;
@@ -570,6 +579,17 @@ void _mach_cb_files(machine_interface_t *mach, void *user_data,
   machine_interface_files_updated(&self->base, path);
 }
 
+static void _mach_cb_log_message(machine_interface_t *mach, void *user_data,
+                                 const char *message) {
+  multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+  
+  // Only process/broadcast logs from the currently active machine
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
+  
+  // Propagate the log message up to listeners of this multi_machine interface (e.g., the UI)
+  machine_interface_log_message_updated(&self->base, message);
+}
+
 static void _mach_cb_connected(machine_interface_t* mach, void* user_data) {
     multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
     bool is_connected = mach->is_connected(mach);
@@ -629,6 +649,7 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
   machine_interface_add_dialogs_changed_cb(machine, self, _mach_cb_dialogs);
   machine_interface_add_files_changed_cb(machine, NULL, self, _mach_cb_files);
   machine_interface_add_connected_changed_cb(machine, self, _mach_cb_connected);
+  machine_interface_add_log_message_cb(machine, self, _mach_cb_log_message);
 
   LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
   return true;

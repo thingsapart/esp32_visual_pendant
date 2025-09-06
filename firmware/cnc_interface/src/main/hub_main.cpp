@@ -60,98 +60,6 @@ static size_t *message_lens;
 static size_t message_buffer_len;
 #endif
 
-bool send_binary_payload(const void *payload, const size_t data_len,
-                         binary_payload_sub_type_t payload_type) {
-  if (!payload || data_len == 0) {
-    LOGE(TAG, "send_binary_payload: Invalid payload or zero length.");
-    return false;
-  }
-
-  const uint8_t *payload_bytes = (const uint8_t *)payload;
-  uint16_t current_seq_id = g_binary_seq_id;
-
-  // Calculate maximum data bytes per fragment
-  const size_t max_frag_data_len =
-      REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
-  if (max_frag_data_len <= 0) {
-    LOGE(TAG, "send_binary_payload: PAYLOAD_MAX too small for header.");
-    return false;  // Should not happen with standard ESP_NOW_MAX_DATA_LEN
-  }
-
-  // Calculate total number of fragments needed
-  const uint16_t total_fragments =
-      (data_len + max_frag_data_len - 1) / max_frag_data_len;
-
-  LOGI(TAG,
-       "Sending binary payload: Seq=%d, Type=%d, TotalSize=%d, Fragments=%d, "
-       "MaxFragData=%d",
-       current_seq_id, payload_type, data_len, total_fragments,
-       max_frag_data_len);
-
-  // Use a stack buffer for the fragment message (header + max data)
-  uint8_t frag_buffer[REMOTE_COMMS_DATA_MAX];  // Max possible size for one
-                                               // ESP-NOW message
-  binary_fragment_msg_t *frag_msg = (binary_fragment_msg_t *)frag_buffer;
-
-  size_t bytes_sent = 0;
-  bool all_sent_ok = true;
-
-  for (uint16_t i = 0; i < total_fragments; ++i) {
-    uint32_t current_offset = bytes_sent;
-    uint16_t current_len =
-        std::min((size_t)max_frag_data_len, data_len - bytes_sent);
-
-    // Fill the header
-    frag_msg->type = MSG_TYPE_BINARY;
-    frag_msg->sub_type = payload_type;
-    frag_msg->seq_id = current_seq_id;
-    frag_msg->total_payload_size = data_len;
-    frag_msg->total_fragments = total_fragments;
-    frag_msg->fragment_index = i;
-    frag_msg->fragment_offset = current_offset;
-    frag_msg->fragment_len = current_len;
-
-    // Copy the data chunk into the buffer right after the header
-    memcpy(frag_msg->data, payload_bytes + current_offset, current_len);
-
-    // Calculate the total size of this specific fragment message
-    size_t total_frag_msg_size = BINARY_FRAGMENT_MSG_HEADER_SIZE + current_len;
-
-    LOGD(TAG, "  Sending Frag %u/%u: Offset=%u, Len=%u, TotalMsgSize=%u", i,
-         total_fragments, current_offset, current_len, total_frag_msg_size);
-
-    // Send the fragment (using the broadcast address)
-    if (!remote_wrapper_send(display_mac_address, frag_buffer,
-                             total_frag_msg_size)) {
-      LOGW(TAG, "Failed to queue fragment %u for sending.", i);
-      all_sent_ok = false;
-      break;
-    }
-
-    bytes_sent += current_len;
-
-    // Add small delay between fragments if experiencing issues
-    // vTaskDelay(pdMS_TO_TICKS(5));
-  }
-
-  if (bytes_sent != data_len) {
-    LOGE(TAG, "Logic error in fragmentation: bytes_sent (%u) != data_len (%u)",
-         bytes_sent, data_len);
-    all_sent_ok = false;  // Indicate an internal error
-  }
-
-  // Increment the global sequence ID for the *next* binary message
-  if (all_sent_ok) {  // Or increment even if sending failed? Decide based on
-                      // recovery strategy.
-    g_binary_seq_id++;
-    LOGI(TAG, "Binary payload seq %u queued.", current_seq_id);
-  } else {
-    LOGW(TAG, "Failed to queue all fragments for binary payload seq %u.",
-         current_seq_id);
-  }
-
-  return all_sent_ok;
-}
 
 // --- Callback Functions (for machine interface) ---
 // These are called when the machine's state changes.
@@ -228,8 +136,8 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
         message_box_t_to_payload(machine->message_box, &payload_size);
     if (msg_box_payload) {
       LOGI(TAG, "Serialized message box to %u bytes.", payload_size);
-      send_binary_payload(msg_box_payload, payload_size,
-                          MSG_SUB_TYPE_MESSAGE_BOX);
+      remote_wrapper_send_fragmented_message(display_mac_address,
+                          MSG_SUB_TYPE_MESSAGE_BOX, (const uint8_t*)msg_box_payload, payload_size);
       free(msg_box_payload);
     } else {
       LOGE(TAG, "Failed to serialize message box.");
@@ -282,6 +190,7 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
   while (mach->filelists[idx].files[i] != NULL) {
     total_size += strlen(mach->filelists[idx].files[i]) + 1;
     ++num_files;
+    ++i;
   }
 
   uint8_t buf[total_size];
@@ -294,6 +203,7 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
   memcpy(offset, path, strlen(path) + 1);
   offset += strlen(path) + 1;
 
+  i=0;
   while (mach->filelists[idx].files[i] != NULL) {
     size_t sz = strlen(mach->filelists[idx].files[i]) + 1;
     memcpy(offset, mach->filelists[idx].files[i], sz);
@@ -302,9 +212,30 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
   }
 
   LOGI(TAG, "Serialized file list to %u bytes.", total_size);
-  if (!send_binary_payload(buf, total_size, MSG_SUB_TYPE_FILE_LIST)) {
+  if (!remote_wrapper_send_fragmented_message(display_mac_address, MSG_SUB_TYPE_FILE_LIST, buf, total_size)) {
     LOGI(TAG, "Failed to send binary file list to %u bytes.", total_size);
   }
+}
+
+void on_log_message_received(machine_interface_t *machine, void *user_data, const char *message) {
+    size_t len = strlen(message) + 1; // Include null terminator
+
+    LOGI(TAG, "Broadcasting log message: %s", message);
+
+    // If message is short enough for a single packet, use the simple format
+    if (len <= (REMOTE_COMMS_DATA_MAX - offsetof(log_msg_t, message))) {
+        size_t total_len = offsetof(log_msg_t, message) + len;
+        log_msg_t* msg = (log_msg_t*)malloc(total_len);
+        if (msg) {
+            msg->type = MSG_TYPE_LOG_MESSAGE;
+            strcpy(msg->message, message);
+            remote_wrapper_send(display_mac_address, (const uint8_t*)msg, total_len);
+            free(msg);
+        }
+    } else {
+        // Otherwise, use the robust fragmentation logic
+        remote_wrapper_send_fragmented_message(display_mac_address, MSG_SUB_TYPE_LOG_MESSAGE, (const uint8_t*)message, len);
+    }
 }
 
 void on_connected_change(machine_interface_t *machine, void *user_data) {
@@ -795,6 +726,8 @@ void setup_machine_interface() {
   machine_interface_add_spindles_tools_changed_cb(mach, mach,
                                                   on_spindles_tools_change);
   machine_interface_add_connected_changed_cb(mach, mach, on_connected_change);
+  machine_interface_add_log_message_cb(mach, mach, on_log_message_received);
+
 
   remote_recv_task_run();
 }
@@ -870,8 +803,8 @@ void setup() {
   LOGI(
       TAG,
       "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n",
-      recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle,
-      hub_task_handle);
+      (int)recv_task_handle, (int)machine_rrf_proc_task_handle, (int)machine_send_task_handle,
+      (int)hub_task_handle);
 #endif
 
 #ifndef USE_ARDINO_SETUP_LOOP
@@ -879,15 +812,15 @@ void setup() {
   LOGI(
       TAG,
       "Tasks:\n\n  RECV: %d\n  RRF-PROC: %d\n  MACH SEND: %d\n  HUB TASK: %d\n",
-      recv_task_handle, machine_rrf_proc_task_handle, machine_send_task_handle,
-      hub_task_handle);
+      (int)recv_task_handle, (int)machine_rrf_proc_task_handle, (int)machine_send_task_handle,
+      (int)hub_task_handle);
 #else
   LOGI(TAG, "Machine loaded..\n");
 #endif
 }
 
 void loop() {
-#ifndef USE_ARDUINO_SETUP_LOOP
+#ifndef USE_ARDINO_SETUP_LOOP
   // Don't need to loop here.
   // Let FreeRTOS machine poll/hub tasks handle their own loops.
   vTaskDelete(NULL);

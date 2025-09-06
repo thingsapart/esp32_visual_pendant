@@ -2,6 +2,7 @@
 #include "lv_probing_wizard.h"
 #include <stdio.h>
 #include <math.h>
+#include "cJSON.h"
 
 #define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
@@ -21,6 +22,7 @@ static const char * TAG = "mos_machine_handler";
 #define PROBE_DEFAULT_CIRCLE_DIAMETER 20.0f
 // The distance to probe downwards when finding the Z surface.
 #define PROBE_DEFAULT_Z_DISTANCE 10.0f 
+#define MAX_PROBE_RESULTS 4
 
 extern const uint8_t probe_routine_sizes[];
 
@@ -31,7 +33,6 @@ typedef enum {
     PROBE_STATE_IDLE,                 // Not currently probing
     PROBE_STATE_PENDING_Z_COMPLETE,   // Waiting for a Z-probe macro to finish
     PROBE_STATE_PENDING_XY_COMPLETE,  // Waiting for a complex XY-probe macro to finish
-    PROBE_STATE_AWAITING_POSITION,    // Macro is finished, waiting for the position report
 } probe_fsm_state_t;
 
 /**
@@ -43,8 +44,12 @@ static struct {
     machine_interface_t* machine;
     lv_obj_t* wizard_obj;
     probe_fsm_state_t probe_state;
-    // Flag to differentiate which type of probe is awaiting a position report
-    bool was_z_probe; 
+    
+    // Storage for results parsed from log messages
+    lv_probing_wizard_point_float_t parsed_result;
+    float parsed_z_result;
+    char last_parsed_axis[MAX_PROBE_RESULTS];
+    uint8_t probe_axes_reported_mask; // Bitmask: 1=X, 2=Y, 4=Z
 } handler_state = {0};
 
 
@@ -54,8 +59,8 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
 static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
 static void mos_install_probe(lv_obj_t* wizard_obj);
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data);
-static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data);
 static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data);
+static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, const char* message);
 
 /**
  * @brief Registration function to connect the MOS handler callbacks to the wizard.
@@ -70,7 +75,7 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     handler_state.wizard_obj = wizard_obj;
     handler_state.machine = machine;
     handler_state.probe_state = PROBE_STATE_IDLE;
-    handler_state.was_z_probe = false;
+    handler_state.probe_axes_reported_mask = 0;
 
     // Register the three main callbacks with the wizard.
     lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin, mos_install_probe);
@@ -78,8 +83,8 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     // Register callbacks with the machine interface to receive status updates.
     // This is crucial for the asynchronous operation of the handler.
     machine_interface_add_state_change_cb(machine, NULL, _mos_state_changed_cb);
-    machine_interface_add_pos_changed_cb(machine, NULL, _mos_pos_changed_cb);
     machine_interface_add_connected_changed_cb(machine, NULL, _mos_conn_changed_cb);
+    machine_interface_add_log_message_cb(machine, NULL, _mos_log_message_cb);
 
     LOGI(TAG, "MillenniumOS machine handler callbacks registered successfully.");
 
@@ -118,6 +123,12 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         LOGW(TAG, "Probe command ignored: machine not ready or probe already active.");
         return;
     }
+
+    // Reset probe result state for the new operation
+    handler_state.parsed_result = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
+    handler_state.parsed_z_result = NAN;
+    handler_state.probe_axes_reported_mask = 0;
+    memset(handler_state.last_parsed_axis, 0, sizeof(handler_state.last_parsed_axis));
 
     char gcode_buf[200];
     const probe_point_t* setup_points = lv_probing_wizard_get_setup_points(wizard_obj);
@@ -240,59 +251,86 @@ static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) 
  * @brief Callback for machine state changes. Used to detect when a probe macro finishes.
  */
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data) {
-    bool is_pending = (handler_state.probe_state == PROBE_STATE_PENDING_Z_COMPLETE ||
-                       handler_state.probe_state == PROBE_STATE_PENDING_XY_COMPLETE);
+    probe_fsm_state_t current_probe_state = handler_state.probe_state;
 
-    if (is_pending) {
-        // RRF's "idle" state is mapped to our "RUNNING" status when not processing a job.
-        // We check if the machine has returned to this state, which indicates the M98 macro has completed.
-        if (machine->machine_status == MACHINE_STATUS_RUNNING) {
-            LOGI(TAG, "Probe macro finished. Querying final position.");
+    if (current_probe_state != PROBE_STATE_IDLE && machine->machine_status == MACHINE_STATUS_RUNNING) {
+        LOGI(TAG, "Probe macro finished execution.");
 
-            // Record whether this was a Z probe or an XY probe before changing state
-            handler_state.was_z_probe = (handler_state.probe_state == PROBE_STATE_PENDING_Z_COMPLETE);
-            
-            // The macro is done. Now we need the machine's final position.
-            // We change state and send a position query. The pos_changed_cb will handle the result.
-            handler_state.probe_state = PROBE_STATE_AWAITING_POSITION;
-            machine->send_gcode(machine, "M409 K\"move.axes[]\"", MACHINE_POSITION);
-        }
-    }
-}
-
-/**
- * @brief Callback for machine position updates. Lightweight check to retrieve probe result.
- */
-static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data) {
-    // If we received a position, then we're connected.
-    lv_probing_wizard_set_connected(handler_state.wizard_obj, true);
-
-    // This callback is lightweight. It only acts if we are in the specific state of
-    // waiting for a position report after a probe. It ignores all other position updates.
-    if (handler_state.probe_state == PROBE_STATE_AWAITING_POSITION) {
-        LOGI(TAG, "Received position report after probe: WCS(X=%.3f, Y=%.3f), Machine(Z=%.3f)",
-             machine->wcs_position[0], machine->wcs_position[1], machine->position[2]);
-        
-        bool was_z_probe = handler_state.was_z_probe;
-
-        // CRITICAL: Reset the state machine to idle BEFORE advancing the wizard.
-        // This prevents the next probe command from being ignored.
+        // CRITICAL: Reset state machine immediately to prevent re-entry
         handler_state.probe_state = PROBE_STATE_IDLE;
-        handler_state.was_z_probe = false;
-        
-        // If the completed probe was for Z, update the wizard's Z-top value.
-        if (was_z_probe) {
-             lv_probing_wizard_set_z_top(handler_state.wizard_obj, machine->position[2]);
-             // After a Z probe, we simply advance the wizard to the next manual step.
-             lv_probing_wizard_advance_step(handler_state.wizard_obj);
-        } else {
-            // If it was an XY probe, report the final calculated XY result.
-            lv_probing_wizard_report_final_result(handler_state.wizard_obj,
-                                                  machine->wcs_position[0],
-                                                  machine->wcs_position[1]);
-            // And then fast-forward the wizard to the final "complete" step.
+
+        if (current_probe_state == PROBE_STATE_PENDING_Z_COMPLETE) {
+            if (!isnan(handler_state.parsed_z_result)) {
+                lv_probing_wizard_set_z_top(handler_state.wizard_obj, handler_state.parsed_z_result);
+            } else {
+                 LOGW(TAG, "Z Probe macro finished but no result was parsed from logs. Using last reported machine Z.");
+                 lv_probing_wizard_set_z_top(handler_state.wizard_obj, machine->position[2]);
+            }
+            lv_probing_wizard_advance_step(handler_state.wizard_obj);
+
+        } else if (current_probe_state == PROBE_STATE_PENDING_XY_COMPLETE) {
+            // Check if we received the expected X and Y results
+            if ((handler_state.probe_axes_reported_mask & 3) == 3) { // 3 = (bit 0 for X) | (bit 1 for Y)
+                lv_probing_wizard_report_final_result(handler_state.wizard_obj,
+                                                      handler_state.parsed_result.x,
+                                                      handler_state.parsed_result.y);
+            } else {
+                LOGW(TAG, "XY Probe macro finished but results were not fully parsed from logs (mask: %d). Falling back to last reported WCS.", handler_state.probe_axes_reported_mask);
+                lv_probing_wizard_report_final_result(handler_state.wizard_obj,
+                                                      machine->wcs_position[0],
+                                                      machine->wcs_position[1]);
+            }
+            // Fast-forward the wizard to the final "complete" step.
             uint8_t num_steps = probe_routine_sizes[lv_probing_wizard_get_mode(handler_state.wizard_obj)];
             lv_probing_wizard_set_active_step(handler_state.wizard_obj, num_steps - 1);
         }
     }
+}
+
+static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, const char* message) {
+    // Only parse logs if we are in a pending probe state
+    if (handler_state.probe_state == PROBE_STATE_IDLE) {
+        return;
+    }
+
+    cJSON *root = cJSON_Parse(message);
+    if (!root) return;
+
+    cJSON *resp_item = cJSON_GetObjectItem(root, "resp");
+    if (!cJSON_IsString(resp_item) || (resp_item->valuestring == NULL)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    const char* resp_str = resp_item->valuestring;
+    int index;
+    char axis;
+    float pos;
+    
+    // Attempt to parse global.mosWPSfcAxis[i]=A
+    if (sscanf(resp_str, "global.mosWPSfcAxis[%d]=%c", &index, &axis) == 2) {
+        if (index < MAX_PROBE_RESULTS) {
+            handler_state.last_parsed_axis[index] = axis;
+            LOGI(TAG, "Parsed probed axis index %d: %c", index, axis);
+        }
+    } 
+    // Attempt to parse global.mosWPSfcPos[i]=12.345
+    else if (sscanf(resp_str, "global.mosWPSfcPos[%d]=%f", &index, &pos) == 2) {
+        if (index < MAX_PROBE_RESULTS) {
+            char reported_axis = handler_state.last_parsed_axis[index];
+            LOGI(TAG, "Parsed probed position index %d for axis %c: %f", index, reported_axis, pos);
+            if (reported_axis == 'X') {
+                handler_state.parsed_result.x = pos;
+                handler_state.probe_axes_reported_mask |= 1;
+            } else if (reported_axis == 'Y') {
+                handler_state.parsed_result.y = pos;
+                handler_state.probe_axes_reported_mask |= 2;
+            } else if (reported_axis == 'Z') {
+                handler_state.parsed_z_result = pos;
+                handler_state.probe_axes_reported_mask |= 4;
+            }
+        }
+    }
+
+    cJSON_Delete(root);
 }

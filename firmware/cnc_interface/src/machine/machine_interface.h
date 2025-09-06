@@ -120,6 +120,13 @@ typedef struct files_changed_callback_t {
   files_changed_callback_cb_t cb_fn;
 } files_changed_callback_t;
 
+typedef void (*log_message_cb_t)(machine_interface_t *mach, void *user_data,
+                                 const char *message);
+typedef struct log_message_callback_t {
+  void *user_data;
+  log_message_cb_t cb_fn;
+} log_message_callback_t;
+
 // --- Machine Interface Structure (Virtual Class) ---
 
 typedef struct machine_interface_t {
@@ -147,7 +154,7 @@ typedef struct machine_interface_t {
   bool move_step;
 
 // Currently just G-Codes and Macros, extend if needed.
-#define MAX_FILE_LISTS 2  
+#define MAX_FILE_LISTS 2
   struct {
     char *fdir;
     char **files;
@@ -183,6 +190,7 @@ typedef struct machine_interface_t {
   machine_change_callback_t connected_changed_cb[MAX_CALLBACKS];
   machine_change_callback_t current_move_axis_changed_cb[MAX_CALLBACKS];
   files_changed_callback_t files_changed_cb[MAX_CALLBACKS];
+  log_message_callback_t log_message_cb[MAX_CALLBACKS];
 
   // --- Internal State ---
   int polli;
@@ -200,6 +208,7 @@ typedef struct machine_interface_t {
       machine_interface_t *self, void *data,
       size_t len);  // Called when new machine state data is available.
   bool (*is_connected)(machine_interface_t *self);
+  void (*attempt_connect)(machine_interface_t *self);
   void (*list_files)(machine_interface_t *self, const char *path);
   void (*run_macro)(machine_interface_t *self, const char *macro_name);
   void (*start_job)(machine_interface_t *self, const char *job_name);
@@ -259,6 +268,8 @@ void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir);
 void machine_interface_connected_updated(machine_interface_t *self);
 void machine_interface_current_move_axis_updated(machine_interface_t *self);
+void machine_interface_log_message_updated(machine_interface_t *self,
+                                           const char *message);
 void machine_interface_update_position(machine_interface_t *self, float *values,
                                        float *values_wcs);
 bool machine_interface_is_continuous_move(machine_interface_t *self);
@@ -290,6 +301,9 @@ void machine_interface_process_machine_state_response(machine_interface_t *self,
 bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             const char *path, void *user_data,
                                             files_changed_callback_cb_t cb);
+bool machine_interface_add_log_message_cb(machine_interface_t *self,
+                                          void *user_data,
+                                          log_message_cb_t cb);
 
 void free_message_box_t(message_box_t *msg_box);
 
@@ -332,4 +346,3 @@ add_callback_proto(machine_interface, current_move_axis_changed);
 #endif
 
 #endif  // MACHINE_INTERFACE_H
-

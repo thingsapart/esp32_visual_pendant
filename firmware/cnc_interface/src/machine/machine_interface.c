@@ -629,6 +629,11 @@ void machine_interface_current_move_axis_updated(machine_interface_t *self) {
   call_callbacks(current_move_axis_changed_cb);
 }
 
+void machine_interface_log_message_updated(machine_interface_t *self,
+                                           const char *message) {
+  call_callbacks_with_args(log_message_cb, message);
+}
+
 void machine_interface_update_position(machine_interface_t *self, float *values,
                                        float *values_wcs) {
   memcpy(self->position, values, sizeof(self->position));
@@ -647,6 +652,20 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self,
     if (!self->files_changed_cb[i].cb_fn) {
       self->files_changed_cb[i].cb_fn = cb;
       self->files_changed_cb[i].user_data = user_data;
+      return true;
+    }
+  }
+  assert(0 && "Maximum number of callbacks reached");
+  return false;
+}
+
+bool machine_interface_add_log_message_cb(machine_interface_t *self,
+                                          void *user_data,
+                                          log_message_cb_t cb) {
+  for (int i = 0; i < MAX_CALLBACKS; i++) {
+    if (!self->log_message_cb[i].cb_fn) {
+      self->log_message_cb[i].cb_fn = cb;
+      self->log_message_cb[i].user_data = user_data;
       return true;
     }
   }
@@ -737,4 +756,3 @@ add_callback_fn(machine_interface, state_change)
                                                 connected_changed)
                                     add_callback_fn(machine_interface,
                                                     current_move_axis_changed)
-

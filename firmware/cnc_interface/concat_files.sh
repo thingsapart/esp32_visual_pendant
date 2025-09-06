@@ -91,20 +91,36 @@ NOTE:
 
 Do not add comments like "FIX: ..." that describe what was fixed in _this step_/session, they will be obsolete soon enough and just clutter the file. Only add comments describing long-term pre-conditions, explaining the code as-written and so on.
 
-Format every file output the following way: start with a "!>>> {filename}" followed by a markdown code block and end with "!<<< end".
+Print blocks of changes as diffs. We use a special diffing format to automatically apply changes. Please follow this template.
 
-EG:
+Format every diff the following way:
 
 "
->> MakeFile
+!>>> {full filename and path as passed in}
 ```
-...
+{full original text section that will be replaced. print the full section verbatim here!}
+!===
+{changes to replace the above section with}
 ```
-<< end
+!<<< end
+"
+
+For example:
+
+"
+!>>> config.yaml
+```
+system:
+  theme: light
+!===
+system:
+  theme: dark
+```
+!<<< end
 "
 '
 
-echo "FINAL: $FINAL_MESSAGE"
+# echo "FINAL: $FINAL_MESSAGE"
 
 # Concatenate all file contents into a single variable.
 # This is done in a subshell, and its stdout is captured by the variable.

@@ -47,7 +47,8 @@ static const lv_probing_action_t rectangle_probe_actions[] = {
 static const lv_probing_action_t circle_probe_actions[] = {
     {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Jog roughly to the center of the circle.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
-    {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
+    {.instruction_text = "Jog to the feature's edge (inside for boss, outside for bore).", .highlight_mask = HIGHLIGHT_OUTLINE | HIGHLIGHT_CENTER, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(1)},
+    {.instruction_text = "Jog to a clear spot on the top surface and probe Z.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Probing workpiece...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
@@ -729,6 +730,10 @@ static void update_setup_points_display(lv_probing_wizard_t * wiz) {
         if (wiz->setup_points[0].is_set) {
             snprintf(buf, sizeof(buf), "Center: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
             any_set = true;
+        }
+        if (wiz->setup_points[1].is_set) {
+             snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "\nEdge: (%.2f, %.2f)", wiz->setup_points[1].x, wiz->setup_points[1].y);
+             any_set = true;
         }
     }
     // No explicit setup points for corner mode.
