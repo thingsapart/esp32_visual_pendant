@@ -245,9 +245,7 @@ static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data)
                        handler_state.probe_state == PROBE_STATE_PENDING_XY_COMPLETE);
 
     if (is_pending) {
-        // RRF's "idle" state is mapped to our "RUNNING" status when not processing a job.
-        // We check if the machine has returned to this state, which indicates the M98 macro has completed.
-        if (machine->machine_status == MACHINE_STATUS_RUNNING) {
+        if (machine->machine_status == MACHINE_STATUS_IDLE) {
             LOGI(TAG, "Probe macro finished. Querying final position.");
 
             // Record whether this was a Z probe or an XY probe before changing state

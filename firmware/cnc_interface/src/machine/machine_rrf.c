@@ -664,10 +664,9 @@ static machine_status_t machine_status_from_rrf_string(const char *rrf_status) {
   if (strcmp(rrf_status, "processing") == 0) return MACHINE_STATUS_RUNNING;
   if (strcmp(rrf_status, "changingTool") == 0)
     return MACHINE_STATUS_TOOL_CHANGING;
-  if (strcmp(rrf_status, "busy") == 0) return MACHINE_STATUS_BUSY;
+  if (strcmp(rrf_status, "busy") == 0) return MACHINE_STATUS_RUNNING;
   if (strcmp(rrf_status, "idle") == 0)
-    return MACHINE_STATUS_RUNNING;  // RRF idle means ready for command, same as
-                                    // our "running" state when not in a job.
+    return MACHINE_STATUS_IDLE;
   if (strcmp(rrf_status, "starting") == 0) return MACHINE_STATUS_INITIALIZING;
   return MACHINE_STATUS_UNKNOWN;
 }

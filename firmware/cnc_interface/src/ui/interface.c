@@ -85,8 +85,8 @@ static const char *machine_status_to_string(machine_status_t status) {
       return "PAUSED";
     case MACHINE_STATUS_TOOL_CHANGING:
       return "TOOL CHANGE";
-    case MACHINE_STATUS_BUSY:
-      return "BUSY";
+    case MACHINE_STATUS_IDLE:
+      return "IDLE";
     case MACHINE_STATUS_INITIALIZING:
       return "INIT";
     case MACHINE_STATUS_EMERGENCY_HALTED:

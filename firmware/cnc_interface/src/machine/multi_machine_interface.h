@@ -26,8 +26,7 @@ typedef struct {
   machine_interface_t base;
   machine_interface_t *machines[MAX_MACHINES];
   size_t num_machines;
-  bool connected;  // keep the multi-machine connected if any of its delegates
-                   // are.
+  int active_machine_idx; // Index of the active machine in the machines array, or -1 if none.
 } multi_machine_interface_t;
 
 multi_machine_interface_t *multi_machine_interface_create();

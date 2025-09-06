@@ -12,8 +12,6 @@
 static const char *TAG = "multi_machine";
 
 // --- Forward Declarations (for internal "virtual" methods) ---
-// These are *static* because they're only used within this file.
-
 static void _multi_machine_send_gcode(machine_interface_t *self,
                                       const char *gcode, uint32_t poll_state);
 static void _multi_machine__send_gcode(machine_interface_t *self,
@@ -62,55 +60,46 @@ static void _multi_machine__continuous_stop(machine_interface_t *self);
 static void _multi_machine__continuous_move(machine_interface_t *self,
                                             const char axis, float feed,
                                             int direction);
+static void _mach_copy_state(multi_machine_interface_t *mm,
+                             machine_interface_t *mach);
 
 // --- Method Implementations ---
 
+#define GET_ACTIVE_MACHINE(self, mach_ptr)                                  \
+  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self; \
+  if (multi_self->active_machine_idx == -1) {                               \
+    LOGW(TAG, "Cannot perform action, no active machine.");                  \
+    return;                                                                 \
+  }                                                                         \
+  machine_interface_t *mach_ptr =                                           \
+      multi_self->machines[multi_self->active_machine_idx];                 \
+  if (!mach_ptr) return
+
 static void _multi_machine_send_gcode(machine_interface_t *self,
                                       const char *gcode, uint32_t poll_state) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode,
-         multi_self->machines[i]->is_connected(multi_self->machines[i]));
-
-    if (!multi_self->machines[i]->is_connected ||
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->send_gcode) {  // Always check for NULL
-        multi_self->machines[i]->send_gcode(multi_self->machines[i], gcode,
-                                            poll_state);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->send_gcode) {
+        active_mach->send_gcode(active_mach, gcode, poll_state);
     }
-  }
 }
 
 static void _multi_machine__send_gcode(machine_interface_t *self,
                                        const char *gcode) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    LOGI(TAG, "Sending machine %d => %s (conn %d)", i, gcode,
-         multi_self->machines[i]->is_connected(multi_self->machines[i]));
-    // The _send_gcode function is the raw send. It should not check for
-    // connection, as some commands (like status polls) are needed to establish
-    // the connection in the first place.
-    if (multi_self->machines[i] && multi_self->machines[i]->_send_gcode) {
-      multi_self->machines[i]->_send_gcode(multi_self->machines[i], gcode);
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->_send_gcode) {
+        active_mach->_send_gcode(active_mach, gcode);
     }
-  }
 }
 
 static void _multi_machine_update_machine_state(machine_interface_t *self,
                                                 uint32_t poll_state) {
   multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
   for (size_t i = 0; i < multi_self->num_machines; i++) {
-    // Propagate the G-code queue from the multi-machine parent to its children
-    // if it has been set. This handles late initialization of the queue.
     if (multi_self->base.gcode_queue &&
         !multi_self->machines[i]->gcode_queue) {
       multi_self->machines[i]->gcode_queue = multi_self->base.gcode_queue;
       LOGI(TAG, "Propagated gcode_queue to machine %d", (int)i);
     }
-
-    // Do not check is_connected here. The update state function is responsible
-    // for establishing the connection if it is not already present.
     if (multi_self->machines[i] &&
         multi_self->machines[i]->_update_machine_state) {
       multi_self->machines[i]->_update_machine_state(multi_self->machines[i],
@@ -120,303 +109,172 @@ static void _multi_machine_update_machine_state(machine_interface_t *self,
 }
 
 static bool _multi_machine_is_connected(machine_interface_t *self) {
-  // Return true if ANY of the child machines are connected.
   multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  bool any_connected = false;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    // Check for NULL and then call is_connected
-    LOGI(TAG, "Connected machine %d => (conn %d)", i,
-         multi_self->machines[i]->is_connected(multi_self->machines[i]));
-    if (multi_self->machines[i] && multi_self->machines[i]->is_connected) {
-      if (multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-        any_connected = true;
-      }
-    }
-  }
-  return any_connected;
+  return multi_self->active_machine_idx != -1;
 }
 
 static void _multi_machine_list_files(machine_interface_t *self,
                                       const char *path) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->list_files) {  // Always check for NULL
-        multi_self->machines[i]->list_files(multi_self->machines[i], path);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->list_files) {
+        active_mach->list_files(active_mach, path);
     }
-  }
 }
 static void _multi_machine_run_macro(machine_interface_t *self,
                                      const char *macro_name) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->run_macro) {  // Always check for NULL
-        multi_self->machines[i]->run_macro(multi_self->machines[i], macro_name);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->run_macro) {
+        active_mach->run_macro(active_mach, macro_name);
     }
-  }
 }
 
 static void _multi_machine_start_job(machine_interface_t *self,
                                      const char *job_name) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->start_job) {  // Always check for NULL
-        multi_self->machines[i]->start_job(multi_self->machines[i], job_name);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->start_job) {
+        active_mach->start_job(active_mach, job_name);
     }
-  }
 }
 
 static void _multi_machine_move_continuous(machine_interface_t *self,
                                            const char axis, float feed,
                                            int direction) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->move_continuous) {  // Always check for NULL
-        multi_self->machines[i]->move_continuous(multi_self->machines[i], axis,
-                                                 feed, direction);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->move_continuous) {
+        active_mach->move_continuous(active_mach, axis, feed, direction);
     }
-  }
 }
 
 static void _multi_machine__continuous_move(machine_interface_t *self,
                                             const char axis, float feed,
                                             int direction) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->_continuous_move) {  // Always check for NULL
-        multi_self->machines[i]->_continuous_move(multi_self->machines[i], axis,
-                                                  feed, direction);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->_continuous_move) {
+        active_mach->_continuous_move(active_mach, axis, feed, direction);
     }
-  }
 }
 
 static void _multi_machine_move_continuous_stop(machine_interface_t *self) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]
-              ->move_continuous_stop) {  // Always check for NULL
-        multi_self->machines[i]->move_continuous_stop(multi_self->machines[i]);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->move_continuous_stop) {
+        active_mach->move_continuous_stop(active_mach);
     }
-  }
 }
 static void _multi_machine__continuous_stop(machine_interface_t *self) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->_continuous_stop) {  // Always check for NULL
-        multi_self->machines[i]->_continuous_stop(multi_self->machines[i]);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->_continuous_stop) {
+        active_mach->_continuous_stop(active_mach);
     }
-  }
 }
 
 static void _multi_machine_move(machine_interface_t *self, const char axis,
                                 float feed, float value) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->move) {  // Always check for NULL
-        multi_self->machines[i]->move(multi_self->machines[i], axis, feed,
-                                      value);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->move) {
+        active_mach->move(active_mach, axis, feed, value);
     }
-  }
 }
 
 static void _multi_machine_home_all(machine_interface_t *self) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->home_all) {  // Always check for NULL
-        multi_self->machines[i]->home_all(multi_self->machines[i]);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->home_all) {
+        active_mach->home_all(active_mach);
     }
-  }
 }
 
 static void _multi_machine_home(machine_interface_t *self, const char *axes) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->home) {  // Always check for NULL
-        multi_self->machines[i]->home(multi_self->machines[i], axes);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->home) {
+        active_mach->home(active_mach, axes);
     }
-  }
 }
 
 static void _multi_machine_set_wcs(machine_interface_t *self, int wcs) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->set_wcs) {  // Always check for NULL
-        multi_self->machines[i]->set_wcs(multi_self->machines[i], wcs);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->set_wcs) {
+        active_mach->set_wcs(active_mach, wcs);
     }
-  }
 }
 
 static void _multi_machine_set_wcs_zero(machine_interface_t *self, int wcs,
                                         const char *axes) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->set_wcs_zero) {
-        multi_self->machines[i]->set_wcs_zero(multi_self->machines[i], wcs,
-                                              axes);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->set_wcs_zero) {
+        active_mach->set_wcs_zero(active_mach, wcs, axes);
     }
-  }
 }
 
 static void _multi_machine_next_wcs(machine_interface_t *self) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->next_wcs) {
-        multi_self->machines[i]->next_wcs(multi_self->machines[i]);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->next_wcs) {
+        active_mach->next_wcs(active_mach);
     }
-  }
 }
 
 static void _multi_machine_modal_cancel(machine_interface_t *self,
                                         int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_cancel) {
-        multi_self->machines[i]->modal_cancel(multi_self->machines[i],
-                                              modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_cancel) {
+        active_mach->modal_cancel(active_mach, modal_id);
     }
-  }
 }
 
 static void _multi_machine_modal_ok(machine_interface_t *self, int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_ok) {
-        multi_self->machines[i]->modal_ok(multi_self->machines[i], modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_ok) {
+        active_mach->modal_ok(active_mach, modal_id);
     }
-  }
 }
 static void _multi_machine_modal_choice(machine_interface_t *self, int choice,
                                         int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_choice) {
-        multi_self->machines[i]->modal_choice(multi_self->machines[i], choice,
-                                              modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_choice) {
+        active_mach->modal_choice(active_mach, choice, modal_id);
     }
-  }
 }
 
 static void _multi_machine_modal_int(machine_interface_t *self, int val,
                                      int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_int) {
-        multi_self->machines[i]->modal_int(multi_self->machines[i], val,
-                                           modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_int) {
+        active_mach->modal_int(active_mach, val, modal_id);
     }
-  }
 }
 static void _multi_machine_modal_float(machine_interface_t *self, float val,
                                        int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_float) {
-        multi_self->machines[i]->modal_float(multi_self->machines[i], val,
-                                             modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_float) {
+        active_mach->modal_float(active_mach, val, modal_id);
     }
-  }
 }
 static void _multi_machine_modal_str(machine_interface_t *self, const char *val,
                                      int modal_id) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->modal_str) {
-        multi_self->machines[i]->modal_str(multi_self->machines[i], val,
-                                           modal_id);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->modal_str) {
+        active_mach->modal_str(active_mach, val, modal_id);
     }
-  }
 }
 static void _multi_machine_probe(machine_interface_t *self,
                                  const char *probe_gcode) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->machines[i]->is_connected &&
-        multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->probe) {
-        multi_self->machines[i]->probe(multi_self->machines[i], probe_gcode);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->probe) {
+        active_mach->probe(active_mach, probe_gcode);
     }
-  }
 }
 
 static void _multi_machine_set_connected(machine_interface_t *self, bool connected) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    // We delegate the call to all children, letting them manage their own state.
-    if (multi_self->machines[i] && multi_self->machines[i]->set_connected) {
-      multi_self->machines[i]->set_connected(multi_self->machines[i], connected);
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->set_connected) {
+        active_mach->set_connected(active_mach, connected);
     }
-  }
 }
 
 static void _multi_machine_process_machine_state_response(
     machine_interface_t *self, void *data, size_t len) {
-  multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    // Delegate to all children. The child that sent the data will process it.
-    if (multi_self->machines[i] && multi_self->machines[i]->is_connected(multi_self->machines[i])) {
-      if (multi_self->machines[i]->process_machine_state_response) {
-        multi_self->machines[i]->process_machine_state_response(
-            multi_self->machines[i], data, len);
-      }
+    GET_ACTIVE_MACHINE(self, active_mach);
+    if(active_mach->process_machine_state_response) {
+        active_mach->process_machine_state_response(active_mach, data, len);
     }
-  }
 }
 
 static char * IRAM_ATTR _multi_machine_debug_print(machine_interface_t *self) {
@@ -437,13 +295,10 @@ multi_machine_interface_t *multi_machine_interface_create() {
 
 multi_machine_interface_t *multi_machine_interface_init(
     multi_machine_interface_t *self) {
-  // Initialize base class (important!)
-  machine_interface_init(
-      &self->base,
-      MACHINE_SEND_GCODE_INTERVAL_MS);  // No internal processing loop for the
-                                        // multi-machine
+  machine_interface_init(&self->base, MACHINE_SEND_GCODE_INTERVAL_MS);
 
   self->num_machines = 0;
+  self->active_machine_idx = -1;
   for (int i = 0; i < MAX_MACHINES; i++) {
     self->machines[i] = NULL;
   }
@@ -484,12 +339,7 @@ multi_machine_interface_t *multi_machine_interface_init(
 }
 
 void multi_machine_interface_deinit(multi_machine_interface_t *self) {
-  // Clean up any multi-machine-specific resources
   machine_interface_deinit(&self->base);
-
-  // IMPORTANT:  Do *NOT* destroy the individual machine interfaces here.
-  // They are owned and managed by whoever created them.
-  // We are only *referencing* them.
 }
 void multi_machine_interface_destroy(multi_machine_interface_t *self) {
   if (self) {
@@ -538,14 +388,10 @@ static void _mach_copy_pos(multi_machine_interface_t *mm,
   MACH_MEMCPY(position);
   MACH_MEMCPY(wcs_position);
   MACH_MEMCPY(target_position);
-  // mm->base.current_move_axis = mach->current_move_axis;
-  // mm->base.current_move_step = mach->current_move_step;
   mm->base.wcs = mach->wcs;
   mm->base.z_offs = mach->z_offs;
   mm->base.feed = mach->feed;
   mm->base.feed_req = mach->feed_req;
-  // mm->base.move_relative = mach->move_relative;
-  // mm->base.move_step = mach->move_step;
 }
 
 static void _mach_copy_probes(multi_machine_interface_t *mm,
@@ -594,50 +440,28 @@ static void _mach_copy_spindles(multi_machine_interface_t *mm,
 
 static void _mach_copy_message_box(multi_machine_interface_t *mm,
                                    machine_interface_t *mach) {
-  // First, always free the existing message box in the multi-machine interface.
   if (mm->base.message_box) {
     free_message_box_t(mm->base.message_box);
     mm->base.message_box = NULL;
   }
-
-  // If the source machine has a message box, deep-copy it.
   if (mach->message_box) {
     mm->base.message_box = (message_box_t *)calloc(1, sizeof(message_box_t));
-    if (!mm->base.message_box) {
-      LOGE(TAG, "Failed to allocate memory for message box copy");
-      return;
-    }
-
+    if (!mm->base.message_box) return;
     mm->base.message_box->mode = mach->message_box->mode;
     mm->base.message_box->seq = mach->message_box->seq;
-
-    if (mach->message_box->title) {
-      mm->base.message_box->title = strdup(mach->message_box->title);
-    }
-    if (mach->message_box->text) {
-      mm->base.message_box->text = strdup(mach->message_box->text);
-    }
-
+    if (mach->message_box->title) mm->base.message_box->title = strdup(mach->message_box->title);
+    if (mach->message_box->text) mm->base.message_box->text = strdup(mach->message_box->text);
     mm->base.message_box->num_choices = mach->message_box->num_choices;
     if (mach->message_box->num_choices > 0 && mach->message_box->choices) {
-      mm->base.message_box->choices =
-          (char **)calloc(mach->message_box->num_choices, sizeof(char *));
+      mm->base.message_box->choices = (char **)calloc(mach->message_box->num_choices, sizeof(char *));
       if (mm->base.message_box->choices) {
         for (size_t i = 0; i < mach->message_box->num_choices; ++i) {
-          if (mach->message_box->choices[i]) {
-            mm->base.message_box->choices[i] =
-                strdup(mach->message_box->choices[i]);
-          }
+          if (mach->message_box->choices[i])
+            mm->base.message_box->choices[i] = strdup(mach->message_box->choices[i]);
         }
-      } else {
-        LOGE(TAG, "Failed to allocate memory for message box choices");
-        mm->base.message_box->num_choices = 0;
       }
     }
     mm->base.message_box->machine = &mm->base;
-    // user_data is not copied as it belongs to the context of the original
-    // machine
-    mm->base.message_box->user_data = NULL;
   }
 }
 
@@ -648,92 +472,78 @@ static void _mach_copy_state(multi_machine_interface_t *mm,
   MACH_MEMCPY(position);
   MACH_MEMCPY(wcs_position);
   MACH_MEMCPY(target_position);
-  // mm->base.current_move_axis = mach->current_move_axis;
-  // mm->base.current_move_step = mach->current_move_step;
   mm->base.wcs = mach->wcs;
   mm->base.z_offs = mach->z_offs;
   mm->base.feed = mach->feed;
   mm->base.feed_req = mach->feed_req;
-  // mm->base.move_relative = mach->move_relative;
-  // mm->base.move_step = mach->move_step;
-
   if (mach->tool) {
-    if (mm->base.tool) {
-      free((void *)mm->base.tool);
-    }
+    if (mm->base.tool) free((void *)mm->base.tool);
     mm->base.tool = strdup(mach->tool);
   }
-
   MACH_ARRCPY(probes);
   MACH_ARRCPY(end_stops);
   MACH_ARRCPY(spindles);
-
   _mach_copy_message_box(mm, mach);
 }
 
 #undef MACH_MEMCPY
 #undef MACH_ARRCPY
 
+#define IS_ACTIVE_MACHINE(self, mach) (self->active_machine_idx != -1 && self->machines[self->active_machine_idx] == mach)
+
 void _mach_cb_state(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_state(self, mach);
   machine_interface_state_updated(&self->base);
 }
 
 void _mach_cb_pos(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_pos(self, mach);
-  LOGI(TAG, "Pos updated.");
   machine_interface_position_updated(&self->base);
 }
 
 void _mach_cb_home(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_pos(self, mach);
   machine_interface_home_updated(&self->base);
 }
 
 void _mach_cb_wcs(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_wcs(self, mach);
   machine_interface_wcs_updated(&self->base);
 }
 
 void _mach_cb_feed(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_feed(self, mach);
   machine_interface_feed_updated(&self->base);
 }
 
 void _mach_cb_sensors(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_probes(self, mach);
   _mach_copy_end_stops(self, mach);
-
   machine_interface_sensors_updated(&self->base);
 }
 
 void _mach_cb_dialogs(machine_interface_t *mach, void *user_data) {
-  LOGI(TAG, "MESSAGE BOX UPDATED CB");
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_message_box(self, mach);
-  if (self->base.message_box) {
-    LOGI(TAG, "MESSAGE BOX UPDATED: %s / %s",
-         self->base.message_box->title ? self->base.message_box->title : "N/A",
-         self->base.message_box->text ? self->base.message_box->text : "N/A");
-  } else {
-    LOGI(TAG, "MESSAGE BOX CLEARED");
-  }
-
   machine_interface_dialogs_updated(&self->base);
 }
 
 void _mach_cb_spindles(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_spindles(self, mach);
   machine_interface_spindles_tools_updated(&self->base);
 }
@@ -741,20 +551,56 @@ void _mach_cb_spindles(machine_interface_t *mach, void *user_data) {
 void _mach_cb_files(machine_interface_t *mach, void *user_data,
                     const char *path, char **files) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-
+  if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_files(self, mach);
-
   machine_interface_files_updated(&self->base, path);
+}
+
+static void _mach_cb_connected(machine_interface_t* mach, void* user_data) {
+    multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
+    bool is_connected = mach->is_connected(mach);
+
+    int mach_idx = -1;
+    for (int i = 0; i < self->num_machines; i++) {
+        if (self->machines[i] == mach) {
+            mach_idx = i;
+            break;
+        }
+    }
+    if (mach_idx == -1) return;
+
+    if (is_connected) {
+        if (self->active_machine_idx == -1) {
+            LOGI(TAG, "Machine %d connected and is now the ACTIVE machine.", mach_idx);
+            self->active_machine_idx = mach_idx;
+            _mach_copy_state(self, mach);
+            machine_interface_state_updated(&self->base);
+            machine_interface_position_updated(&self->base);
+            machine_interface_home_updated(&self->base);
+            machine_interface_wcs_updated(&self->base);
+            machine_interface_feed_updated(&self->base);
+            machine_interface_sensors_updated(&self->base);
+            machine_interface_dialogs_updated(&self->base);
+            machine_interface_spindles_tools_updated(&self->base);
+            machine_interface_connected_updated(&self->base);
+        } else {
+             LOGW(TAG, "Machine %d connected, but machine %d is already active. Ignoring.", mach_idx, self->active_machine_idx);
+        }
+    } else {
+        if (self->active_machine_idx == mach_idx) {
+            LOGI(TAG, "Active machine %d disconnected. No active machine.", mach_idx);
+            self->active_machine_idx = -1;
+            machine_interface_connected_updated(&self->base);
+        }
+    }
 }
 
 bool multi_machine_add_impl(multi_machine_interface_t *self,
                             machine_interface_t *machine) {
-  if (!self || !machine) {
-    return false;
-  }
+  if (!self || !machine) return false;
   if (self->num_machines >= MAX_MACHINES) {
     LOGE(TAG, "Maximum number of machines reached");
-    return false;  // Too many machines
+    return false;
   }
   self->machines[self->num_machines++] = machine;
   machine->procrate_ms = self->base.procrate_ms;
@@ -765,10 +611,10 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
   machine_interface_add_wcs_changed_cb(machine, self, _mach_cb_wcs);
   machine_interface_add_feed_changed_cb(machine, self, _mach_cb_feed);
   machine_interface_add_sensors_changed_cb(machine, self, _mach_cb_sensors);
-  machine_interface_add_spindles_tools_changed_cb(machine, self,
-                                                  _mach_cb_spindles);
+  machine_interface_add_spindles_tools_changed_cb(machine, self, _mach_cb_spindles);
   machine_interface_add_dialogs_changed_cb(machine, self, _mach_cb_dialogs);
   machine_interface_add_files_changed_cb(machine, NULL, self, _mach_cb_files);
+  machine_interface_add_connected_changed_cb(machine, self, _mach_cb_connected);
 
   LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
   return true;
