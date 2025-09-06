@@ -94,16 +94,30 @@ static void _multi_machine__send_gcode(machine_interface_t *self,
 static void _multi_machine_update_machine_state(machine_interface_t *self,
                                                 uint32_t poll_state) {
   multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
-  for (size_t i = 0; i < multi_self->num_machines; i++) {
-    if (multi_self->base.gcode_queue &&
-        !multi_self->machines[i]->gcode_queue) {
-      multi_self->machines[i]->gcode_queue = multi_self->base.gcode_queue;
-      LOGI(TAG, "Propagated gcode_queue to machine %d", (int)i);
+
+  if (multi_self->active_machine_idx != -1) {
+    // === ACTIVE POLLING ===
+    // We have a connection, only poll the active machine.
+    machine_interface_t *active_mach =
+        multi_self->machines[multi_self->active_machine_idx];
+    if (active_mach && active_mach->_update_machine_state) {
+      if (multi_self->base.gcode_queue && !active_mach->gcode_queue) {
+        active_mach->gcode_queue = multi_self->base.gcode_queue;
+      }
+      active_mach->_update_machine_state(active_mach, poll_state);
     }
-    if (multi_self->machines[i] &&
-        multi_self->machines[i]->_update_machine_state) {
-      multi_self->machines[i]->_update_machine_state(multi_self->machines[i],
-                                                     poll_state);
+  } else {
+    // === RECONNECT POLLING ===
+    // No active connection, poll all interfaces to try and find one.
+    LOGV(TAG, "No active machine, polling all interfaces for reconnect...");
+    for (size_t i = 0; i < multi_self->num_machines; i++) {
+      machine_interface_t *mach = multi_self->machines[i];
+      if (mach && mach->_update_machine_state) {
+        if (multi_self->base.gcode_queue && !mach->gcode_queue) {
+          mach->gcode_queue = multi_self->base.gcode_queue;
+        }
+        mach->_update_machine_state(mach, poll_state);
+      }
     }
   }
 }
