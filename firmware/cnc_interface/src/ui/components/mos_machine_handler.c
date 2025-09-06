@@ -95,7 +95,6 @@ static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void) {
     if (!handler_state.machine) {
         return (lv_probing_wizard_point_float_t){-9999, -9999};
     }
-
     // The machine interface stores the current position in WCS coordinates.
     return (lv_probing_wizard_point_float_t){
         .x = handler_state.machine->wcs_position[0],
@@ -245,7 +244,9 @@ static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data)
                        handler_state.probe_state == PROBE_STATE_PENDING_XY_COMPLETE);
 
     if (is_pending) {
-        if (machine->machine_status == MACHINE_STATUS_IDLE) {
+        // RRF's "idle" state is mapped to our "RUNNING" status when not processing a job.
+        // We check if the machine has returned to this state, which indicates the M98 macro has completed.
+        if (machine->machine_status == MACHINE_STATUS_RUNNING) {
             LOGI(TAG, "Probe macro finished. Querying final position.");
 
             // Record whether this was a Z probe or an XY probe before changing state
@@ -272,8 +273,15 @@ static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data) {
         LOGI(TAG, "Received position report after probe: WCS(X=%.3f, Y=%.3f), Machine(Z=%.3f)",
              machine->wcs_position[0], machine->wcs_position[1], machine->position[2]);
         
+        bool was_z_probe = handler_state.was_z_probe;
+
+        // CRITICAL: Reset the state machine to idle BEFORE advancing the wizard.
+        // This prevents the next probe command from being ignored.
+        handler_state.probe_state = PROBE_STATE_IDLE;
+        handler_state.was_z_probe = false;
+        
         // If the completed probe was for Z, update the wizard's Z-top value.
-        if (handler_state.was_z_probe) {
+        if (was_z_probe) {
              lv_probing_wizard_set_z_top(handler_state.wizard_obj, machine->position[2]);
              // After a Z probe, we simply advance the wizard to the next manual step.
              lv_probing_wizard_advance_step(handler_state.wizard_obj);
@@ -286,9 +294,5 @@ static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data) {
             uint8_t num_steps = probe_routine_sizes[lv_probing_wizard_get_mode(handler_state.wizard_obj)];
             lv_probing_wizard_set_active_step(handler_state.wizard_obj, num_steps - 1);
         }
-        
-        // Reset the state machine to idle, ready for the next operation.
-        handler_state.probe_state = PROBE_STATE_IDLE;
-        handler_state.was_z_probe = false;
     }
 }

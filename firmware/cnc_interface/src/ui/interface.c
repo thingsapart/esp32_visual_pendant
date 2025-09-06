@@ -98,6 +98,19 @@ static const char *machine_status_to_string(machine_status_t status) {
   }
 }
 
+/**
+ * @brief Event handler for the main tileview to track the active tile.
+ */
+static void tileview_event_handler(lv_event_t * e) {
+    lv_obj_t * tileview = lv_event_get_target(e);
+    if (tileview) {
+        lv_obj_t *o = lv_tileview_get_tile_active(tileview);
+        float x = lv_obj_get_x(o), y = lv_obj_get_y(o);
+        float col = round(x / (float) TFT_WIDTH), row = round(y / (float) TFT_HEIGHT);
+        data_binding_notify_state_changed("ui.active_tile_index", (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = (float)col});
+    }
+}
+
 // --- Public API ---
 
 void interface_init(interface_t *interface, machine_interface_t *machine) {
@@ -135,6 +148,12 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
                                          on_files_change);
   machine_interface_add_files_changed_cb(machine, "macros", interface,
                                          on_files_change);
+
+  // Find the main tileview and attach an event handler to track its state
+  lv_obj_t* tileview = obj_registry_get("main_tileview");
+  if (tileview) {
+      lv_obj_add_event_cb(tileview, tileview_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+  }
 
 #ifdef DWC_MACHINE_MODE
   // Check if we need to show the DWC setup screen

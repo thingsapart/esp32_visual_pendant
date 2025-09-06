@@ -562,7 +562,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_ext_click_area(button_58, 30);
     data_binding_add_observer("motion.homed.z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
     data_binding_add_observer("motion.jog.axis_is_z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
-    data_binding_add_action(button_58, "action.motion.jog.axis_select_z", 0, NULL, 0, NULL);
+    data_binding_add_action(button_58, "action.motion.jog.axis_select_x", 0, NULL, 0, NULL);
     // unnamed: label_59 (label)
     lv_obj_t* label_59 = lv_label_create(button_58);
 
@@ -1935,6 +1935,26 @@ void create_ui(lv_obj_t* parent) {
     lv_label_set_text(label_218, "Connecting...");
     lv_obj_set_style_text_font(label_218, font_kode_34_1, 0);
     lv_obj_center(label_218);
+
+
+    // jog_axis_selector: jog_axis_selector_219 (button)
+    lv_obj_t* jog_axis_selector_219 = lv_button_create(parent);
+
+    obj_registry_add("jog_axis_selector", jog_axis_selector_219);
+    lv_obj_set_style_size(jog_axis_selector_219, 55, 55, 0);
+    lv_obj_set_style_radius(jog_axis_selector_219, 32767, 0);
+    lv_obj_align(jog_axis_selector_219, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
+    lv_obj_set_style_shadow_width(jog_axis_selector_219, 10, 0);
+    lv_obj_set_style_shadow_opa(jog_axis_selector_219, 150, 0);
+    lv_obj_set_style_shadow_offset_y(jog_axis_selector_219, 4, 0);
+    data_binding_add_action(jog_axis_selector_219, "action.motion.jog.axis_cycle", 0, NULL, 0, NULL);
+    data_binding_add_observer("ui.active_tile_index", jog_axis_selector_219, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)0 }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)1 }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)2 }, .value = { .b_val = true } } }, 3, NULL);
+    // unnamed: label_220 (label)
+    lv_obj_t* label_220 = lv_label_create(jog_axis_selector_219);
+
+    lv_obj_set_style_text_font(label_220, font_kode_24_3, 0);
+    lv_obj_center(label_220);
+    data_binding_add_observer("motion.jog.axis_selected_str", label_220, 0, "%s", 0, NULL);
 
 
 }
