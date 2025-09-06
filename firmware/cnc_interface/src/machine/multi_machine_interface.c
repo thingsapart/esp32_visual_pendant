@@ -1,7 +1,4 @@
 // multi_machine_interface.c
-#define UI_DEBUG_LOCAL_LEVEL D_ERROR
-#include "debug.h"
-
 #include "multi_machine_interface.h"
 
 #include <assert.h>
@@ -9,6 +6,8 @@
 #include <string.h>
 
 #include "config.h"
+#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#include "debug.h"
 
 static const char *TAG = "multi_machine";
 
@@ -644,6 +643,7 @@ static void _mach_copy_message_box(multi_machine_interface_t *mm,
 
 static void _mach_copy_state(multi_machine_interface_t *mm,
                              machine_interface_t *mach) {
+  mm->base.machine_status = mach->machine_status;
   MACH_MEMCPY(axes_homed);
   MACH_MEMCPY(position);
   MACH_MEMCPY(wcs_position);
@@ -676,9 +676,8 @@ static void _mach_copy_state(multi_machine_interface_t *mm,
 
 void _mach_cb_state(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-  // NOP, done on every task loop iter.
-  // ? _mach_copy_state(self, mach);
-  _mach_copy_pos(self, mach);
+  _mach_copy_state(self, mach);
+  machine_interface_state_updated(&self->base);
 }
 
 void _mach_cb_pos(machine_interface_t *mach, void *user_data) {
@@ -692,7 +691,7 @@ void _mach_cb_pos(machine_interface_t *mach, void *user_data) {
 void _mach_cb_home(machine_interface_t *mach, void *user_data) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
 
-  _mach_copy_homed(self, mach);
+  _mach_copy_pos(self, mach);
   machine_interface_home_updated(&self->base);
 }
 
@@ -774,4 +773,3 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
   LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
   return true;
 }
-

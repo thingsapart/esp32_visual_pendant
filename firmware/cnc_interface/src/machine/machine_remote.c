@@ -660,7 +660,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       }
       status_msg_t *msg = (status_msg_t *)data;
       self->base.machine_status = msg->status;
-      machine_interface_connected_updated(&self->base);
+      machine_interface_state_updated(&self->base);
 
       LOGI(TAG, "Received status %d", machine->machine_status);
 
