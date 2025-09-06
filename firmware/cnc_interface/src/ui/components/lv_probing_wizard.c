@@ -83,6 +83,7 @@ typedef struct {
     lv_obj_t * result_label_x;
     lv_obj_t * result_label_y;
     lv_obj_t * result_label_z;
+    lv_obj_t * setup_points_label;
 
     // Control Buttons
     lv_obj_t * btn_bar;
@@ -128,6 +129,7 @@ typedef struct {
     get_current_jogged_position_cb_t get_pos_cb;
     execute_probe_cb_t exec_probe_cb;
     set_wcs_origin_cb_t set_wcs_cb;
+    install_probe_tool_cb_t install_probe_cb;
 
     char result_label_x_text[32];
     char result_label_y_text[32];
@@ -149,6 +151,7 @@ static void apply_last_result_btn_event_cb(lv_event_t * e);
 static void update_ui_state(lv_obj_t * obj);
 static void update_progress_panel(lv_probing_wizard_t * wiz);
 static void update_last_result_display(lv_probing_wizard_t * wiz);
+static void update_setup_points_display(lv_probing_wizard_t * wiz);
 
 
 static void create_mode_selectors(lv_obj_t * parent, lv_probing_wizard_t * wiz);
@@ -421,6 +424,14 @@ static void create_results_display(lv_obj_t * parent, lv_probing_wizard_t * wiz)
     lv_obj_set_flex_grow(res_cont, 1);
     lv_obj_set_flex_align(res_cont, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+    wiz->setup_points_label = lv_label_create(res_cont);
+    lv_label_set_text(wiz->setup_points_label, "");
+    lv_obj_set_width(wiz->setup_points_label, lv_pct(100));
+    lv_label_set_long_mode(wiz->setup_points_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(wiz->setup_points_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_color(wiz->setup_points_label, lv_color_hex(0xcccccc), 0);
+    lv_obj_add_flag(wiz->setup_points_label, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_t* res_label = lv_label_create(res_cont);
     lv_label_set_text_static(res_label, "Probing Result");
     lv_obj_set_style_text_color(res_label, lv_color_hex(0x888888), 0);
@@ -519,12 +530,13 @@ void lv_probing_wizard_set_corner_type(lv_obj_t * obj, lv_probing_wizard_corner_
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 }
 
-void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb) {
+void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if(!wiz) return;
     wiz->get_pos_cb = get_pos_cb;
     wiz->exec_probe_cb = exec_probe_cb;
     wiz->set_wcs_cb = set_wcs_cb;
+    wiz->install_probe_cb = install_probe_cb;
     LOGV(TAG, "Callbacks registered.");
 }
 
@@ -700,6 +712,36 @@ static void update_ui_state(lv_obj_t * obj) {
     }
 }
 
+static void update_setup_points_display(lv_probing_wizard_t * wiz) {
+    char buf[128] = {0};
+    bool any_set = false;
+
+    if (wiz->mode == LV_PROBING_WIZARD_MODE_RECTANGLE) {
+        if (wiz->setup_points[0].is_set) {
+            snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "BL: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
+            any_set = true;
+        }
+        if (wiz->setup_points[1].is_set) {
+            snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "\nFR: (%.2f, %.2f)", wiz->setup_points[1].x, wiz->setup_points[1].y);
+            any_set = true;
+        }
+    } else if (wiz->mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
+        if (wiz->setup_points[0].is_set) {
+            snprintf(buf, sizeof(buf), "Center: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
+            any_set = true;
+        }
+    }
+    // No explicit setup points for corner mode.
+
+    if (any_set) {
+        lv_label_set_text(wiz->setup_points_label, buf);
+        lv_obj_clear_flag(wiz->setup_points_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(wiz->setup_points_label, "");
+        lv_obj_add_flag(wiz->setup_points_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void set_active_step(lv_obj_t * obj, int8_t step_index) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if (!wiz) return;
@@ -712,7 +754,35 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
     wiz->current_action = &probe_routines[wiz->mode][step_index];
     LOGV(TAG, "Setting active step to %d: '%s'", step_index, wiz->current_action->instruction_text);
 
+#ifdef SHOW_SETUP_PTS_TOP
+    char instruction_buffer[256];
+    strcpy(instruction_buffer, wiz->current_action->instruction_text);
+
+    if (wiz->wizard_state == WIZARD_STATE_PROBING) {
+        if (wiz->mode == LV_PROBING_WIZARD_MODE_RECTANGLE) {
+            if (wiz->setup_points[0].is_set) {
+                char point_buf[64];
+                snprintf(point_buf, sizeof(point_buf), "\nBL: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
+                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
+            }
+            if (wiz->setup_points[1].is_set) {
+                char point_buf[64];
+                snprintf(point_buf, sizeof(point_buf), "  FR: (%.2f, %.2f)", wiz->setup_points[1].x, wiz->setup_points[1].y);
+                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
+            }
+        } else if (wiz->mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
+            if (wiz->setup_points[0].is_set) {
+                char point_buf[64];
+                snprintf(point_buf, sizeof(point_buf), "\nCenter: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
+                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
+            }
+        }
+    }
+    lv_label_set_text(wiz->instruction_label, instruction_buffer);
+#else
     lv_label_set_text(wiz->instruction_label, wiz->current_action->instruction_text);
+#endif
+
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 
     snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X:   - - -");
@@ -721,6 +791,7 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
     lv_label_set_text(wiz->result_label_y, wiz->result_label_y_text);
     lv_label_set_text(wiz->result_label_z, "Z:   - - -");
 
+    update_setup_points_display(wiz);
 
     // Default to enabled, disable as needed
     lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
@@ -777,7 +848,19 @@ static void start_btn_event_cb(lv_event_t * e) {
         return;
     }
 
+    if (wiz->install_probe_cb) {
+        wiz->install_probe_cb(obj);
+    } else {
+        lv_probing_wizard_probe_intalled(obj);
+    }
+
     LOGV(TAG, "Start button clicked. Changing state to PROBING.");
+}
+
+void lv_probing_wizard_probe_intalled(lv_obj_t *obj) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+
     wiz->wizard_state = WIZARD_STATE_PROBING;
     update_ui_state(obj);
     update_progress_panel(wiz);

@@ -1,4 +1,7 @@
 // multi_machine_interface.c
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#include "debug.h"
+
 #include "multi_machine_interface.h"
 
 #include <assert.h>
@@ -6,8 +9,6 @@
 #include <string.h>
 
 #include "config.h"
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
-#include "debug.h"
 
 static const char *TAG = "multi_machine";
 
@@ -594,27 +595,50 @@ static void _mach_copy_spindles(multi_machine_interface_t *mm,
 
 static void _mach_copy_message_box(multi_machine_interface_t *mm,
                                    machine_interface_t *mach) {
+  // First, always free the existing message box in the multi-machine interface.
+  if (mm->base.message_box) {
+    free_message_box_t(mm->base.message_box);
+    mm->base.message_box = NULL;
+  }
+
+  // If the source machine has a message box, deep-copy it.
   if (mach->message_box) {
-    if (mm->base.message_box) {
-      free(mm->base.message_box->title);
-      free(mm->base.message_box->text);
-      for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-        free(mm->base.message_box->choices[i]);
-      }
-      free(mm->base.message_box->choices);
+    mm->base.message_box = (message_box_t *)calloc(1, sizeof(message_box_t));
+    if (!mm->base.message_box) {
+      LOGE(TAG, "Failed to allocate memory for message box copy");
+      return;
     }
-    mm->base.message_box = malloc(sizeof(message_box_t));
+
     mm->base.message_box->mode = mach->message_box->mode;
-    mm->base.message_box->title = strndup(mach->message_box->title, 128);
-    mm->base.message_box->text = strndup(mach->message_box->text, 512);
+    mm->base.message_box->seq = mach->message_box->seq;
+
+    if (mach->message_box->title) {
+      mm->base.message_box->title = strdup(mach->message_box->title);
+    }
+    if (mach->message_box->text) {
+      mm->base.message_box->text = strdup(mach->message_box->text);
+    }
+
     mm->base.message_box->num_choices = mach->message_box->num_choices;
-    mm->base.message_box->choices =
-        malloc(sizeof(char *) * mach->message_box->num_choices);
-    for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-      mm->base.message_box->choices[i] =
-          strndup(mach->message_box->choices[i], 50);
+    if (mach->message_box->num_choices > 0 && mach->message_box->choices) {
+      mm->base.message_box->choices =
+          (char **)calloc(mach->message_box->num_choices, sizeof(char *));
+      if (mm->base.message_box->choices) {
+        for (size_t i = 0; i < mach->message_box->num_choices; ++i) {
+          if (mach->message_box->choices[i]) {
+            mm->base.message_box->choices[i] =
+                strdup(mach->message_box->choices[i]);
+          }
+        }
+      } else {
+        LOGE(TAG, "Failed to allocate memory for message box choices");
+        mm->base.message_box->num_choices = 0;
+      }
     }
     mm->base.message_box->machine = &mm->base;
+    // user_data is not copied as it belongs to the context of the original
+    // machine
+    mm->base.message_box->user_data = NULL;
   }
 }
 
@@ -644,27 +668,7 @@ static void _mach_copy_state(multi_machine_interface_t *mm,
   MACH_ARRCPY(end_stops);
   MACH_ARRCPY(spindles);
 
-  if (mach->message_box) {
-    if (!mm->base.message_box) {
-      free(mm->base.message_box->title);
-      free(mm->base.message_box->text);
-      for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-        free(mm->base.message_box->choices[i]);
-      }
-      free(mm->base.message_box->choices);
-    }
-    mm->base.message_box = malloc(sizeof(message_box_t));
-    mm->base.message_box->title = strndup(mach->message_box->title, 128);
-    mm->base.message_box->text = strndup(mach->message_box->text, 512);
-    mm->base.message_box->num_choices = mach->message_box->num_choices;
-    mm->base.message_box->choices =
-        malloc(sizeof(char *) * mach->message_box->num_choices);
-    for (size_t i = 0; i < mm->base.message_box->num_choices; ++i) {
-      mm->base.message_box->choices[i] =
-          strndup(mach->message_box->choices[i], 50);
-    }
-    mm->base.message_box->machine = &mm->base;
-  }
+  _mach_copy_message_box(mm, mach);
 }
 
 #undef MACH_MEMCPY
@@ -718,8 +722,13 @@ void _mach_cb_dialogs(machine_interface_t *mach, void *user_data) {
   LOGI(TAG, "MESSAGE BOX UPDATED CB");
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
   _mach_copy_message_box(self, mach);
-  LOGI(TAG, "MESSAGE BOX UPDATED: %s / %s", mach->message_box->title,
-       mach->message_box->text);
+  if (self->base.message_box) {
+    LOGI(TAG, "MESSAGE BOX UPDATED: %s / %s",
+         self->base.message_box->title ? self->base.message_box->title : "N/A",
+         self->base.message_box->text ? self->base.message_box->text : "N/A");
+  } else {
+    LOGI(TAG, "MESSAGE BOX CLEARED");
+  }
 
   machine_interface_dialogs_updated(&self->base);
 }
@@ -765,3 +774,4 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
   LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
   return true;
 }
+

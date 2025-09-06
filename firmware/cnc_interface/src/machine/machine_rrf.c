@@ -169,7 +169,7 @@ static void _dwc_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
   snprintf(path, sizeof(path), "/rr_gcode?gcode=%s", escaped_gcode);
   _dwc_perform_get(self, path, response_buffer, sizeof(response_buffer),
                    &status_code);
-  LOGI(TAG, "SEND G-CODE Resp: %s", response_buffer);
+  // LOGI(TAG, "SEND G-CODE Resp: %s", response_buffer);
 }
 
 static bool _dwc_parse_json_response(machine_rrf_t *self,
@@ -358,7 +358,7 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     serial_write(self->transport_state.serial.uart, (const uint8_t *)line,
                  strlen(line));
     serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
-    LOGI(TAG, "Sending: %s", line);
+    // LOGI(TAG, "Sending: %s", line);
     line = strtok_r(NULL, "\n", &saveptr);
   }
 
@@ -402,6 +402,10 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   char cmd[128];
   if (poll_state & MACHINE_POSITION) {
     snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d5,f\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+  }
+  if (poll_state & MACHINE_POSITION_EXT) {
+    snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d5,v\"");
     machine_interface_send_gcode(&self->base, cmd, 0);
   }
   if (poll_state & JOB_STATUS) {
@@ -508,6 +512,7 @@ void _machine_rrf_modal_str(machine_interface_t *self, const char *val,
 void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
   //machine_interface_send_gcode(self, "M98 P\"/macros/pre-probe.g\"",
   //                             MACHINE_POSITION);
+  machine_interface_send_gcode(self, "T T{global.mosPTID}", TOOLS);
   machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
 }
 
@@ -794,9 +799,14 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
       _free_modal(&self->base, self->base.message_box->seq);
 
     self->base.message_box = (message_box_t *)calloc(1, sizeof(message_box_t));
-    self->base.message_box->title = strdup(_json_key_str(result_json, "title"));
-    self->base.message_box->text =
-        strdup(_json_key_str(result_json, "message"));
+    if (!self->base.message_box) {
+        LOGE(TAG, "Failed to allocate memory for message box");
+        return false;
+    }
+    const char *title_str = _json_key_str(result_json, "title");
+    self->base.message_box->title = title_str ? strdup(title_str) : strdup("");
+    const char *message_str = _json_key_str(result_json, "message");
+    self->base.message_box->text = message_str ? strdup(message_str) : strdup("");
     self->base.message_box->mode =
         (message_box_mode_t)_json_key_int(result_json, "mode");
     self->base.message_box->seq = seq;

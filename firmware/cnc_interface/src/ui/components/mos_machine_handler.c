@@ -20,7 +20,7 @@ static const char * TAG = "mos_machine_handler";
 // We must use a default value. This is a known limitation.
 #define PROBE_DEFAULT_CIRCLE_DIAMETER 20.0f
 // The distance to probe downwards when finding the Z surface.
-#define PROBE_DEFAULT_Z_DISTANCE -10.0f 
+#define PROBE_DEFAULT_Z_DISTANCE 10.0f 
 
 extern const uint8_t probe_routine_sizes[];
 
@@ -52,6 +52,7 @@ static struct {
 static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void);
 static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* action);
 static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
+static void mos_install_probe(lv_obj_t* wizard_obj);
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data);
 static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data);
 static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data);
@@ -72,7 +73,7 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     handler_state.was_z_probe = false;
 
     // Register the three main callbacks with the wizard.
-    lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin);
+    lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin, mos_install_probe);
 
     // Register callbacks with the machine interface to receive status updates.
     // This is crucial for the asynchronous operation of the handler.
@@ -92,13 +93,21 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
  */
 static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void) {
     if (!handler_state.machine) {
-        return (lv_probing_wizard_point_float_t){0, 0};
+        return (lv_probing_wizard_point_float_t){-9999, -9999};
     }
+
     // The machine interface stores the current position in WCS coordinates.
     return (lv_probing_wizard_point_float_t){
         .x = handler_state.machine->wcs_position[0],
         .y = handler_state.machine->wcs_position[1]
     };
+}
+
+static void mos_install_probe(lv_obj_t* wizard_obj) {
+  machine_interface_send_gcode(handler_state.machine, "T T{global.mosPTID}", TOOLS);
+
+  // TODO: Wait and check for probe installation success!
+  lv_probing_wizard_probe_intalled(wizard_obj);
 }
 
 /**
@@ -124,7 +133,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         // H4: Probe the top surface (+Z direction).
         // I: Max travel distance.
         // O: Overtravel allowance.
-        snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"/macros/G6510.1.g\" J%.3f K%.3f L%.3f H4 I%.3f O%.3f",
+        snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"G6510.1.g\" J%.3f K%.3f L%.3f H4 I%.3f O%.3f",
                  current_pos.x, current_pos.y, handler_state.machine->position[2], 
                  PROBE_DEFAULT_Z_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
         

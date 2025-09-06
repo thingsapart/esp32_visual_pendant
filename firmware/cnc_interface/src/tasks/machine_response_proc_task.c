@@ -1,3 +1,6 @@
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#include "debug.h"
+
 #include "machine_response_proc_task.h"
 
 #include "config.h"
@@ -24,8 +27,6 @@ extern "C" {
 #include "compat/threads.h"
 #endif
 
-#define UI_DEBUG_LOG D_ERROR
-#include "debug.h"
 #include "machine/machine_interface.h"
 
 #define TASK_STACK_SIZE (1024 * 7)

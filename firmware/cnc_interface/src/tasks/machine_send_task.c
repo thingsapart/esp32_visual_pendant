@@ -20,7 +20,9 @@ extern "C" {
 #include "compat/threads.h"
 #endif
 
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
 #include "debug.h"
+
 #include "machine/machine_interface.h"
 
 #define DEFAULT_TASK_STACK_SIZE (1024 * 2)
@@ -70,7 +72,7 @@ void machine_send_task(void *pvParameters) {
 #endif
     {
       // Notification received, try to send the received gcode.
-      LOGI(TAG, "Sending gcode: %s", gcode);
+      LOGV(TAG, "Sending gcode: %s", gcode);
       machine->_send_gcode(machine, gcode);
     }
     // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop

@@ -287,7 +287,7 @@ void machine_interface_deinit(machine_interface_t *self) {
     free(self->probes);
     free(self->end_stops);
     free(self->spindles);
-    free(self->message_box);
+    free_message_box_t(self->message_box);
 
     // Free the tool string if it was dynamically allocated
     if (self->tool) {
@@ -339,7 +339,7 @@ const char *machine_interface_get_wcs_str(machine_interface_t *self,
       (wcs_offs == -1) ? self->wcs : wcs_offs;  // Use -1 to indicate self->wcs
 
   if (wcsi >= 1 && wcsi <= 5) {
-    snprintf(wcs_str, sizeof(wcs_str), "G%d", 54 + wcsi);
+    snprintf(wcs_str, sizeof(wcs_str), "G%d", 53 + wcsi);
   } else if (wcsi >= 6 && wcsi <= 9) {
     snprintf(wcs_str, sizeof(wcs_str), "G59.%d", wcsi - 5);
   } else {

@@ -282,11 +282,11 @@ void interface_tick(interface_t *interface) {
       data_binding_notify_state_changed(
           "dialog.title", (binding_value_t){.type = BINDING_TYPE_STRING,
                                              .as.s_val =
-                                                 machine->message_box->title});
+                                                 machine->message_box->title ? machine->message_box->title : ""});
       data_binding_notify_state_changed(
           "dialog.text",
           (binding_value_t){.type = BINDING_TYPE_STRING,
-                            .as.s_val = machine->message_box->text});
+                            .as.s_val = machine->message_box->text ? machine->message_box->text : ""});
       data_binding_notify_state_changed(
           "dialog.mode",
           (binding_value_t){.type = BINDING_TYPE_FLOAT,
@@ -308,6 +308,17 @@ void interface_tick(interface_t *interface) {
         "motion.jog.axis_is_z",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
                           .as.b_val = (current_axis == AXIS_Z)});
+    
+    const char* axis_str = "Off";
+    switch(current_axis) {
+        case AXIS_X: axis_str = "X"; break;
+        case AXIS_Y: axis_str = "Y"; break;
+        case AXIS_Z: axis_str = "Z"; break;
+        default: break;
+    }
+    data_binding_notify_state_changed(
+        "motion.jog.axis_selected_str",
+        (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = axis_str});
 
     data_binding_notify_state_changed(
         "motion.jog.step_xy",
@@ -318,3 +329,4 @@ void interface_tick(interface_t *interface) {
                                                .as.f_val = machine->current_move_step_z});
   }
 }
+

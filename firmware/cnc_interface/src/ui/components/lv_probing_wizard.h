@@ -109,6 +109,11 @@ typedef lv_probing_wizard_point_float_t (*get_current_jogged_position_cb_t)(void
 typedef void (*execute_probe_cb_t)(lv_obj_t * wizard_obj, const lv_probing_action_t * action);
 
 /**
+ * @brief Callback for the wizard to install probe.
+ * @return bool, true if successful.
+ */
+typedef void (*install_probe_tool_cb_t)(lv_obj_t * wizard_obj);
+/**
  * @brief Callback for the wizard to command the machine to set a new Work Coordinate System origin.
  * @param wizard_obj Pointer to the wizard object.
  * @param wcs_index The WCS to set (e.g., 2 for G55, 3 for G56, etc.).
@@ -152,13 +157,19 @@ void lv_probing_wizard_set_corner_type(lv_obj_t * obj, lv_probing_wizard_corner_
 void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index);
 
 /**
+ * @brief Notify the wizard that the probe has been installed and wizard can start now.
+ * @param obj Pointer to the probing wizard object.
+ */
+void lv_probing_wizard_probe_intalled(lv_obj_t * obj);
+
+/**
  * @brief Register the necessary machine handler callbacks with the wizard.
  * @param obj Pointer to the probing wizard object.
  * @param get_pos_cb Function to get current machine position.
  * @param exec_probe_cb Function to execute a probe cycle.
  * @param set_wcs_cb Function to set a new WCS origin.
  */
-void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb);
+void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb);
 
 /**
  * @brief Sets the connection status of the machine, updating the UI accordingly.

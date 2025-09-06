@@ -16,6 +16,7 @@
 typedef RRFMachineSimStream Stream;  // Use the simulator stream
 #endif
 
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
 #include "debug.h"
 
 static const char *TAG = "arduino_serial_wrapper";
@@ -412,11 +413,14 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
     LOGE(TAG, "serial_write: Invalid handle %p", handle);
     return 0;
   }
+#ifdef SERIAL_WRAPPER_LOG_VERBOSE
   Serial.print("[I][SERIAL]TX UART");
   Serial.print(port_data->uart_num);
   Serial.print(", size ");
   Serial.print(size);
   Serial.print((char*)buffer); //
+#endif
+
   return port_data->stream->write(buffer, size);
 }
 

@@ -47,6 +47,6 @@ static void stub_set_wcs_origin(lv_obj_t * wizard_obj, uint8_t wcs_index, float 
 }
 
 void lv_probing_wizard_register_stub_callbacks(lv_obj_t * obj) {
-    lv_probing_wizard_register_callbacks(obj, stub_get_current_jogged_position, stub_execute_probe, stub_set_wcs_origin);
+    lv_probing_wizard_register_callbacks(obj, stub_get_current_jogged_position, stub_execute_probe, stub_set_wcs_origin, NULL);
     LOGV(TAG, "Probing wizard is using stub callbacks for demonstration.");
 }

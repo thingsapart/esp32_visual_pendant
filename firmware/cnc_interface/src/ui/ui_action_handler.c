@@ -29,6 +29,41 @@ static float get_next_jog_step(float current_step) {
 }
 
 /**
+ * @brief Event handler for the "Home all?" confirmation modal.
+ */
+static void home_all_modal_event_handler(lv_event_t * e) {
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    lv_obj_t *label = lv_obj_get_child(obj, 0);
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+
+    machine_interface_t * machine = lv_obj_get_user_data(mbox);
+
+    LOGI(TAG, "CLICKED Label %s", lv_label_get_text(label));
+    if (machine && strcmp(lv_label_get_text(label), "OK") == 0) {
+        machine->home_all(machine);
+    }
+
+    lv_msgbox_close(mbox);
+}
+
+/**
+ * @brief Creates and displays a modal dialog asking the user to home all axes.
+ * @param machine A pointer to the machine interface, passed to the event handler.
+ */
+static void show_home_all_modal(machine_interface_t * machine) {
+    static const char * btns[] = {"Ok", "Cancel", ""};
+    lv_obj_t * mbox = lv_msgbox_create(lv_screen_active());
+    lv_msgbox_add_title(mbox, "Home all?");
+    lv_obj_set_user_data(mbox, machine); 
+    lv_msgbox_add_text(mbox, "Home all axes?");
+    lv_obj_t *home_btn = lv_msgbox_add_footer_button(mbox, "OK");
+    lv_obj_add_event_cb(home_btn, home_all_modal_event_handler, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *close_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(close_btn, home_all_modal_event_handler, LV_EVENT_CLICKED, mbox);
+    lv_obj_center(mbox);
+}
+
+/**
  * @brief The single, centralized handler for all actions from the UI.
  *
  * This function is registered with the data-binding system and is called
@@ -64,24 +99,29 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   // --- Motion, WCS & Homing Actions ---
   else if (strcmp(action_name, "action.motion.wcs.cycle") == 0) {
     machine->next_wcs(machine);
-  } else if (strcmp(action_name, "action.motion.jog.axis_select_x") == 0) {
-    if (machine_interface_get_current_move_axis(machine) == AXIS_X) {
-      machine_interface_set_current_move_axis(machine, AXIS_OFF);
-    } else {
-      machine_interface_set_current_move_axis(machine, AXIS_X);
+  } else if (strncmp(action_name, "action.motion.jog.axis_select_", 30) == 0) {
+    const char* axis_char = action_name + 30;
+    axis_t selected_axis = AXIS_OFF;
+    int axis_idx = -1;
+    if (*axis_char == 'x') { selected_axis = AXIS_X; axis_idx = 0; }
+    else if (*axis_char == 'y') { selected_axis = AXIS_Y; axis_idx = 1; }
+    else if (*axis_char == 'z') { selected_axis = AXIS_Z; axis_idx = 2; }
+    
+    if (axis_idx != -1) {
+        if (!machine_interface_is_homed(machine, axis_char)) {
+            show_home_all_modal(machine);
+        } else {
+            if (machine_interface_get_current_move_axis(machine) == selected_axis) {
+                machine_interface_set_current_move_axis(machine, AXIS_OFF);
+            } else {
+                machine_interface_set_current_move_axis(machine, selected_axis);
+            }
+        }
+        interface->dirty_flags |= UI_DIRTY_JOG_STATE;
     }
-  } else if (strcmp(action_name, "action.motion.jog.axis_select_y") == 0) {
-    if (machine_interface_get_current_move_axis(machine) == AXIS_Y) {
-      machine_interface_set_current_move_axis(machine, AXIS_OFF);
-    } else {
-      machine_interface_set_current_move_axis(machine, AXIS_Y);
-    }
-  } else if (strcmp(action_name, "action.motion.jog.axis_select_z") == 0) {
-    if (machine_interface_get_current_move_axis(machine) == AXIS_Z) {
-      machine_interface_set_current_move_axis(machine, AXIS_OFF);
-    } else {
-      machine_interface_set_current_move_axis(machine, AXIS_Z);
-    }
+  } else if (strcmp(action_name, "action.motion.jog.axis_cycle") == 0) {
+      machine_interface_next_move_axis(machine);
+      interface->dirty_flags |= UI_DIRTY_JOG_STATE;
   }
 
   // --- Jog Step Cycling ---
