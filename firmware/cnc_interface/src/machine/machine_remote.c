@@ -723,6 +723,17 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       strncpy(tool_name, (char *)ptr, tool_name_len);  // safe copy.
       tool_name[tool_name_len] = '\0';  // make sure it's null terminated
 
+      // Lazily allocate spindle struct if it doesn't exist.
+      if (!self->base.spindles) {
+        self->base.spindles = (spindle_t *)calloc(1, sizeof(spindle_t));
+        if (self->base.spindles) {
+          self->base.num_spindles = 1;
+        } else {
+          LOGE(TAG, "Failed to allocate memory for spindle state.");
+          return;
+        }
+      }
+
       // Update the values
       self->base.spindles->rpm = rpm;
       if (self->base.tool) {

@@ -10,7 +10,7 @@
 static const char *TAG = "UI_ACTION_HANDLER";
 
 // Array of jog step values to cycle through.
-static const float JOG_STEPS[] = {0.01, 0.1, 1.0, 10.0, 100.0};
+static const float JOG_STEPS[] = {0.01, 0.1, 0.5, 1.0, 5.0};
 static const size_t NUM_JOG_STEPS = sizeof(JOG_STEPS) / sizeof(JOG_STEPS[0]);
 
 /**
@@ -65,11 +65,23 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   else if (strcmp(action_name, "action.motion.wcs.cycle") == 0) {
     machine->next_wcs(machine);
   } else if (strcmp(action_name, "action.motion.jog.axis_select_x") == 0) {
-    machine_interface_set_current_move_axis(machine, AXIS_X);
+    if (machine_interface_get_current_move_axis(machine) == AXIS_X) {
+      machine_interface_set_current_move_axis(machine, AXIS_OFF);
+    } else {
+      machine_interface_set_current_move_axis(machine, AXIS_X);
+    }
   } else if (strcmp(action_name, "action.motion.jog.axis_select_y") == 0) {
-    machine_interface_set_current_move_axis(machine, AXIS_Y);
+    if (machine_interface_get_current_move_axis(machine) == AXIS_Y) {
+      machine_interface_set_current_move_axis(machine, AXIS_OFF);
+    } else {
+      machine_interface_set_current_move_axis(machine, AXIS_Y);
+    }
   } else if (strcmp(action_name, "action.motion.jog.axis_select_z") == 0) {
-    machine_interface_set_current_move_axis(machine, AXIS_Z);
+    if (machine_interface_get_current_move_axis(machine) == AXIS_Z) {
+      machine_interface_set_current_move_axis(machine, AXIS_OFF);
+    } else {
+      machine_interface_set_current_move_axis(machine, AXIS_Z);
+    }
   }
 
   // --- Jog Step Cycling ---

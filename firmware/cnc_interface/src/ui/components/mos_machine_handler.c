@@ -54,6 +54,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
 static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data);
 static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data);
+static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data);
 
 /**
  * @brief Registration function to connect the MOS handler callbacks to the wizard.
@@ -77,8 +78,12 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     // This is crucial for the asynchronous operation of the handler.
     machine_interface_add_state_change_cb(machine, NULL, _mos_state_changed_cb);
     machine_interface_add_pos_changed_cb(machine, NULL, _mos_pos_changed_cb);
+    machine_interface_add_connected_changed_cb(machine, NULL, _mos_conn_changed_cb);
 
     LOGI(TAG, "MillenniumOS machine handler callbacks registered successfully.");
+
+    // Update the connected state.
+    _mos_conn_changed_cb(machine, NULL);
 }
 
 /**
@@ -147,9 +152,9 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 float dim_y = fabsf(setup_points[0].y - setup_points[1].y);
 
                 // G6502.1 for an inside rectangle (pocket), G6503.1 for an outside one (block).
-                snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"/macros/%s\" J%.3f K%.3f L%.3f H%.3f I%.3f T%.3f O%.3f",
+                snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"%s\" J%.3f K%.3f L%.3f H%.3f I%.3f T%.3f O%.3f",
                          is_inside ? "G6502.1.g" : "G6503.1.g",
-                         center_x, center_y, z_top, dim_x, dim_y,
+                         center_x, center_y, z_top - 2.0, dim_x, dim_y,
                          PROBE_DEFAULT_CLEARANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
 
@@ -159,9 +164,9 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                     return;
                 }
                 // G6500.1 for an inside circle (bore), G6501.1 for an outside one (boss).
-                snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"/macros/%s\" J%.3f K%.3f L%.3f H%.3f T%.3f O%.3f",
+                snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"%s\" J%.3f K%.3f L%.3f H%.3f T%.3f O%.3f",
                          is_inside ? "G6500.1.g" : "G6501.1.g",
-                         setup_points[0].x, setup_points[0].y, z_top,
+                         setup_points[0].x, setup_points[0].y, z_top - 2.0,
                          PROBE_DEFAULT_CIRCLE_DIAMETER, PROBE_DEFAULT_CLEARANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
             
@@ -216,6 +221,16 @@ static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x,
 /**
  * @brief Callback for machine state changes. Used to detect when a probe macro finishes.
  */
+static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) {
+    bool connected = machine->is_connected ? machine->is_connected(machine) : false;
+
+    LOGI(TAG, "MACHINE CONNECTED! %d", connected);
+    lv_probing_wizard_set_connected(handler_state.wizard_obj, connected);
+}
+
+/**
+ * @brief Callback for machine state changes. Used to detect when a probe macro finishes.
+ */
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data) {
     bool is_pending = (handler_state.probe_state == PROBE_STATE_PENDING_Z_COMPLETE ||
                        handler_state.probe_state == PROBE_STATE_PENDING_XY_COMPLETE);
@@ -241,6 +256,9 @@ static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data)
  * @brief Callback for machine position updates. Lightweight check to retrieve probe result.
  */
 static void _mos_pos_changed_cb(machine_interface_t* machine, void* user_data) {
+    // If we received a position, then we're connected.
+    lv_probing_wizard_set_connected(handler_state.wizard_obj, true);
+
     // This callback is lightweight. It only acts if we are in the specific state of
     // waiting for a position report after a probe. It ignores all other position updates.
     if (handler_state.probe_state == PROBE_STATE_AWAITING_POSITION) {

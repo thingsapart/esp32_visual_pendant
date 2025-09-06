@@ -760,7 +760,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_height(label_82, 1073741823, 0);
     lv_label_set_text(label_82, "1000");
     lv_obj_set_style_pad_right(label_82, 5, 0);
-    data_binding_add_observer("feed", label_82, 0, "%.0f", 0, NULL);
+    data_binding_add_observer("motion.feedrate_current", label_82, 0, "%.0f", 0, NULL);
 
 
     // unnamed: obj_83 (obj)
@@ -784,7 +784,7 @@ void create_ui(lv_obj_t* parent) {
     lv_bar_set_range(bar_84, 0, 5000);
     lv_obj_set_style_bg_color(bar_84, lv_color_hex(0x5DD555), 0);
     lv_obj_set_style_bg_opa(bar_84, 255, 0);
-    data_binding_add_observer("feed", bar_84, 5, &(bool){NULL}, 0, NULL);
+    data_binding_add_observer("motion.feedrate_current", bar_84, 5, &(bool){NULL}, 0, NULL);
 
     // unnamed: scale_85 (scale)
     lv_obj_t* scale_85 = lv_scale_create(obj_83);
@@ -900,7 +900,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_height(label_96, 1073741823, 0);
     lv_label_set_text(label_96, "1000");
     lv_obj_set_style_pad_right(label_96, 5, 0);
-    data_binding_add_observer("spindle_rpm", label_96, 0, "%.0f", 0, NULL);
+    data_binding_add_observer("spindle.speed_rpm", label_96, 0, "%.0f", 0, NULL);
 
 
     // unnamed: obj_97 (obj)
@@ -924,7 +924,7 @@ void create_ui(lv_obj_t* parent) {
     lv_bar_set_range(bar_98, 0, 24000);
     lv_obj_set_style_bg_color(bar_98, lv_color_hex(0x5DD555), 0);
     lv_obj_set_style_bg_opa(bar_98, 255, 0);
-    data_binding_add_observer("spindle_rpm", bar_98, 5, &(bool){NULL}, 0, NULL);
+    data_binding_add_observer("spindle.speed_rpm", bar_98, 5, &(bool){NULL}, 0, NULL);
 
     // unnamed: scale_99 (scale)
     lv_obj_t* scale_99 = lv_scale_create(obj_97);

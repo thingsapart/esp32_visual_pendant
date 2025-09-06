@@ -8,6 +8,7 @@
 #include "lvgl_ui.h"
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
+#include "ui/components/mos_machine_handler.h"
 
 static const char *TAG = "UI_INTERFACE";
 
@@ -109,6 +110,8 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->probing_wizard = obj_registry_get("probing_wizard");
   if (!interface->probing_wizard) {
     LOGW(TAG, "Failed to find 'probing_wizard' widget in registry!");
+  } else {
+    lv_probing_wizard_register_mos_callbacks(interface->probing_wizard, interface->machine);
   }
 
   ui_action_handler_init(interface);

@@ -144,10 +144,10 @@ typedef struct machine_interface_t {
   float feed_req;
   float feed_multiplier;
   bool move_relative;
-  bool move_step;  // Use bool instead of None/value
+  bool move_step;
 
-#define MAX_FILE_LISTS \
-  2  // Currently just G-Codes and Macros, extend if needed.
+// Currently just G-Codes and Macros, extend if needed.
+#define MAX_FILE_LISTS 2  
   struct {
     char *fdir;
     char **files;

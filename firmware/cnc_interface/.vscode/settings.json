@@ -133,6 +133,7 @@
         "ranges": "cpp",
         "text_encoding": "cpp",
         "lv_probing_wizard_c": "cpp",
-        "lv_probing_wizard.h": "c"
+        "lv_probing_wizard.h": "c",
+        "mos_machine_handler.h": "c"
     }
 }

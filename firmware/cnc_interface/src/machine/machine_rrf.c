@@ -181,6 +181,11 @@ static bool _dwc_parse_json_response(machine_rrf_t *self,
   }
   bool success = machine_rrf_parse_m409_response(self, root);
   cJSON_Delete(root);
+
+  if (success && self->base.set_connected) {
+    self->base.set_connected(&self->base, true);
+  }
+
   return success;
 }
 
@@ -224,7 +229,11 @@ static void _dwc_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   }
 
   if (poll_state & MACHINE_POSITION) _dwc_do_poll_key(self, "move.axes[]");
-  if (poll_state & JOB_STATUS) _dwc_do_poll_key(self, "state.status");
+  if (poll_state & JOB_STATUS) {
+    _dwc_do_poll_key(self, "state.status");
+    _dwc_do_poll_key(self, "move.currentMove");
+    _dwc_do_poll_key(self, "move.speedFactor");
+  }
   if (poll_state & MESSAGES_AND_DIALOGS)
     _dwc_do_poll_key(self, "state.messageBox");
   if (poll_state & SPINDLE) _dwc_do_poll_key(self, "spindles[]");
@@ -358,7 +367,7 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
 
 static bool _serial_parse_json_response(machine_rrf_t *self,
                                         const char *json_response) {
-   LOGE(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
+  LOGE(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
     LOGE(TAG, "Serial: Failed to parse JSON.");
@@ -374,9 +383,17 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   }
 
   cJSON_Delete(root);
+
+  if (succ && self->base.set_connected) {
+    self->base.set_connected(&self->base, true);
+  }
+
   return succ;
 }
 
+// NOTE: Keys cannot be combined! Every key needs to be polled on its own.
+// So for example `M409 K"state.status,move.currentMove,move.speedFactor,spindles[]"`
+// will NOT work. It needs to broken down into 4 requests.
 static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   // Process any data that has been received since the last poll.
   serial_process_input(self->transport_state.serial.uart);
@@ -388,8 +405,9 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
     machine_interface_send_gcode(&self->base, cmd, 0);
   }
   if (poll_state & JOB_STATUS) {
-    snprintf(cmd, sizeof(cmd), "M409 K\"state.status\" F\"v\"");
-    machine_interface_send_gcode(&self->base, cmd, 0);
+    machine_interface_send_gcode(&self->base, "M409 K\"state.status\" F\"v\"", 0);
+    machine_interface_send_gcode(&self->base, "M409 K\"move.currentMove\" F\"v\"", 0);
+    machine_interface_send_gcode(&self->base, "M409 K\"move.speedFactor\" F\"v\"", 0);
   }
   if (poll_state & MESSAGES_AND_DIALOGS) {
     snprintf(cmd, sizeof(cmd), "M409 K\"state.messageBox\" F\"v\"");
@@ -488,8 +506,8 @@ void _machine_rrf_modal_str(machine_interface_t *self, const char *val,
 }
 
 void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
-  machine_interface_send_gcode(self, "M98 P\"/macros/pre-probe.g\"",
-                               MACHINE_POSITION);
+  //machine_interface_send_gcode(self, "M98 P\"/macros/pre-probe.g\"",
+  //                             MACHINE_POSITION);
   machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
 }
 
@@ -712,25 +730,32 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
   LOGV(TAG, "Parsing response for key: '%s'", key);
 
   if (strcmp(key, "move.axes") == 0 || strcmp(key, "move.axes[]") == 0) {
-    // This parser needs to be more robust for DWC, which doesn't include homed
-    // status
     bool pos_updated = false;
     bool home_updated = false;
     cJSON *axis_item;
     int i = 0;
     cJSON_ArrayForEach(axis_item, result_json) {
       if (i >= 3) break;
-      float machine_pos = _json_key_float(axis_item, "machinePosition");
-      float wcs_pos = _json_key_float(axis_item, "userPosition");
-      if (self->base.position[i] != machine_pos ||
-          self->base.wcs_position[i] != wcs_pos) {
-        self->base.position[i] = machine_pos;
-        self->base.wcs_position[i] = wcs_pos;
-        pos_updated = true;
+      cJSON *item;
+      item = cJSON_GetObjectItemCaseSensitive(axis_item, "machinePosition");
+      if (item && cJSON_IsNumber(item)) {
+        float machine_pos = item->valuedouble;
+        if (fabsf(self->base.position[i] - machine_pos) > 1e-5) {
+          self->base.position[i] = machine_pos;
+          pos_updated = true;
+        }
       }
-      cJSON *homed_json = cJSON_GetObjectItemCaseSensitive(axis_item, "homed");
-      if (cJSON_IsBool(homed_json)) {
-        bool homed = cJSON_IsTrue(homed_json);
+      item = cJSON_GetObjectItemCaseSensitive(axis_item, "userPosition");
+      if (item && cJSON_IsNumber(item)) {
+        float wcs_pos = item->valuedouble;
+        if (fabsf(self->base.wcs_position[i] - wcs_pos) > 1e-5) {
+          self->base.wcs_position[i] = wcs_pos;
+          pos_updated = true;
+        }
+      }
+      item = cJSON_GetObjectItemCaseSensitive(axis_item, "homed");
+      if (item && cJSON_IsBool(item)) {
+        bool homed = cJSON_IsTrue(item);
         if (self->base.axes_homed[i] != homed) {
           self->base.axes_homed[i] = homed;
           home_updated = true;
@@ -800,17 +825,51 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
     if (tool_updated) machine_interface_spindles_tools_updated(&self->base);
     return true;
   } else if (strcmp(key, "spindles[]") == 0) {
-    // Simplified parser
+    bool updated = false;
     if (self->base.num_spindles == 0) {
       self->base.spindles = (spindle_t *)calloc(1, sizeof(spindle_t));
-      self->base.num_spindles = 1;
+      if (self->base.spindles) self->base.num_spindles = 1;
     }
     cJSON *spindle0 = cJSON_GetArrayItem(result_json, 0);
     if (spindle0) {
-      int rpm = _json_key_int(spindle0, "current");
-      if (self->base.spindles[0].rpm != rpm) {
-        self->base.spindles[0].rpm = rpm;
-        machine_interface_spindles_tools_updated(&self->base);
+      cJSON *item = cJSON_GetObjectItemCaseSensitive(spindle0, "current");
+      if (item && cJSON_IsNumber(item)) {
+        int rpm = item->valueint;
+        if (self->base.spindles[0].rpm != rpm) {
+          self->base.spindles[0].rpm = rpm;
+          updated = true;
+        }
+      }
+    }
+    if (updated) machine_interface_spindles_tools_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "move.currentMove") == 0) {
+    bool updated = false;
+    cJSON *item;
+    item = cJSON_GetObjectItemCaseSensitive(result_json, "requestedSpeed");
+    if (item && cJSON_IsNumber(item)) {
+      float feed_req = item->valuedouble;
+      if (fabsf(self->base.feed_req - feed_req) > 1e-5) {
+        self->base.feed_req = feed_req;
+        updated = true;
+      }
+    }
+    item = cJSON_GetObjectItemCaseSensitive(result_json, "topSpeed");
+    if (item && cJSON_IsNumber(item)) {
+      float feed = item->valuedouble * 60; // mm/s to mm/min
+      if (fabsf(self->base.feed - feed) > 1e-5) {
+        self->base.feed = feed;
+        updated = true;
+      }
+    }
+    if (updated) machine_interface_feed_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "move.speedFactor") == 0) {
+    if (cJSON_IsNumber(result_json)) {
+      float multiplier = result_json->valuedouble / 100.0f;
+      if (fabsf(self->base.feed_multiplier - multiplier) > 1e-5) {
+        self->base.feed_multiplier = multiplier;
+        machine_interface_feed_updated(&self->base);
       }
     }
     return true;
