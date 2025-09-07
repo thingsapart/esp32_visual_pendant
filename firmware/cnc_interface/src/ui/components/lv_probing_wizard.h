@@ -124,6 +124,11 @@ typedef void (*install_probe_tool_cb_t)(lv_obj_t * wizard_obj);
  */
 typedef void (*set_wcs_origin_cb_t)(lv_obj_t * wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
 
+// --- Deferred (Thread-Safe) Functions for Callbacks ---
+void lv_probing_wizard_set_z_top_deferred(lv_obj_t * obj, float z_top);
+void lv_probing_wizard_report_final_result_deferred(lv_obj_t * obj, float x, float y);
+void lv_probing_wizard_advance_step_deferred(lv_obj_t * obj);
+void lv_probing_wizard_set_active_step_deferred(lv_obj_t * obj, int8_t step_index);
 
 // --- Public Functions ---
 
@@ -154,7 +159,7 @@ void lv_probing_wizard_set_corner_type(lv_obj_t * obj, lv_probing_wizard_corner_
  * @param obj Pointer to the probing wizard object.
  * @param step_index The 0-based index of the step to set.
  */
-void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index);
+void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index, bool defer_ui_update);
 
 /**
  * @brief Notify the wizard that the probe has been installed and wizard can start now.

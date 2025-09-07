@@ -78,6 +78,13 @@ typedef enum {
     WIZARD_STATE_COMPLETE,
 } wizard_state_t;
 
+typedef enum {
+    DEFERRED_ACTION_NONE,
+    DEFERRED_ACTION_UPDATE_UI,
+    DEFERRED_ACTION_SET_Z_AND_ADVANCE,
+    DEFERRED_ACTION_SET_FINAL_AND_ADVANCE,
+} deferred_action_t;
+
 typedef struct {
     lv_obj_t * canvas;
     lv_obj_t * instruction_label;
@@ -135,13 +142,22 @@ typedef struct {
     char result_label_x_text[32];
     char result_label_y_text[32];
     bool machine_connected;
+
+    // --- Deferred Update members for thread safety ---
+    lv_timer_t * deferred_update_timer;
+    volatile deferred_action_t deferred_action;
+    volatile int8_t deferred_next_step;
+    volatile float deferred_z_top;
+    volatile lv_probing_wizard_point_float_t deferred_final_result;
 } lv_probing_wizard_t;
 
+static void deferred_update_timer_cb(lv_timer_t * timer);
 static void wizard_destructor(lv_event_t * e);
 static void draw_event_cb(lv_event_t * e);
 static void calculate_result(lv_obj_t * obj);
-static void set_active_step(lv_obj_t * obj, int8_t step_index);
+static void set_active_step(lv_obj_t * obj, int8_t step_index, bool defer_ui_update);
 static void next_btn_event_cb(lv_event_t * e);
+static void schedule_deferred_update(lv_probing_wizard_t* wiz);
 static void cancel_btn_event_cb(lv_event_t * e);
 static void mode_selector_event_cb(lv_event_t * e);
 static void canvas_click_event_cb(lv_event_t * e);
@@ -483,6 +499,15 @@ lv_obj_t * lv_probing_wizard_create(lv_obj_t * parent) {
     create_left_panel(content_container, wiz);
     create_canvas_and_controls(content_container, wiz);
 
+    // Create a timer for deferred UI updates from other tasks.
+    // We will manually trigger it, so the period doesn't matter much.
+    // The main_container object is passed as user_data.
+    wiz->deferred_update_timer = lv_timer_create(deferred_update_timer_cb, 50, main_container);
+    lv_timer_set_auto_delete(wiz->deferred_update_timer, false); // Prevent auto-deletion
+    lv_timer_set_repeat_count(wiz->deferred_update_timer, 1);   // Make it run only once per resume
+    lv_timer_pause(wiz->deferred_update_timer);                 // Start in a paused state
+
+
     wiz->mode = LV_PROBING_WIZARD_MODE_RECTANGLE;
     wiz->is_inside = false;
     lv_probing_wizard_set_mode(main_container, wiz->mode, wiz->is_inside);
@@ -511,7 +536,7 @@ static void reset_and_start_routine(lv_obj_t * obj) {
     if (wiz->variant_btnm) lv_btnmatrix_set_btn_ctrl(wiz->variant_btnm, wiz->is_inside ? 0 : 1, LV_BTNMATRIX_CTRL_CHECKED);
     
     update_last_result_display(wiz);
-    set_active_step(obj, 0); // Start at the first step (config screen)
+    set_active_step(obj, 0, false); // Start at the first step (config screen)
 }
 
 void lv_probing_wizard_set_mode(lv_obj_t * obj, lv_probing_wizard_mode_t mode, bool is_inside) {
@@ -560,6 +585,7 @@ void lv_probing_wizard_set_z_top(lv_obj_t * obj, float z_top) {
     LOGV(TAG, "Z-top reported: %.3f", z_top);
     wiz->z_top = z_top;
     wiz->z_top_is_set = true;
+    update_ui_state(obj); // Re-evaluate button states now that Z is known
 }
 
 void lv_probing_wizard_report_probe_result(lv_obj_t * obj, uint8_t probe_index, float x, float y) {
@@ -592,14 +618,14 @@ void lv_probing_wizard_advance_step(lv_obj_t * obj) {
 
     int8_t next_step = wiz->active_step + 1;
     if (next_step < probe_routine_sizes[wiz->mode]) {
-        set_active_step(obj, next_step);
+        set_active_step(obj, next_step, false);
     } else {
         LOGV(TAG, "Cannot advance, already at last step of routine.");
     }
 }
 
-void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index) {
-    set_active_step(obj, step_index);
+void lv_probing_wizard_set_active_step(lv_obj_t * obj, int8_t step_index, bool defer_ui_update) {
+    set_active_step(obj, step_index, defer_ui_update);
 }
 
 const probe_point_t * lv_probing_wizard_get_setup_points(lv_obj_t * obj) {
@@ -707,6 +733,13 @@ static void update_ui_state(lv_obj_t * obj) {
          lv_label_set_text(wiz->result_label_x, "X:   - - -");
          lv_label_set_text(wiz->result_label_y, "Y:   - - -");
          lv_label_set_text(wiz->result_label_z, "Z:   - - -");
+    } else if (probing_mode && wiz->current_action) {
+        // Handle enabling/disabling the Next button during a probing sequence
+        if (wiz->current_action->type == ACTION_PROBE_Z_TOP && !wiz->z_top_is_set) {
+            lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
+        }
     } else if (complete_mode) {
         // Show cancel button to allow exiting the results screen
         lv_obj_clear_flag(wiz->cancel_btn, LV_OBJ_FLAG_HIDDEN);
@@ -747,46 +780,17 @@ static void update_setup_points_display(lv_probing_wizard_t * wiz) {
     }
 }
 
-static void set_active_step(lv_obj_t * obj, int8_t step_index) {
+/**
+ * @brief Performs the actual UI update based on the current wizard state.
+ * This should only be called from the LVGL task context.
+ */
+static void deferred_update_ui(lv_obj_t* obj) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
-    if (!wiz) return;
+    if (!wiz || !wiz->current_action) return;
 
-    if (step_index < 0 || step_index >= probe_routine_sizes[wiz->mode]) return;
+    LOGV(TAG, "Updating UI for step %d: '%s'", wiz->active_step, wiz->current_action->instruction_text);
 
-    lv_obj_remove_event_cb(wiz->canvas, canvas_click_event_cb);
-
-    wiz->active_step = step_index;
-    wiz->current_action = &probe_routines[wiz->mode][step_index];
-    LOGV(TAG, "Setting active step to %d: '%s'", step_index, wiz->current_action->instruction_text);
-
-#ifdef SHOW_SETUP_PTS_TOP
-    char instruction_buffer[256];
-    strcpy(instruction_buffer, wiz->current_action->instruction_text);
-
-    if (wiz->wizard_state == WIZARD_STATE_PROBING) {
-        if (wiz->mode == LV_PROBING_WIZARD_MODE_RECTANGLE) {
-            if (wiz->setup_points[0].is_set) {
-                char point_buf[64];
-                snprintf(point_buf, sizeof(point_buf), "\nBL: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
-                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
-            }
-            if (wiz->setup_points[1].is_set) {
-                char point_buf[64];
-                snprintf(point_buf, sizeof(point_buf), "  FR: (%.2f, %.2f)", wiz->setup_points[1].x, wiz->setup_points[1].y);
-                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
-            }
-        } else if (wiz->mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
-            if (wiz->setup_points[0].is_set) {
-                char point_buf[64];
-                snprintf(point_buf, sizeof(point_buf), "\nCenter: (%.2f, %.2f)", wiz->setup_points[0].x, wiz->setup_points[0].y);
-                strncat(instruction_buffer, point_buf, sizeof(instruction_buffer) - strlen(instruction_buffer) - 1);
-            }
-        }
-    }
-    lv_label_set_text(wiz->instruction_label, instruction_buffer);
-#else
     lv_label_set_text(wiz->instruction_label, wiz->current_action->instruction_text);
-#endif
 
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 
@@ -797,10 +801,8 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
     lv_label_set_text(wiz->result_label_z, "Z:   - - -");
 
     update_setup_points_display(wiz);
+    update_ui_state(obj); // Update general UI visibility based on the new step's state
 
-    // Default to enabled, disable as needed
-    lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
-    
     switch (wiz->current_action->type) {
         case ACTION_AWAIT_START:
             wiz->wizard_state = WIZARD_STATE_CONFIG;
@@ -816,7 +818,7 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
             break;
         case ACTION_PROBE_POINT:
         case ACTION_PROBE_Z_TOP:
-            lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED); // Disabled until probe completes
+            // update_ui_state will already have disabled the button
             if (wiz->exec_probe_cb) {
                 LOGV(TAG, "Executing probe callback for action type %d", wiz->current_action->type);
                 wiz->exec_probe_cb(obj, wiz->current_action);
@@ -842,6 +844,29 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index) {
                 }
             }
             break;
+    }
+}
+
+static void set_active_step(lv_obj_t * obj, int8_t step_index, bool defer_ui_update) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+
+    if (step_index < 0 || step_index >= probe_routine_sizes[wiz->mode]) return;
+
+    // Always remove the event cb, whether deferred or not
+    lv_obj_remove_event_cb(wiz->canvas, canvas_click_event_cb);
+
+    // --- State Change --- (Safe to do from any context)
+    wiz->active_step = step_index;
+    wiz->current_action = &probe_routines[wiz->mode][step_index];
+    LOGV(TAG, "Setting active step to %d: '%s' (deferred: %d)", step_index, wiz->current_action->instruction_text, defer_ui_update);
+
+    // --- UI Update --- (Potentially deferred)
+    if (defer_ui_update) {
+        wiz->deferred_action = DEFERRED_ACTION_UPDATE_UI;
+        schedule_deferred_update(wiz);
+    } else {
+        deferred_update_ui(obj);
     }
 }
 
@@ -951,6 +976,10 @@ static void wizard_destructor(lv_event_t * e) {
     lv_obj_t * obj = lv_event_get_target(e);
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if (wiz) {
+        if (wiz->deferred_update_timer) {
+            lv_timer_del(wiz->deferred_update_timer);
+            wiz->deferred_update_timer = NULL;
+        }
         LOGV(TAG, "Wizard destroyed.");
         lv_free(wiz);
     }
@@ -962,11 +991,86 @@ static void calculate_result(lv_obj_t* obj) {
     // for display purposes are ever needed.
 }
 
+/**
+ * @brief Schedules a deferred UI update to be run in the LVGL task context.
+ */
+static void schedule_deferred_update(lv_probing_wizard_t* wiz) {
+    if (wiz && wiz->deferred_update_timer) {
+        // To make a paused, non-repeating timer run again, we must:
+        // 1. Reset its repeat count (as it will be 0 after running once).
+        // 2. Resume it.
+        lv_timer_set_repeat_count(wiz->deferred_update_timer, 1);
+        lv_timer_resume(wiz->deferred_update_timer);
+    }
+}
+
+void lv_probing_wizard_set_z_top_deferred(lv_obj_t * obj, float z_top) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+    wiz->deferred_z_top = z_top;
+    wiz->deferred_action = DEFERRED_ACTION_SET_Z_AND_ADVANCE;
+    schedule_deferred_update(wiz);
+}
+
+void lv_probing_wizard_report_final_result_deferred(lv_obj_t * obj, float x, float y) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+    wiz->deferred_final_result.x = x;
+    wiz->deferred_final_result.y = y;
+    // The handler also knows which step to jump to.
+    uint8_t num_steps = probe_routine_sizes[wiz->mode];
+    wiz->deferred_next_step = num_steps - 1;
+    wiz->deferred_action = DEFERRED_ACTION_SET_FINAL_AND_ADVANCE;
+    schedule_deferred_update(wiz);
+}
+
+void lv_probing_wizard_advance_step_deferred(lv_obj_t * obj) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+    wiz->deferred_next_step = wiz->active_step + 1;
+    wiz->deferred_action = DEFERRED_ACTION_SET_Z_AND_ADVANCE; // Z is the only one using this currently
+    schedule_deferred_update(wiz);
+}
+
+void lv_probing_wizard_set_active_step_deferred(lv_obj_t * obj, int8_t step_index) {
+    set_active_step(obj, step_index, true);
+}
+
+/**
+ * @brief The timer callback that executes the deferred UI updates safely.
+ */
+static void deferred_update_timer_cb(lv_timer_t * timer) {
+    lv_obj_t* obj = lv_timer_get_user_data(timer);
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+
+    deferred_action_t action = wiz->deferred_action;
+    wiz->deferred_action = DEFERRED_ACTION_NONE; // Consume the action
+
+    switch (action) {
+        case DEFERRED_ACTION_UPDATE_UI:
+            deferred_update_ui(obj);
+            break;
+        case DEFERRED_ACTION_SET_Z_AND_ADVANCE:
+            lv_probing_wizard_set_z_top(obj, wiz->deferred_z_top);
+            lv_probing_wizard_advance_step(obj);
+            break;
+        case DEFERRED_ACTION_SET_FINAL_AND_ADVANCE:
+            lv_probing_wizard_report_final_result(obj, wiz->deferred_final_result.x, wiz->deferred_final_result.y);
+            lv_probing_wizard_set_active_step(obj, wiz->deferred_next_step, false);
+            break;
+        case DEFERRED_ACTION_NONE:
+        default:
+            break;
+    }
+
+    // Pause the timer after it has run, so it's ready for the next schedule.
+    lv_timer_pause(timer);
+}
+
 /***************************************************
  * DRAWING IMPLEMENTATION
  ***************************************************/
-
-// ... (Drawing implementation remains unchanged) ...
 
 static inline void draw_result_crosshair(lv_layer_t * layer, lv_point_t center, lv_color_t color) {
     lv_draw_line_dsc_t line_dsc;

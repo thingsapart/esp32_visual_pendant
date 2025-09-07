@@ -87,9 +87,24 @@ static void _multi_machine_send_gcode(machine_interface_t *self,
 
 static void _multi_machine__send_gcode(machine_interface_t *self,
                                        const char *gcode) {
-    GET_ACTIVE_MACHINE(self, active_mach);
-    if(active_mach->_send_gcode) {
-        active_mach->_send_gcode(active_mach, gcode);
+    multi_machine_interface_t *multi_self = (multi_machine_interface_t *)self;
+    if (multi_self->active_machine_idx != -1) {
+        // Normal case: send to active machine
+        machine_interface_t *active_mach =
+            multi_self->machines[multi_self->active_machine_idx];
+        if (active_mach && active_mach->_send_gcode) {
+            active_mach->_send_gcode(active_mach, gcode);
+        }
+    } else {
+        // Disconnected case: broadcast to all children that implement _send_gcode
+        // This is primarily for serial/DWC interfaces to attempt reconnection.
+        LOGV(TAG, "No active machine. Broadcasting gcode to all children: %s", gcode);
+        for (size_t i = 0; i < multi_self->num_machines; i++) {
+            machine_interface_t *mach = multi_self->machines[i];
+            if (mach && mach->_send_gcode) {
+                mach->_send_gcode(mach, gcode);
+            }
+        }
     }
 }
 

@@ -1,11 +1,11 @@
+#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#include "debug.h"
+
 #include "mos_machine_handler.h"
 #include "lv_probing_wizard.h"
 #include <stdio.h>
 #include <math.h>
 #include "cJSON.h"
-
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
-#include "debug.h"
 
 static const char * TAG = "mos_machine_handler";
 
@@ -14,15 +14,20 @@ static const char * TAG = "mos_machine_handler";
 // made configurable in a real-world application.
 
 // Clearance from the expected surface to start the probing move.
-#define PROBE_DEFAULT_CLEARANCE 2.0f 
+#define PROBE_DEFAULT_CLEARANCE 2.0f
 // Overtravel distance past the expected surface before the probe errors out.
 #define PROBE_DEFAULT_OVERTRAVEL 2.0f
 // For circular probing, the wizard UI doesn't have a diameter input.
 // We must use a default value. This is a known limitation.
 #define PROBE_DEFAULT_CIRCLE_DIAMETER 20.0f
 // The distance to probe downwards when finding the Z surface.
-#define PROBE_DEFAULT_Z_DISTANCE 10.0f 
+#define PROBE_DEFAULT_Z_DISTANCE 10.0f
 #define MAX_PROBE_RESULTS 4
+
+// Backoff distance calculation for XY probing moves
+#define PROBE_TIP_RADIUS 1.0f // Assumed 2mm diameter probe tip
+#define PROBE_BACKOFF_MULTIPLIER 6.0f
+#define PROBE_XY_BACKOFF_DISTANCE (PROBE_TIP_RADIUS * PROBE_BACKOFF_MULTIPLIER)
 
 extern const uint8_t probe_routine_sizes[];
 
@@ -44,6 +49,7 @@ static struct {
     machine_interface_t* machine;
     lv_obj_t* wizard_obj;
     probe_fsm_state_t probe_state;
+    bool probe_was_running;
     
     // Storage for results parsed from log messages
     lv_probing_wizard_point_float_t parsed_result;
@@ -127,6 +133,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
     // Reset probe result state for the new operation
     handler_state.parsed_result = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
     handler_state.parsed_z_result = NAN;
+    handler_state.probe_was_running = false;
     handler_state.probe_axes_reported_mask = 0;
     memset(handler_state.last_parsed_axis, 0, sizeof(handler_state.last_parsed_axis));
 
@@ -174,7 +181,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"%s\" J%.3f K%.3f L%.3f H%.3f I%.3f T%.3f O%.3f",
                          is_inside ? "G6502.1.g" : "G6503.1.g",
                          center_x, center_y, z_top - 2.0, dim_x, dim_y,
-                         PROBE_DEFAULT_CLEARANCE, PROBE_DEFAULT_OVERTRAVEL);
+                         PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
 
             case LV_PROBING_WIZARD_MODE_CIRCLE:
@@ -186,7 +193,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"%s\" J%.3f K%.3f L%.3f H%.3f T%.3f O%.3f",
                          is_inside ? "G6500.1.g" : "G6501.1.g",
                          setup_points[0].x, setup_points[0].y, z_top - 2.0,
-                         PROBE_DEFAULT_CIRCLE_DIAMETER, PROBE_DEFAULT_CLEARANCE, PROBE_DEFAULT_OVERTRAVEL);
+                         PROBE_DEFAULT_CIRCLE_DIAMETER, PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
             
             case LV_PROBING_WIZARD_MODE_CORNER:
@@ -205,7 +212,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 // G6508.1: Probe an outside corner in "quick mode".
                 snprintf(gcode_buf, sizeof(gcode_buf), "M98 P\"/macros/G6508.1.g\" J%.3f K%.3f L%.3f N%d Q1 T%.3f O%.3f",
                          current_pos.x, current_pos.y, z_top, corner_n,
-                         PROBE_DEFAULT_CLEARANCE, PROBE_DEFAULT_OVERTRAVEL);
+                         PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
         }
 
@@ -251,38 +258,12 @@ static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) 
  * @brief Callback for machine state changes. Used to detect when a probe macro finishes.
  */
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data) {
-    probe_fsm_state_t current_probe_state = handler_state.probe_state;
-
-    if (current_probe_state != PROBE_STATE_IDLE && machine->machine_status == MACHINE_STATUS_RUNNING) {
-        LOGI(TAG, "Probe macro finished execution.");
-
-        // CRITICAL: Reset state machine immediately to prevent re-entry
-        handler_state.probe_state = PROBE_STATE_IDLE;
-
-        if (current_probe_state == PROBE_STATE_PENDING_Z_COMPLETE) {
-            if (!isnan(handler_state.parsed_z_result)) {
-                lv_probing_wizard_set_z_top(handler_state.wizard_obj, handler_state.parsed_z_result);
-            } else {
-                 LOGW(TAG, "Z Probe macro finished but no result was parsed from logs. Using last reported machine Z.");
-                 lv_probing_wizard_set_z_top(handler_state.wizard_obj, machine->position[2]);
-            }
-            lv_probing_wizard_advance_step(handler_state.wizard_obj);
-
-        } else if (current_probe_state == PROBE_STATE_PENDING_XY_COMPLETE) {
-            // Check if we received the expected X and Y results
-            if ((handler_state.probe_axes_reported_mask & 3) == 3) { // 3 = (bit 0 for X) | (bit 1 for Y)
-                lv_probing_wizard_report_final_result(handler_state.wizard_obj,
-                                                      handler_state.parsed_result.x,
-                                                      handler_state.parsed_result.y);
-            } else {
-                LOGW(TAG, "XY Probe macro finished but results were not fully parsed from logs (mask: %d). Falling back to last reported WCS.", handler_state.probe_axes_reported_mask);
-                lv_probing_wizard_report_final_result(handler_state.wizard_obj,
-                                                      machine->wcs_position[0],
-                                                      machine->wcs_position[1]);
-            }
-            // Fast-forward the wizard to the final "complete" step.
-            uint8_t num_steps = probe_routine_sizes[lv_probing_wizard_get_mode(handler_state.wizard_obj)];
-            lv_probing_wizard_set_active_step(handler_state.wizard_obj, num_steps - 1);
+    // This callback is now only used to detect when a probe has *started*.
+    // Completion is detected via log messages for greater reliability.
+    if (handler_state.probe_state != PROBE_STATE_IDLE && machine->machine_status == MACHINE_STATUS_RUNNING) {
+        if (!handler_state.probe_was_running) {
+            handler_state.probe_was_running = true;
+            LOGD(TAG, "Probe macro has started running.");
         }
     }
 }
@@ -293,16 +274,7 @@ static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
         return;
     }
 
-    cJSON *root = cJSON_Parse(message);
-    if (!root) return;
-
-    cJSON *resp_item = cJSON_GetObjectItem(root, "resp");
-    if (!cJSON_IsString(resp_item) || (resp_item->valuestring == NULL)) {
-        cJSON_Delete(root);
-        return;
-    }
-
-    const char* resp_str = resp_item->valuestring;
+    const char* resp_str = message;
     int index;
     char axis;
     float pos;
@@ -331,6 +303,35 @@ static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
             }
         }
     }
+    // Check for a completion message from any MillenniumOS macro
+    else if (strstr(resp_str, "MillenniumOS:") != NULL) {
+        probe_fsm_state_t finished_probe_type = handler_state.probe_state;
+        
+        // Reset state machine immediately.
+        handler_state.probe_state = PROBE_STATE_IDLE;
+        handler_state.probe_was_running = false;
 
-    cJSON_Delete(root);
+        if (finished_probe_type == PROBE_STATE_PENDING_Z_COMPLETE) {
+            LOGI(TAG, "Z-probe completion detected from log message: %s", resp_str);
+            float z_res = handler_state.parsed_z_result;
+            if (isnan(z_res)) {
+                LOGW(TAG, "Z Probe completed but no result was parsed. Using last machine Z.");
+                z_res = machine->position[2];
+            }
+            lv_probing_wizard_set_z_top_deferred(handler_state.wizard_obj, z_res);
+        }
+        else if (finished_probe_type == PROBE_STATE_PENDING_XY_COMPLETE) {
+            LOGI(TAG, "XY-probe completion detected from log message: %s", resp_str);
+            float res_x = handler_state.parsed_result.x;
+            float res_y = handler_state.parsed_result.y;
+
+            if ((handler_state.probe_axes_reported_mask & 3) != 3) { // 3 = (bit 0 for X) | (bit 1 for Y)
+                LOGW(TAG, "XY Probe macro finished but results were not fully parsed (mask: %d).", handler_state.probe_axes_reported_mask);
+            }
+            
+            uint8_t num_steps = probe_routine_sizes[lv_probing_wizard_get_mode(handler_state.wizard_obj)];
+            lv_probing_wizard_report_final_result(handler_state.wizard_obj, res_x, res_y);
+            lv_probing_wizard_set_active_step_deferred(handler_state.wizard_obj, num_steps - 1);
+        }
+    }
 }

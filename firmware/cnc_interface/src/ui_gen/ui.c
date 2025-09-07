@@ -1943,7 +1943,7 @@ void create_ui(lv_obj_t* parent) {
     obj_registry_add("jog_axis_selector", jog_axis_selector_219);
     lv_obj_set_style_size(jog_axis_selector_219, 55, 55, 0);
     lv_obj_set_style_radius(jog_axis_selector_219, 32767, 0);
-    lv_obj_align(jog_axis_selector_219, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
+    lv_obj_align(jog_axis_selector_219, LV_ALIGN_TOP_RIGHT, -15, 15);
     lv_obj_set_style_shadow_width(jog_axis_selector_219, 10, 0);
     lv_obj_set_style_shadow_opa(jog_axis_selector_219, 150, 0);
     lv_obj_set_style_shadow_offset_y(jog_axis_selector_219, 4, 0);

@@ -480,10 +480,19 @@ static void _machine_rrf_attempt_connect(machine_interface_t *self) {
     machine_rrf_t *rrf_self = (machine_rrf_t *)self;
     if (rrf_self->connected) return;
 
-    // For serial, "connecting" is just checking for responses, which happens during polling.
-    // For DWC, we can trigger a connection attempt.
-    if (rrf_self->_set_connected_impl) {
-        rrf_self->_set_connected_impl(rrf_self, true);
+    // Distinguish transport type by checking which implementation is used.
+    if (rrf_self->_poll_state_impl == _serial_poll_state_impl) {
+        // For serial, we must poll to check for connection.
+        // We'll send a simple status request. If we get a response,
+        // _serial_proc_state_resp_impl will mark us as connected.
+        // Also process any pending input first.
+        serial_process_input(rrf_self->transport_state.serial.uart);
+        machine_interface_send_gcode(self, "M409 K\"state.status\" F\"v\"", 0);
+    } else if (rrf_self->_poll_state_impl == _dwc_poll_state_impl) {
+        // For DWC, the set_connected function handles the connection attempt.
+        if (rrf_self->_set_connected_impl) {
+            rrf_self->_set_connected_impl(rrf_self, true);
+        }
     }
 }
 
