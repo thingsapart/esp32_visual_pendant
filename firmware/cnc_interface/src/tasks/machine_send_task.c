@@ -45,6 +45,14 @@ typedef struct {
 
 // Function that will run as the FreeRTOS task calling
 // machine_interface_setup_lookp infinitely.
+//
+// TASK ROLE: Output Pipeline (TX) + Polling (Heartbeat)
+// This task decouples the high-speed UI from the low-speed or blocking physical transport.
+// It also acts as the "Metronome" for the machine interface, triggering state updates.
+//
+// 1. DWC/HTTP: Essential. Network calls are blocking.
+// 2. Serial: Prevents UI stutter if the UART TX buffer fills up.
+// 3. Remote/ESP-NOW: Serializes outgoing packets.
 void machine_send_task(void *pvParameters) {
   machine_send_task_args_t *args = (machine_send_task_args_t *)pvParameters;
 
@@ -61,22 +69,66 @@ void machine_send_task(void *pvParameters) {
   bool abort = false;
   char gcode[MAX_GCODE_STR_LEN];
 
-  LOGI(TAG, ">> Running machine task loop...");
+  LOGI(TAG, ">> Running machine send+poll task loop (%s)...", task_name);
+
+  // Poll Timing setup
+  TickType_t last_poll_time = xTaskGetTickCount();
+  uint32_t procrate_ms = machine->procrate_ms > 0 ? machine->procrate_ms : 100;
+  TickType_t poll_interval_ticks = pdMS_TO_TICKS(procrate_ms);
+  size_t poll_counter = 0;
+
+  // Defaults if not defined elsewhere
+  #ifndef MACHINE_POLL_EVERY_NTH_INTERVAL
+  #define MACHINE_POLL_EVERY_NTH_INTERVAL 1
+  #endif
 
   while (!abort) {
+    TickType_t now = xTaskGetTickCount();
+    TickType_t time_since_poll = now - last_poll_time;
+    TickType_t ticks_to_wait = 0;
+
+    // Calculate how long we can block waiting for G-code before we must poll again
+    if (time_since_poll < poll_interval_ticks) {
+        ticks_to_wait = poll_interval_ticks - time_since_poll;
+    } else {
+        ticks_to_wait = 0; // Poll is overdue, don't wait
+    }
+
 #ifdef ESP32_HW
-    // Block indefinitely waiting for a notification from the queue
-    if (xQueueReceive(queue, gcode, portMAX_DELAY) == pdTRUE)
+    // Block waiting for a notification from the queue or timeout
+    BaseType_t ret = xQueueReceive(queue, gcode, ticks_to_wait);
+    if (ret == pdTRUE)
 #else
-    if (gcode_queue_pop(queue, gcode))
+    // Native simulation doesn't support timeout on pop easily in this shim
+    // We assume non-blocking or short sleep for sim
+    bool ret = gcode_queue_pop(queue, gcode);
+    if (!ret) {
+        usleep(10 * 1000); // minimal sleep to prevent CPU hogging in sim
+    }
+    if (ret)
 #endif
     {
-      // Notification received, try to send the received gcode.
+      // 1. Handle Outgoing G-Code
       LOGV(TAG, "Sending gcode: %s", gcode);
       machine->_send_gcode(machine, gcode);
     }
-    // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop
-    // continues
+
+    // 2. Handle Polling / Machine Update
+    // We check time again because sending gcode might have taken time (blocking IO)
+    now = xTaskGetTickCount();
+    if ((now - last_poll_time) >= poll_interval_ticks) {
+        if (poll_counter++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
+            // This triggers _update_machine_state -> _serial_poll_state_impl -> queues M409
+            machine_interface_task_loop_iter(machine);
+        }
+        
+        // Advance last_poll_time to maintain steady cadence, but don't fall behind if blocked long
+        if (now - last_poll_time > (poll_interval_ticks * 2)) {
+            last_poll_time = now; // We lagged significantly, reset base time
+        } else {
+            last_poll_time += poll_interval_ticks;
+        }
+    }
   }
   LOGI(TAG, "<< Machine Task Loop Ended?");
 

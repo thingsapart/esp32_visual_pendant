@@ -64,31 +64,38 @@ class RRFMachineSimStream {
   size_t readBytes(char *buffer,
                    size_t length);  // read chars from stream into buffer
 
-  // Add any custom methods you need for your simulation here.
-  void process_gcode(const char *gcode);
-  // Modified signature to use std::vector<std::string>
-  void generate_response(const char *command,
-                         const std::vector<std::string> &args);
-  // Modified signature to use std::string
-  void process_last_command(std::string last_command);
+  // --- Simulator Side Interface ---
+  // These are called by the Simulator Task to act as the "Machine"
+  int sim_available(); // How many bytes of G-Code are waiting for the sim?
+  size_t sim_read(uint8_t* buf, size_t size); // Read G-Code from Pendant
+  size_t sim_write(const uint8_t* buf, size_t size); // Write JSON to Pendant
 
  private:
-  int uart_num_;               // Store the UART number.
-  std::string input_buffer_;   // Buffer for incoming data (from "host")
-  std::string output_buffer_;  // Buffer for outgoing data (to "host")
+  void process_gcode(const char * gcode_line);
+  void process_last_command(std::string command_str);
+  void generate_response(const char * key, const std::vector<std::string>& results);
 
-  // Internal RRF state (expand as needed)
+  int uart_num_;
+  
+  // Buffers for communication
+  std::string input_buffer_;  // Pendant -> Simulator (G-Code)
+  std::string output_buffer_; // Simulator -> Pendant (JSON)
+  std::string last_command_;
+  
+  // Machine State Simulation
   float pos_[3];
   bool axes_homed_[3];
+  float wcs_offsets_[10][3];
   int wcs_;
   float feed_multiplier_;
-  float wcs_offsets_[10][3];
-
-  std::string last_command_;
-  std::vector<std::string> last_args_;  // Use vector for dynamic arguments
-
   bool relative;
+  std::vector<std::string> last_args_;
+
+  void* mutex_; // Mutex to protect buffers
 };
+
+// Global accessor to get the active stream instance for the simulator task
+RRFMachineSimStream* get_rrf_sim_stream_instance();
 
 // define to insert mock into serial list:
 extern void add_mock_rrf_serial();

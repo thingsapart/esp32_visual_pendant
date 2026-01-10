@@ -499,6 +499,14 @@ typedef struct {
 
 /**
  * @brief The main function for the Machine Response Processing Task.
+ *
+ * TASK ROLE: Input Parser (RX)
+ * This task offloads heavy data parsing (JSON, large strings) from the ISR and the UI task.
+ * 1. ISR/Callback: Pushes raw bytes/lines into a thread-safe ring buffer.
+ * 2. This Task: Wakes up, pulls from ring buffer, parses (cJSON), and updates machine state.
+ *
+ * NOTE: This is critical for performance. Parsing JSON in an ISR is illegal/crash-prone.
+ * Parsing in the UI task causes frame drops.
  */
 void machine_response_proc_task(void *vpargs) {
   machine_response_proc_task_args_t *args =

@@ -208,8 +208,38 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
 
 #else
 
-// Already defined in ini.
-// #define LGFX_USE_V1
+/* Ensure LovyanGFX internal features are disabled to prevent ODR violations and bloat */
+#ifndef LGFX_NO_LFS
+#define LGFX_NO_LFS
+#endif
+
+#ifndef LGFX_NO_SPIFFS
+#define LGFX_NO_SPIFFS
+#endif
+
+#ifndef LGFX_NO_SD
+#define LGFX_NO_SD
+#endif
+
+#ifndef LGFX_NO_HTTP
+#define LGFX_NO_HTTP
+#endif
+
+#ifndef LGFX_NO_PNG
+#define LGFX_NO_PNG
+#endif
+
+#ifndef LGFX_NO_JPG
+#define LGFX_NO_JPG
+#endif
+
+#ifndef LGFX_NO_BMP
+#define LGFX_NO_BMP
+#endif
+
+#ifndef LGFX_NO_QOI
+#define LGFX_NO_QOI
+#endif
 
 #include <LovyanGFX.hpp>
 
@@ -387,7 +417,7 @@ void display_flush_dma(lv_display_t *disp, const lv_area_t *area, uint8_t *px_ma
 
     tft.pushImageDMA(area->x1, area->y1, w, h, (lgfx::rgb565_t *) px_map);
     tft.endWrite();
-    
+
     while (tft.dmaBusy()) {
       tft.waitDMA();
     }

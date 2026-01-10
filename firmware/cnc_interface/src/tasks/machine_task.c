@@ -31,6 +31,14 @@ static const char *TAG = "MACHINE_TASK";
 
 // Function that will run as the FreeRTOS task calling
 // machine_interface_setup_lookp infinitely.
+//
+// TASK ROLE: Polling / Heartbeat
+// This task is responsible for the periodic "ticks" of the machine logic.
+// It wakes up at a defined interval (e.g. 100ms) and calls `_update_machine_state`.
+// For RRF/Serial connections, this injects M409 query commands into the Send Queue.
+//
+// OPTIMIZATION: This logic could be merged into machine_send_task by using a
+// queue receive timeout to generate the poll event if no other data is being sent.
 void machine_task(void *pvParameters) {
   machine_interface_t *s_machine_interface =
       (machine_interface_t *)pvParameters;

@@ -6,13 +6,15 @@
 #include <vector>
 
 #if defined(ESP32_HW)
-
 #include "Arduino.h"
 #include "HardwareSerial.h"
-#else
-// Provide dummy types/stubs for non-ESP32 builds if needed
-// Or include the RRF Sim stream header
+#endif
+
+#ifdef RRF_SIM
 #include "machine/rrf_machine_sim_stream.h"
+#endif
+
+#ifndef ESP32_HW
 typedef RRFMachineSimStream Stream;  // Use the simulator stream
 #endif
 
@@ -222,7 +224,7 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
                             int8_t tx_pin) {
   Stream *serial_stream = NULL;
   bool is_hw = false;
-  bool owns_stream = false;  // Do we need to delete the stream later?
+  bool owns_stream = false;
 
   // Check if already initialized
   if (g_uart_num_to_handle.count(uart_num)) {
@@ -230,59 +232,58 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
     return g_uart_num_to_handle[uart_num];
   }
 
-#if defined(ESP32_HW)
-  if (uart_num == -1 && rx_pin == -1) {  // Standard Serial (usually UART0)
-    serial_stream = &Serial;
-    is_hw = false;  // Serial is typically not HardwareSerial in this wrapper's logic
-    
-    // Check if Serial is connected. For ESP32-S3 CDC, this avoids hanging
-    // if the serial monitor isn't open. We wait for a short period.
-    unsigned long start_time = millis();
-    while (!Serial && (millis() - start_time < 500)) {
-        delay(10); // Wait up to 500ms
-    }
-
-    // Now, check if Serial was already begun externally or if it became available.
-    // If it's still not available, we can begin it, but it might not be usable.
-    if (!Serial) { 
-        LOGI(TAG, "Standard Serial not connected, initializing anyway.");
-        Serial.setRxBufferSize(RING_BUFFER_SIZE / 2);
-        Serial.begin(baud);
-    } else {
-        LOGI(TAG, "Standard Serial already initialized or connected.");
-    }
-  } else {  // HardwareSerial UART 1 or 2 etc.
-    HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
-    if (!hw_serial) {
-      LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
-      return NULL;
-    }
-    hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2);  // Set buffer size
-    hw_serial->begin(baud, config, rx_pin, tx_pin);
-    // Set FIFO threshold to trigger onReceive frequently (e.g., for every byte)
-    // This depends on the ESP-IDF version / Arduino core.
-    hw_serial->setRxFIFOFull(100);  // Example, check specific API for your core
-    hw_serial->setRxTimeout(1);
-    serial_stream = hw_serial;
-    is_hw = true;
-    owns_stream = true;  // We created it, we own it.
-    LOGI(TAG, "HardwareSerial UART %d initialized.", uart_num);
-  }
-#else  // Non-ESP32 (e.g., RRF Sim)
+#ifdef RRF_SIM
   if (uart_num == RRF_SIM_UART_NUM) {
     serial_stream = new RRFMachineSimStream(uart_num);
     if (!serial_stream) {
-      _d(0, "Failed to allocate RRFMachineSimStream");
+      LOGE(TAG, "Failed to allocate RRFMachineSimStream");
       return NULL;
     }
     is_hw = false;
     owns_stream = true;
     LOGV(TAG, "RRFMachineSimStream initialized.");
-  } else {
-    LOGE(TAG, "Serial port %d not supported on this platform.", uart_num);
-    return NULL;  // Not supported
   }
+  else
 #endif
+  {
+#if defined(ESP32_HW)
+    if (uart_num == -1 && rx_pin == -1) {  // Standard Serial (usually UART0)
+        serial_stream = &Serial;
+        is_hw = false;
+        
+        unsigned long start_time = millis();
+        while (!Serial && (millis() - start_time < 500)) {
+            delay(10); 
+        }
+
+        if (!Serial) { 
+            // LOGI(TAG, "Standard Serial not connected, initializing anyway.");
+            Serial.setRxBufferSize(RING_BUFFER_SIZE / 2);
+            Serial.begin(baud);
+        } else {
+            // LOGI(TAG, "Standard Serial already initialized or connected.");
+        }
+    } else {  // HardwareSerial UART 1 or 2 etc.
+        HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
+        if (!hw_serial) {
+            LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
+            return NULL;
+        }
+        hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2);  // Set buffer size
+        hw_serial->begin(baud, config, rx_pin, tx_pin);
+        hw_serial->setRxFIFOFull(100); 
+        hw_serial->setRxTimeout(1);
+        serial_stream = hw_serial;
+        is_hw = true;
+        owns_stream = true;
+        // LOGI(TAG, "HardwareSerial UART %d initialized.", uart_num);
+    }
+#else
+    // Fallback for native/posix if not sim
+    LOGE(TAG, "Serial port %d not supported on this platform.", uart_num);
+    return NULL;
+#endif
+  }
 
   // Allocate and initialize port data structure
   serial_port_data_t *port_data = new serial_port_data_t;

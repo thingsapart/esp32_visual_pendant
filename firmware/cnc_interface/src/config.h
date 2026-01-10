@@ -22,7 +22,7 @@
 
 // TOUCH and ENCODER debugging.
 #define DEBUG_TOUCH 0
-#define DEBUG_ENCODER 1
+#define DEBUG_ENCODER 0
 
 #define ASYNC_RESPONSE_PROCESSING 1  // Use Tasks to process serial/esp32 state.
 #define ASYNC_GCODE_SENDING 1        // Use Tasks to process serial/esp32 state.

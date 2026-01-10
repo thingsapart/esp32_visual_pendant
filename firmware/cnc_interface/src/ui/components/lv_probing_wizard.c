@@ -1317,17 +1317,10 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
         LOGD(TAG, "Font pointer is valid: %p", label_dsc.font);
         lv_point_t txt_size;
 
-        lv_text_attributes_t attr = {
-            .letter_space = 8,
-            .line_space = 14,
-            .max_width = 40,
-            .text_flags = LV_TEXT_FLAG_NONE
-        };
-
         // Draw width
         snprintf(wiz->result_dim_w_text, sizeof(wiz->result_dim_w_text), "%.1f", wiz->result_details.dimensions.x);
         LOGD(TAG, "Width text buffer: '%s'", wiz->result_dim_w_text);
-        lv_text_get_size(&txt_size, wiz->result_dim_w_text, label_dsc.font, &attr);
+        lv_text_get_size(&txt_size, wiz->result_dim_w_text, label_dsc.font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         LOGD(TAG, "Width text size: %d x %d", txt_size.x, txt_size.y);
         lv_area_t width_area = {
             .x1 = (square_area.x1 + square_area.x2) / 2 - txt_size.x / 2,
@@ -1342,7 +1335,7 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
         // Draw height
         snprintf(wiz->result_dim_h_text, sizeof(wiz->result_dim_h_text), "%.1f", wiz->result_details.dimensions.y);
         LOGD(TAG, "Height text buffer: '%s'", wiz->result_dim_h_text);
-        lv_text_get_size(&txt_size, wiz->result_dim_h_text, label_dsc.font, &attr);
+        lv_text_get_size(&txt_size, wiz->result_dim_h_text, label_dsc.font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         LOGD(TAG, "Height text size: %d x %d", txt_size.x, txt_size.y);
         lv_area_t height_area = {
             .x1 = square_area.x1 - txt_size.x - 5,
@@ -1397,7 +1390,7 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
         
         snprintf(wiz->result_rad_text, sizeof(wiz->result_rad_text), "R %.1f", wiz->result_details.radius);
         lv_point_t txt_size;
-        lv_text_get_size(&txt_size, wiz->result_rad_text, label_dsc.font, NULL);
+        lv_text_get_size(&txt_size, wiz->result_rad_text, label_dsc.font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 
         // Position it at 45 degrees outside the circle
         float angle = -45.0f * (M_PI / 180.0f);

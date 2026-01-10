@@ -405,48 +405,25 @@ void setup() {
   ram_usage();
 
 #ifdef DWC_MACHINE_MODE
-  LOGI(TAG, "Creating DWC Machine Task... ");
-  if (!abort && machine_task_run("MachineDWC", &machine_dwc.base,
-                                 &machine_dwc_task_handle, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create DWC Machine Task: error");
-    abort = true;
-  }
-  LOGI(TAG, "Creating DWC Machine GCode Sending Task... ");
+  // TASK: Machine Sender & Polling (DWC)
+  // Merged: Polling logic is now inside the send task.
+  LOGI(TAG, "Creating DWC Machine Task (Send+Poll)... ");
   if (!abort && machine_send_task_run("MachineSendTask", &machine_dwc.base,
                                       &machine_send_task_handle,
                                       &machine_send_queue, TASK_MACHINE_CORE,
-                                      4 * 1024, tskIDLE_PRIORITY + 5)) {
+                                      6 * 1024, tskIDLE_PRIORITY + 5)) {
     machine_dwc.base.gcode_queue = machine_send_queue;
     LOGI(TAG, "DONE\n");
   } else {
-    LOGE(TAG, "FAIL: Could not create DWC GCode Sending Task: error");
+    LOGE(TAG, "FAIL: Could not create DWC Machine Task: error");
     abort = true;
   }
 #else  // RRF Mode
-  LOGI(TAG, "Creating RRF Machine Task... ");
-  if (!abort && machine_task_run("MachineRRF", &machine_rrf.base,
-                                 &machine_rrf_task, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
+  // Note: separate machine_task_run calls removed. Polling is handled by Send/Tasks below.
 
-  ram_usage();
-
-  LOGI(TAG, "Creating Remote Machine Task... ");
-  if (!abort && machine_task_run("MachineRemote", &machine_remote.base,
-                                 &machine_remote_task, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
-
-  ram_usage();
-
+  // TASK: Response Processing (RRF Serial)
+  // Role: Parses JSON/Text responses from the machine.
+  // Necessity: Critical. JSON parsing is CPU heavy. Keeping it out of ISR and UI task prevents stutter.
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
       machine_response_proc_task_run(
@@ -464,6 +441,8 @@ void setup() {
 
   ram_usage();
 
+  // TASK: Response Processing (Remote/ESP-NOW)
+  // Role: Parses binary/struct data from ESP-NOW.
   LOGI(TAG, "Creating Remote Machine State Processing Task... ");
   if (!abort && machine_response_proc_task_run(
                     "MachineRemoteProc", &machine_remote.base,
@@ -481,11 +460,13 @@ void setup() {
   }
 
 #ifdef ASYNC_GCODE_SENDING
+  // TASK: GCode Sender & Poller (Generic/Serial)
+  // Role: Dequeues G-code -> UART. Also triggers periodic state updates (Poll).
   LOGI(TAG, "Creating Machine GCode Sending Task... ");
   if (!abort && machine_send_task_run(
                     "MachineSendTask", &machine.base,  // Send to multi-machine
                     &machine_send_task_handle, &machine_send_queue,
-                    TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 5)) {
+                    TASK_MACHINE_CORE, 6 * 1024, tskIDLE_PRIORITY + 5)) {
     machine.base.gcode_queue = machine_send_queue;
     // Propagate the queue handle to all child machine interfaces
     for (size_t i = 0; i < machine.num_machines; ++i) {

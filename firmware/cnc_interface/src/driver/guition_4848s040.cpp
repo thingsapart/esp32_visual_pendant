@@ -1,10 +1,40 @@
 #ifdef GUITION_4848S040
 
-// Already defined in ini.
-// #define LGFX_USE_V1
-
 #include <driver/i2c.h>
 #include <lvgl.h>
+
+/* Ensure LovyanGFX internal features are disabled to prevent ODR violations and bloat */
+#ifndef LGFX_NO_LFS
+#define LGFX_NO_LFS
+#endif
+
+#ifndef LGFX_NO_SPIFFS
+#define LGFX_NO_SPIFFS
+#endif
+
+#ifndef LGFX_NO_SD
+#define LGFX_NO_SD
+#endif
+
+#ifndef LGFX_NO_HTTP
+#define LGFX_NO_HTTP
+#endif
+
+#ifndef LGFX_NO_PNG
+#define LGFX_NO_PNG
+#endif
+
+#ifndef LGFX_NO_JPG
+#define LGFX_NO_JPG
+#endif
+
+#ifndef LGFX_NO_BMP
+#define LGFX_NO_BMP
+#endif
+
+#ifndef LGFX_NO_QOI
+#define LGFX_NO_QOI
+#endif
 
 #include <LovyanGFX.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>

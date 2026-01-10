@@ -64,35 +64,35 @@
 #define LOGE(tag, fmt, ...) \
   LOG_BACKEND("[E][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #else
-#define LOGE(...) ((void)0)
+#define LOGE(tag, fmt, ...) do {} while(0)
 #endif
 
 #if EFFECTIVE_LOG_LEVEL >= D_WARN
 #define LOGW(tag, fmt, ...) \
   LOG_BACKEND("[W][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #else
-#define LOGW(...) ((void)0)
+#define LOGW(tag, fmt, ...) do {} while(0)
 #endif
 
 #if EFFECTIVE_LOG_LEVEL >= D_INFO
 #define LOGI(tag, fmt, ...) \
   LOG_BACKEND("[I][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #else
-#define LOGI(...) ((void)0)
+#define LOGI(tag, fmt, ...) do {} while(0)
 #endif
 
 #if EFFECTIVE_LOG_LEVEL >= D_DEBUG
 #define LOGD(tag, fmt, ...) \
   LOG_BACKEND("[D][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #else
-#define LOGD(...) ((void)0)
+#define LOGD(tag, fmt, ...) do {} while(0)
 #endif
 
 #if EFFECTIVE_LOG_LEVEL >= D_VERBOSE
 #define LOGV(tag, fmt, ...) \
   LOG_BACKEND("[V][%s] " fmt, tag __VA_OPT__(, ) __VA_ARGS__)
 #else
-#define LOGV(...) ((void)0)
+#define LOGV(tag, fmt, ...) do {} while(0)
 #endif
 
 // A special macro for temporary debugging that you want to always see.
