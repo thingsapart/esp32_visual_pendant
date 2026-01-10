@@ -272,11 +272,10 @@ bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub
         size_t fragment_len = (i == total_fragments - 1) ? (len - offset) : max_payload_per_fragment;
 
         size_t total_msg_len = BINARY_FRAGMENT_MSG_HEADER_SIZE + fragment_len;
-        binary_fragment_msg_t *fragment_msg = malloc(total_msg_len);
-        if (!fragment_msg) {
-            LOGE(TAG, "Failed to allocate memory for fragment %u", i);
-            return false;
-        }
+        
+        // Optimize: Use stack buffer instead of malloc to prevent heap fragmentation
+        uint8_t buf[ESP_NOW_MAX_DATA_LEN];
+        binary_fragment_msg_t *fragment_msg = (binary_fragment_msg_t *)buf;
 
         fragment_msg->type = MSG_TYPE_BINARY;
         fragment_msg->sub_type = sub_type;
@@ -290,12 +289,9 @@ bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub
 
         if (!remote_wrapper_send(mac_addr, (const uint8_t*)fragment_msg, total_msg_len)) {
             LOGW(TAG, "Failed to send fragment %u of seq %u", i, current_seq_id);
-            free(fragment_msg);
             // We could attempt retries here, but for now we fail fast.
             return false;
         }
-
-        free(fragment_msg);
     }
     return true;
 }

@@ -26,6 +26,15 @@ typedef struct {
     bool is_set;
 } probe_point_t;
 
+/**
+ * @brief A structure to hold detailed probing results like dimensions and rotation.
+ */
+typedef struct {
+    lv_probing_wizard_point_float_t dimensions; /**< For rectangle: .x=width, .y=height */
+    float radius;                               /**< For circle */
+    float rotation;                             /**< Workpiece rotation in degrees */
+} lv_probing_wizard_details_t;
+
 
 // --- Enums for configuration ---
 
@@ -113,7 +122,7 @@ typedef void (*execute_probe_cb_t)(lv_obj_t * wizard_obj, const lv_probing_actio
  * @return bool, true if successful.
  */
 typedef void (*install_probe_tool_cb_t)(lv_obj_t * wizard_obj);
-/**
+/*
  * @brief Callback for the wizard to command the machine to set a new Work Coordinate System origin.
  * @param wizard_obj Pointer to the wizard object.
  * @param wcs_index The WCS to set (e.g., 2 for G55, 3 for G56, etc.).
@@ -207,6 +216,13 @@ void lv_probing_wizard_report_final_result(lv_obj_t * obj, float x, float y);
  * @param z_top The measured Z coordinate.
  */
 void lv_probing_wizard_set_z_top(lv_obj_t * obj, float z_top);
+
+/**
+ * @brief Function for the machine handler to report detailed probing results like dimensions and radius.
+ * @param obj Pointer to the probing wizard object.
+ * @param details A pointer to the struct containing the detailed results.
+ */
+void lv_probing_wizard_report_details(lv_obj_t * obj, const lv_probing_wizard_details_t * details);
 
 /**
  * @brief Advances the wizard to the next step. Typically called by the machine handler after completing an action.

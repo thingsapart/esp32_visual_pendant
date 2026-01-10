@@ -136,12 +136,14 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   }
 
   // --- Override Actions ---
-  else if (strcmp(action_name, "action.overrides.feed.set_pct") == 0 &&
+  else if ((strcmp(action_name, "action.overrides.feed.set_pct") == 0 ||
+            strcmp(action_name, "set_feed_override") == 0) &&
            value.type == BINDING_TYPE_FLOAT) {
     char gcode[32];
     snprintf(gcode, sizeof(gcode), "M220 S%.0f", value.as.f_val);
     machine->send_gcode(machine, gcode, 0);
-  } else if (strcmp(action_name, "action.overrides.spindle.set_pct") == 0 &&
+  } else if ((strcmp(action_name, "action.overrides.spindle.set_pct") == 0 ||
+              strcmp(action_name, "set_speed_override") == 0) &&
              value.type == BINDING_TYPE_FLOAT) {
     char gcode[32];
     snprintf(gcode, sizeof(gcode), "M221 S%.0f", value.as.f_val);
@@ -151,6 +153,14 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   // --- Probing Actions ---
   else if (strncmp(action_name, "action.probe.start.", 19) == 0) {
     const char *probe_type = action_name + 19;
+    char gcode[128];
+    LOGI(TAG, "Starting probe sequence: %s", probe_type);
+    snprintf(gcode, sizeof(gcode), "M98 P\"/macros/probe_%s.g\"", probe_type);
+    machine->probe(machine, gcode);
+  }
+  // Alternate naming from UI generation
+  else if (strncmp(action_name, "probe_start_", 12) == 0) {
+    const char *probe_type = action_name + 12;
     char gcode[128];
     LOGI(TAG, "Starting probe sequence: %s", probe_type);
     snprintf(gcode, sizeof(gcode), "M98 P\"/macros/probe_%s.g\"", probe_type);

@@ -1,3 +1,6 @@
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#include "debug.h"
+
 #include "config.h"
 #include "machine_response_proc_task.h"
 
@@ -19,9 +22,6 @@ extern "C" {
 #else
 #include "compat/threads.h"
 #endif
-
-#define UI_DEBUG_LOCAL_LEVEL D_ERROR
-#include "debug.h"
 
 #include "machine/machine_interface.h"
 

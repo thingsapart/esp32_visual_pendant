@@ -1,3 +1,6 @@
+#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#include "debug.h"
+
 #include "machine_interface.h"
 
 #include <assert.h>
@@ -6,7 +9,6 @@
 #include <string.h>
 
 #include "config.h"
-#include "debug.h"
 
 static const char *TAG = "machine_interface";  // Used for logging
 static const char axes[] = {'X', 'Y', 'Z', '\0'};

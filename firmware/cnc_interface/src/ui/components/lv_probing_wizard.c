@@ -72,9 +72,48 @@ const uint8_t probe_routine_sizes[] = {
     [LV_PROBING_WIZARD_MODE_CORNER] = sizeof(corner_probe_actions) / sizeof(lv_probing_action_t),
 };
 
+/**
+ * @brief Defines the major UI states of the probing wizard.
+ *
+ * The wizard progresses through these states to guide the user. The `PROBING` state
+ * itself is composed of multiple "steps" defined by the `lv_probing_action_t` arrays.
+ *
+ * State Machine Flow:
+ *
+ * (Create/Reset)
+ *      |
+ *      V
+ *  .---------------------------------------------------------------------------------.
+ *  | [ WIZARD_STATE_CONFIG ]                                                         |
+ *  | - User selects probe mode (Block, Circle, etc.).                                |
+ *  | - User can apply a previously saved result.                                     |
+ *  '---------------------------------------------------------------------------------'
+ *      |
+ *      | "Start Probing" button clicked
+ *      V
+ *  .---------------------------------------------------------------------------------.
+ *  | [ WIZARD_STATE_PROBING ]                                                        |  <--.
+ *  | - A sequence of steps from the active `probe_actions` array.                    |     | "Next" or
+ *  | - User is prompted to jog, confirm points, or wait for automated probing.       |     | deferred_advance_step()
+ *  | - Steps are advanced either by user clicking "Next" or by the machine handler   |     |
+ *  |   reporting a probe action is complete.                                         | ----'
+ *  '---------------------------------------------------------------------------------'
+ *      |
+ *      | Final `ACTION_COMPLETE` step is reached
+ *      V
+ *  .---------------------------------------------------------------------------------.
+ *  | [ WIZARD_STATE_COMPLETE ]                                                       |
+ *  | - Final calculated results (X, Y, Z, dimensions) are displayed.                 |
+ *  | - User can select a WCS and click "Apply" to set the new origin.                |
+ *  '---------------------------------------------------------------------------------'
+ *      |
+ *      '------------. "Apply" or "Cancel" button clicked
+ *                   V
+ *                 (Reset) -> moves back to CONFIG state
+ */
 typedef enum {
-    WIZARD_STATE_CONFIG,
-    WIZARD_STATE_PROBING,
+    WIZARD_STATE_CONFIG,    /**< The initial screen for selecting mode and starting. */
+    WIZARD_STATE_PROBING,   /**< The active sequence of jogging and probing steps. */
     WIZARD_STATE_COMPLETE,
 } wizard_state_t;
 
@@ -133,6 +172,7 @@ typedef struct {
 
     lv_probing_wizard_point_float_t result;
     bool result_valid;
+    lv_probing_wizard_details_t result_details;
 
     get_current_jogged_position_cb_t get_pos_cb;
     execute_probe_cb_t exec_probe_cb;
@@ -141,6 +181,9 @@ typedef struct {
 
     char result_label_x_text[32];
     char result_label_y_text[32];
+    char result_dim_w_text[16];
+    char result_dim_h_text[16];
+    char result_rad_text[16];
     bool machine_connected;
 
     // --- Deferred Update members for thread safety ---
@@ -507,12 +550,73 @@ lv_obj_t * lv_probing_wizard_create(lv_obj_t * parent) {
     lv_timer_set_repeat_count(wiz->deferred_update_timer, 1);   // Make it run only once per resume
     lv_timer_pause(wiz->deferred_update_timer);                 // Start in a paused state
 
+    // Turn off default init for now.
+    //wiz->mode = LV_PROBING_WIZARD_MODE_RECTANGLE;
+    //wiz->is_inside = false;
+    //lv_probing_wizard_set_mode(main_container, wiz->mode, wiz->is_inside);
+    
+    update_last_result_display(wiz);
 
+    // --- DEBUG ---
+    // Uncomment one of these defines to start the wizard in a "completed" state for UI testing.
+    #define WIZARD_DEBUG_RECTANGLE
+    // #define WIZARD_DEBUG_CIRCLE
+    // #define WIZARD_DEBUG_CORNER
+
+#if defined(WIZARD_DEBUG_RECTANGLE)
+    LOGW(TAG, "WIZARD DEBUG: Simulating RECTANGLE probe completion.");
+    // 1. Set initial mode so the correct routine size is known.
+    wiz->mode = LV_PROBING_WIZARD_MODE_RECTANGLE;
+    wiz->is_inside = false;
+    wiz->z_top = -1.25; // Simulate Z having been probed.
+    wiz->z_top_is_set = true;
+    wiz->result_valid = true;
+    wiz->result_details.dimensions.x = 50.0;
+    wiz->result_details.dimensions.y = 100.0;
+
+    // 2. Report the results exactly as the machine handler would.
+    lv_probing_wizard_details_t details = { .dimensions = {49.8, 75.1} };
+    lv_probing_wizard_report_details(main_container, &details);
+    lv_probing_wizard_report_final_result(main_container, 100.55, 75.12);
+
+    // 3. Trigger the deferred step change to the final "complete" step.
+    uint8_t final_step = probe_routine_sizes[wiz->mode] - 1;
+    lv_probing_wizard_set_active_step_deferred(main_container, final_step);
+    update_ui_state(main_container);
+
+#elif defined(WIZARD_DEBUG_CIRCLE)
+    LOGW(TAG, "WIZARD DEBUG: Simulating CIRCLE probe completion.");
+    wiz->mode = LV_PROBING_WIZARD_MODE_CIRCLE;
+    wiz->is_inside = true;
+    wiz->z_top = -0.78;
+    wiz->z_top_is_set = true;
+    wiz->result_valid = true;
+    lv_probing_wizard_details_t details = { .radius = 25.1 };
+    lv_probing_wizard_report_details(main_container, &details);
+    lv_probing_wizard_report_final_result(main_container, 50.2, 48.9);
+    uint8_t final_step = probe_routine_sizes[wiz->mode] - 1;
+    lv_probing_wizard_set_active_step_deferred(main_container, final_step);
+
+#elif defined(WIZARD_DEBUG_CORNER)
+    LOGW(TAG, "WIZARD DEBUG: Simulating CORNER probe completion.");
+    wiz->mode = LV_PROBING_WIZARD_MODE_CORNER;
+    wiz->is_inside = false;
+    wiz->z_top = -3.45;
+    wiz->z_top_is_set = true;
+    wiz->corner_type = LV_PROBING_CORNER_FRONT_LEFT;
+    wiz->result_valid = true;
+    // Corner has no details to report.
+    lv_probing_wizard_report_final_result(main_container, 10.0, 12.5);
+    uint8_t final_step = probe_routine_sizes[wiz->mode] - 1;
+    lv_probing_wizard_set_active_step_deferred(main_container, final_step);
+
+#else
+    // If no debug mode is set, initialize normally.
+    update_last_result_display(wiz); // Update with empty/persisted last result
     wiz->mode = LV_PROBING_WIZARD_MODE_RECTANGLE;
     wiz->is_inside = false;
     lv_probing_wizard_set_mode(main_container, wiz->mode, wiz->is_inside);
-    
-    update_last_result_display(wiz);
+#endif
 
     return main_container;
 }
@@ -527,6 +631,13 @@ static void reset_and_start_routine(lv_obj_t * obj) {
     for (int i = 0; i < MAX_PROBE_POINTS; i++) wiz->probe_results[i].is_set = false;
     
     wiz->result_valid = false;
+    wiz->result_details.dimensions.x = NAN;
+    wiz->result_details.dimensions.y = NAN;
+    wiz->result_details.radius = NAN;
+    wiz->result_details.rotation = NAN;
+    wiz->result_dim_w_text[0] = '\0';
+    wiz->result_dim_h_text[0] = '\0';
+    wiz->result_rad_text[0] = '\0';
     wiz->z_top_is_set = false;
     wiz->active_step = -1; // Will be advanced to 0 by set_active_step
     wiz->wizard_state = WIZARD_STATE_CONFIG;
@@ -607,6 +718,14 @@ void lv_probing_wizard_report_final_result(lv_obj_t * obj, float x, float y) {
     wiz->result.y = y;
     wiz->result_valid = true;
     LOGV(TAG, "Final result reported: X=%.3f, Y=%.3f", x, y);
+}
+
+void lv_probing_wizard_report_details(lv_obj_t * obj, const lv_probing_wizard_details_t * details) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz || !details) return;
+    wiz->result_details = *details;
+    LOGV(TAG, "Probe details reported: Dims(%.2f, %.2f), Rad(%.2f), Rot(%.2f)",
+         details->dimensions.x, details->dimensions.y, details->radius, details->rotation);
 }
 
 
@@ -781,7 +900,7 @@ static void update_setup_points_display(lv_probing_wizard_t * wiz) {
 }
 
 /**
- * @brief Performs the actual UI update based on the current wizard state.
+* @brief Performs the actual UI update based on the current wizard state.
  * This should only be called from the LVGL task context.
  */
 static void deferred_update_ui(lv_obj_t* obj) {
@@ -791,34 +910,40 @@ static void deferred_update_ui(lv_obj_t* obj) {
     LOGV(TAG, "Updating UI for step %d: '%s'", wiz->active_step, wiz->current_action->instruction_text);
 
     lv_label_set_text(wiz->instruction_label, wiz->current_action->instruction_text);
-
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
-
-    snprintf(wiz->result_label_x_text, sizeof(wiz->result_label_x_text), "X:   - - -");
-    snprintf(wiz->result_label_y_text, sizeof(wiz->result_label_y_text), "Y:   - - -");
-    lv_label_set_text(wiz->result_label_x, wiz->result_label_x_text);
-    lv_label_set_text(wiz->result_label_y, wiz->result_label_y_text);
-    lv_label_set_text(wiz->result_label_z, "Z:   - - -");
-
-    update_setup_points_display(wiz);
-    update_ui_state(obj); // Update general UI visibility based on the new step's state
 
     switch (wiz->current_action->type) {
         case ACTION_AWAIT_START:
             wiz->wizard_state = WIZARD_STATE_CONFIG;
-            update_ui_state(obj);
             break;
-        case ACTION_JOG_AND_CONFIRM:
-        case ACTION_MESSAGE:
-            // User must jog then press Next
+        case ACTION_COMPLETE:
+            LOGV(TAG, "Reached COMPLETE step. Changing state to COMPLETE.");
+            wiz->wizard_state = WIZARD_STATE_COMPLETE;
             break;
+        default:
+            wiz->wizard_state = WIZARD_STATE_PROBING;
+            break;
+    }
+    
+    update_setup_points_display(wiz);
+    update_ui_state(obj);
+
+    // Handle step-specific interactions and commands.
+    switch (wiz->current_action->type) {
+        case ACTION_AWAIT_START:
+            // Clear result labels for the initial config screen
+            lv_label_set_text(wiz->result_label_x, "X:   - - -");
+            lv_label_set_text(wiz->result_label_y, "Y:   - - -");
+            lv_label_set_text(wiz->result_label_z, "Z:   - - -");
+            break;
+
         case ACTION_SELECT_CORNER:
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED); // Must click canvas
             lv_obj_add_event_cb(wiz->canvas, canvas_click_event_cb, LV_EVENT_CLICKED, obj);
             break;
+        
         case ACTION_PROBE_POINT:
         case ACTION_PROBE_Z_TOP:
-            // update_ui_state will already have disabled the button
             if (wiz->exec_probe_cb) {
                 LOGV(TAG, "Executing probe callback for action type %d", wiz->current_action->type);
                 wiz->exec_probe_cb(obj, wiz->current_action);
@@ -826,10 +951,8 @@ static void deferred_update_ui(lv_obj_t* obj) {
                 LOGW(TAG, "Probe callback is NULL, cannot proceed.");
             }
             break;
+        
         case ACTION_COMPLETE:
-            LOGV(TAG, "Reached COMPLETE step. Changing state to COMPLETE.");
-            wiz->wizard_state = WIZARD_STATE_COMPLETE;
-            update_ui_state(obj);
             update_progress_panel(wiz);
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
             if (wiz->result_valid) {
@@ -843,6 +966,9 @@ static void deferred_update_ui(lv_obj_t* obj) {
                     lv_label_set_text(wiz->result_label_z, z_buf);
                 }
             }
+            break;
+        
+        default:
             break;
     }
 }
@@ -1112,17 +1238,25 @@ static void draw_event_cb(lv_event_t * e) {
 }
 
 static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_area_t * draw_area) {
+    LOGD(TAG, "--- Start draw_rectangle_probe ---");
+    if (!wiz) {
+        LOGE(TAG, "wiz is NULL!");
+        return;
+    }
+
     lv_color_t color_active = lv_theme_get_color_primary(wiz->canvas);
     lv_color_t color_done = lv_color_hex(0x888888);
     lv_color_t color_pending = lv_color_white();
     lv_color_t color_result = lv_color_hex(0x007AFF);
     uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_NONE;
+    LOGD(TAG, "Highlight mask: 0x%X", mask);
 
     lv_area_t square_area;
     lv_coord_t side = LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area));
     lv_area_set_width(&square_area, side);
     lv_area_set_height(&square_area, side);
     lv_area_align(draw_area, &square_area, LV_ALIGN_CENTER, 0, 0);
+    LOGD(TAG, "Square area: (%d, %d) -> (%d, %d)", square_area.x1, square_area.y1, square_area.x2, square_area.y2);
 
     lv_draw_rect_dsc_t rect_dsc;
     lv_draw_rect_dsc_init(&rect_dsc);
@@ -1134,6 +1268,7 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
 
     if (wiz->result_valid || (mask & HIGHLIGHT_CENTER)) {
          lv_point_t center = {(square_area.x1 + square_area.x2) / 2, (square_area.y1 + square_area.y2) / 2};
+         LOGD(TAG, "Drawing center crosshair at (%d, %d)", center.x, center.y);
          draw_result_crosshair(layer, center, wiz->result_valid ? color_result : color_active);
     }
     
@@ -1168,6 +1303,58 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
     };
     uint32_t highlight_flags[] = {HIGHLIGHT_PROBE_POINT_0, HIGHLIGHT_PROBE_POINT_1, HIGHLIGHT_PROBE_POINT_2, HIGHLIGHT_PROBE_POINT_3};
 
+    LOGD(TAG, "Checking condition to draw dimensions: result_valid=%d, dimensions.x=%.2f", wiz->result_valid, wiz->result_details.dimensions.x);
+    if (wiz->result_valid && !isnan(wiz->result_details.dimensions.x)) {
+        LOGD(TAG, "Condition MET. Drawing dimensions.");
+        lv_draw_label_dsc_t label_dsc;
+        lv_draw_label_dsc_init(&label_dsc);
+        label_dsc.color = color_result;
+        label_dsc.font = lv_theme_get_font_small(wiz->canvas);
+        if (!label_dsc.font) {
+            LOGE(TAG, "FATAL: Font is NULL, cannot draw labels!");
+            return;
+        }
+        LOGD(TAG, "Font pointer is valid: %p", label_dsc.font);
+        lv_point_t txt_size;
+
+        lv_text_attributes_t attr = {
+            .letter_space = 8,
+            .line_space = 14,
+            .max_width = 40,
+            .text_flags = LV_TEXT_FLAG_NONE
+        };
+
+        // Draw width
+        snprintf(wiz->result_dim_w_text, sizeof(wiz->result_dim_w_text), "%.1f", wiz->result_details.dimensions.x);
+        LOGD(TAG, "Width text buffer: '%s'", wiz->result_dim_w_text);
+        lv_text_get_size(&txt_size, wiz->result_dim_w_text, label_dsc.font, &attr);
+        LOGD(TAG, "Width text size: %d x %d", txt_size.x, txt_size.y);
+        lv_area_t width_area = {
+            .x1 = (square_area.x1 + square_area.x2) / 2 - txt_size.x / 2,
+            .y1 = square_area.y2 + 5,
+            .x2 = (square_area.x1 + square_area.x2) / 2 + txt_size.x / 2,
+            .y2 = square_area.y2 + 5 + txt_size.y
+        };
+        LOGD(TAG, "Width draw area: (%d, %d) -> (%d, %d)", width_area.x1, width_area.y1, width_area.x2, width_area.y2);
+        label_dsc.text = wiz->result_dim_w_text;
+        lv_draw_label(layer, &label_dsc, &width_area);
+
+        // Draw height
+        snprintf(wiz->result_dim_h_text, sizeof(wiz->result_dim_h_text), "%.1f", wiz->result_details.dimensions.y);
+        LOGD(TAG, "Height text buffer: '%s'", wiz->result_dim_h_text);
+        lv_text_get_size(&txt_size, wiz->result_dim_h_text, label_dsc.font, &attr);
+        LOGD(TAG, "Height text size: %d x %d", txt_size.x, txt_size.y);
+        lv_area_t height_area = {
+            .x1 = square_area.x1 - txt_size.x - 5,
+            .y1 = (square_area.y1 + square_area.y2) / 2 - txt_size.y / 2,
+            .x2 = square_area.x1 - 5,
+            .y2 = (square_area.y1 + square_area.y2) / 2 + txt_size.y / 2,
+        };
+        LOGD(TAG, "Height draw area: (%d, %d) -> (%d, %d)", height_area.x1, height_area.y1, height_area.x2, height_area.y2);
+        label_dsc.text = wiz->result_dim_h_text;
+        lv_draw_label(layer, &label_dsc, &height_area);
+    }
+
     for(int i=0; i < 4; i++) {
         lv_color_t current_color = wiz->result_valid ? color_done : ((mask & highlight_flags[i]) ? color_active : color_pending);
         line_dsc.color = current_color;
@@ -1179,7 +1366,7 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
         rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.radius = LV_RADIUS_CIRCLE;
         rect_dsc.border_width = 0;
-        lv_area_t point_area = {points[i].x - 4, points[i].y - 4, points[i].x + 4, points[i].y + 4};
+        lv_area_t point_area = {points[i].x - 7, points[i].y - 7, points[i].x + 7, points[i].y + 7};
         lv_draw_rect(layer, &rect_dsc, &point_area);
     }
 }
@@ -1201,6 +1388,27 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
     arc_dsc.radius = radius;
     arc_dsc.start_angle = 0; arc_dsc.end_angle = 360;
     lv_draw_arc(layer, &arc_dsc);
+
+    if (wiz->result_valid && !isnan(wiz->result_details.radius)) {
+        lv_draw_label_dsc_t label_dsc;
+        lv_draw_label_dsc_init(&label_dsc);
+        label_dsc.color = color_result;
+        label_dsc.font = lv_theme_get_font_small(wiz->canvas);
+        
+        snprintf(wiz->result_rad_text, sizeof(wiz->result_rad_text), "R %.1f", wiz->result_details.radius);
+        lv_point_t txt_size;
+        lv_text_get_size(&txt_size, wiz->result_rad_text, label_dsc.font, NULL);
+
+        // Position it at 45 degrees outside the circle
+        float angle = -45.0f * (M_PI / 180.0f);
+        lv_area_t label_area;
+        label_area.x1 = center.x + (radius + 5) * cosf(angle);
+        label_area.y1 = center.y + (radius + 5) * sinf(angle) - txt_size.y / 2;
+        label_area.x2 = label_area.x1 + txt_size.x;
+        label_area.y2 = label_area.y1 + txt_size.y;
+        label_dsc.text = wiz->result_rad_text;
+        lv_draw_label(layer, &label_dsc, &label_area);
+    }
 
     if (wiz->result_valid || (mask & HIGHLIGHT_CENTER)) {
          draw_result_crosshair(layer, center, wiz->result_valid ? color_result : color_active);

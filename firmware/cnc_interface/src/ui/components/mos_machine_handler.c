@@ -1,6 +1,58 @@
 #define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 
+/**
+ * @file mos_machine_handler.c
+ * @brief Implements the machine-specific logic for MillenniumOS.
+ *
+ * This file acts as the "glue" layer between the generic Probing Wizard UI and a
+ * machine running RepRapFirmware with the MillenniumOS probing macros. It handles
+ * the two-way, asynchronous communication required for probing operations.
+ *
+ * Interaction Flow:
+ *
+ * The key challenge is that machine operations are not instant. When the UI needs
+ * to run a probe, it cannot simply block and wait. This handler implements the
+ * necessary state management to handle this asynchronous flow.
+ *
+ *           Probing Wizard (UI Task)          |      MOS Machine Handler (Callback Context)
+ *   ============================================================================================
+ *   1. User clicks "Next" to start a probe.   |
+ *      Wizard calls `exec_probe_cb` which is  |
+ *      mapped to `mos_execute_probe()`.       |
+ *                                             |
+ *   2. `lv_probing_wizard_...`                |  `mos_execute_probe()`
+ *      -------------------------------------> |  - Builds G-Code string (e.g., M98 P"G6503.1.g")
+ *                                             |  - Sends G-Code to machine.
+ *                                             |  - Sets internal state to PROBE_STATE_PENDING_*.
+ *                                             |  - Returns immediately.
+ *                                             |
+ *   3. UI remains responsive.                 |  (Machine is now running the probe macro)
+ *                                             |
+ *                                             |  (Time passes...)
+ *                                             |
+ *   4. (Machine Interface Task)               |  `_mos_log_message_cb()`
+ *      Receives log messages from machine.    |  <-------------------------------------------------
+ *      Invokes this handler's callback.       |  - Parses log messages for results (e.g., "global.mosWPCtrPos[0]={...}")
+ *                                             |  - Stores parsed values in `handler_state`.
+ *                                             |
+ *   5.                                        |  - Sees completion message ("MillenniumOS: ...")
+ *                                             |  - Sets internal state back to PROBE_STATE_IDLE.
+ *                                             |  - Calls back to the wizard using deferred functions.
+ *                                             |
+ *   6. `lv_probing_wizard_*_deferred()`       |  `lv_probing_wizard_report_final_result_deferred()`
+ *      <------------------------------------- |
+ *      - This sets a flag and schedules a     |
+ *        one-shot LVGL timer.                 |
+ *                                             |
+ *   7. (LVGL Task, a few ms later)            |
+ *      The deferred timer callback fires,     |
+ *      safely updating the UI with the        |
+ *      results and advancing to the           |
+ *      "Complete" screen.                     |
+ *
+ */
+
 #include "mos_machine_handler.h"
 #include "lv_probing_wizard.h"
 #include <stdio.h>
@@ -32,11 +84,38 @@ static const char * TAG = "mos_machine_handler";
 extern const uint8_t probe_routine_sizes[];
 
 /**
- * @brief Represents the current state of an asynchronous probing operation.
+ * @brief Represents the current state of an asynchronous probing operation from the handler's perspective.
+ *
+ * This is a simple state machine to track whether the handler has sent a command
+ * to the machine and is currently awaiting a result. It prevents new probe commands
+ * from being sent while one is already in progress.
+ *
+ * State Machine Flow:
+ *
+ *  .--------------------------------------------------------------------.
+ *  | [ PROBE_STATE_IDLE ]                                               |
+ *  | - The handler is not waiting for any probe to complete.            |
+ *  | - It is safe to accept new commands from the wizard.               |
+ *  '--------------------------------------------------------------------'
+ *      |
+ *      | `mos_execute_probe()` is called by the wizard.
+ *      | A probe command (M98 P"...") is sent to the machine.
+ *      V
+ *  .--------------------------------------------------------------------.
+ *  | [ PROBE_STATE_PENDING_*_COMPLETE ]                                 |
+ *  | - The handler is actively listening for log messages from the      |
+ *  |   machine to parse results.                                        |
+ *  | - It will ignore any new probe commands from the wizard.           |
+ *  '--------------------------------------------------------------------'
+ *      |
+ *      | `_mos_log_message_cb()` receives the "MillenniumOS: ..." completion message.
+ *      V
+ *    (Back to IDLE)
+ *
  */
 typedef enum {
-    PROBE_STATE_IDLE,                 // Not currently probing
-    PROBE_STATE_PENDING_Z_COMPLETE,   // Waiting for a Z-probe macro to finish
+    PROBE_STATE_IDLE,                 /**< Not currently probing. */
+    PROBE_STATE_PENDING_Z_COMPLETE,   /**< Waiting for a Z-probe macro to finish. */
     PROBE_STATE_PENDING_XY_COMPLETE,  // Waiting for a complex XY-probe macro to finish
 } probe_fsm_state_t;
 
@@ -53,6 +132,9 @@ static struct {
     
     // Storage for results parsed from log messages
     lv_probing_wizard_point_float_t parsed_result;
+    lv_probing_wizard_point_float_t parsed_dims;
+    float parsed_radius;
+    float parsed_rotation;
     float parsed_z_result;
     char last_parsed_axis[MAX_PROBE_RESULTS];
     uint8_t probe_axes_reported_mask; // Bitmask: 1=X, 2=Y, 4=Z
@@ -108,8 +190,10 @@ static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void) {
     }
     // The machine interface stores the current position in WCS coordinates.
     return (lv_probing_wizard_point_float_t){
-        .x = handler_state.machine->wcs_position[0],
-        .y = handler_state.machine->wcs_position[1]
+        //.x = handler_state.machine->wcs_position[0],
+        //.y = handler_state.machine->wcs_position[1]
+        .x = handler_state.machine->position[0],
+        .y = handler_state.machine->position[1]
     };
 }
 
@@ -132,6 +216,9 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
 
     // Reset probe result state for the new operation
     handler_state.parsed_result = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
+    handler_state.parsed_dims = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
+    handler_state.parsed_radius = NAN;
+    handler_state.parsed_rotation = NAN;
     handler_state.parsed_z_result = NAN;
     handler_state.probe_was_running = false;
     handler_state.probe_axes_reported_mask = 0;
@@ -277,28 +364,44 @@ static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
     const char* resp_str = message;
     int index;
     char axis;
-    float pos;
-    
-    // Attempt to parse global.mosWPSfcAxis[i]=A
-    if (sscanf(resp_str, "global.mosWPSfcAxis[%d]=%c", &index, &axis) == 2) {
+    float f1, f2;
+
+    // Use strstr to quickly find the key, then sscanf the rest of the string.
+    const char *p;
+    if ((p = strstr(resp_str, "global.mosWPCtrPos[")) != NULL) {
+        if (sscanf(p, "global.mosWPCtrPos[%*d]={%f,%f}", &f1, &f2) == 2) {
+            handler_state.parsed_result.x = f1;
+            handler_state.parsed_result.y = f2;
+            handler_state.probe_axes_reported_mask |= 3; // Bits 0 and 1 for X and Y
+            LOGI(TAG, "Parsed center pos: X=%.4f, Y=%.4f", f1, f2);
+        }
+    } else if ((p = strstr(resp_str, "global.mosWPDims[")) != NULL) {
+        if (sscanf(p, "global.mosWPDims[%*d]={%f,%f}", &f1, &f2) == 2) {
+            handler_state.parsed_dims.x = f1;
+            handler_state.parsed_dims.y = f2;
+            LOGI(TAG, "Parsed dims: W=%.4f, H=%.4f", f1, f2);
+        }
+    } else if ((p = strstr(resp_str, "global.mosWPRad[")) != NULL) {
+        if (sscanf(p, "global.mosWPRad[%*d]=%f", &f1) == 1) {
+            handler_state.parsed_radius = f1;
+            LOGI(TAG, "Parsed radius: R=%.4f", f1);
+        }
+    } else if ((p = strstr(resp_str, "global.mosWPDeg[")) != NULL) {
+        if (sscanf(p, "global.mosWPDeg[%*d]=%f", &f1) == 1) {
+            handler_state.parsed_rotation = f1;
+            LOGI(TAG, "Parsed rotation: %.4f deg", f1);
+        }
+    } else if (sscanf(resp_str, "global.mosWPSfcAxis[%d]=%c", &index, &axis) == 2) {
         if (index < MAX_PROBE_RESULTS) {
             handler_state.last_parsed_axis[index] = axis;
             LOGI(TAG, "Parsed probed axis index %d: %c", index, axis);
         }
-    } 
-    // Attempt to parse global.mosWPSfcPos[i]=12.345
-    else if (sscanf(resp_str, "global.mosWPSfcPos[%d]=%f", &index, &pos) == 2) {
+    } else if (sscanf(resp_str, "global.mosWPSfcPos[%d]=%f", &index, &f1) == 2) {
         if (index < MAX_PROBE_RESULTS) {
             char reported_axis = handler_state.last_parsed_axis[index];
-            LOGI(TAG, "Parsed probed position index %d for axis %c: %f", index, reported_axis, pos);
-            if (reported_axis == 'X') {
-                handler_state.parsed_result.x = pos;
-                handler_state.probe_axes_reported_mask |= 1;
-            } else if (reported_axis == 'Y') {
-                handler_state.parsed_result.y = pos;
-                handler_state.probe_axes_reported_mask |= 2;
-            } else if (reported_axis == 'Z') {
-                handler_state.parsed_z_result = pos;
+            LOGI(TAG, "Parsed probed position index %d for axis %c: %f", index, reported_axis, f1);
+            if (reported_axis == 'Z') {
+                handler_state.parsed_z_result = f1;
                 handler_state.probe_axes_reported_mask |= 4;
             }
         }
@@ -329,6 +432,15 @@ static void _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
                 LOGW(TAG, "XY Probe macro finished but results were not fully parsed (mask: %d).", handler_state.probe_axes_reported_mask);
             }
             
+            // Report detailed results before advancing UI
+            lv_probing_wizard_details_t details = {
+                .dimensions = handler_state.parsed_dims,
+                .radius = handler_state.parsed_radius,
+                .rotation = handler_state.parsed_rotation,
+            };
+            lv_probing_wizard_report_details(handler_state.wizard_obj, &details);
+            
+            // Report final center point and advance UI to final step
             uint8_t num_steps = probe_routine_sizes[lv_probing_wizard_get_mode(handler_state.wizard_obj)];
             lv_probing_wizard_report_final_result(handler_state.wizard_obj, res_x, res_y);
             lv_probing_wizard_set_active_step_deferred(handler_state.wizard_obj, num_steps - 1);

@@ -101,20 +101,29 @@ static void _send_command(machine_interface_remote_t *self, const uint8_t *data,
 static void _machine_interface_remote_send_gcode(machine_interface_t *self,
                                                  const char *gcode,
                                                  uint32_t poll_state) {
-  // + sizeof(uint32_t)  // Include space for poll_state // removed.
-  size_t len =
-      sizeof(send_gcode_cmd_t) + strlen(gcode) + 1;  // +1 for null terminator
-  send_gcode_cmd_t *cmd = (send_gcode_cmd_t *)malloc(len);
-  if (!cmd) {
-    LOGE(TAG, "Failed to allocate");
-    return;
+  // Use stack buffer to avoid malloc overhead
+  #ifndef MAX_GCODE_STR_LEN
+  #define MAX_GCODE_STR_LEN 256
+  #endif
+  
+  uint8_t buf[sizeof(send_gcode_cmd_t) + MAX_GCODE_STR_LEN];
+  send_gcode_cmd_t *cmd = (send_gcode_cmd_t *)buf;
+  
+  size_t gcode_len = strlen(gcode);
+  if (gcode_len >= MAX_GCODE_STR_LEN) {
+      LOGW(TAG, "GCode too long, truncating");
+      gcode_len = MAX_GCODE_STR_LEN - 1;
   }
+  
+  size_t len = sizeof(send_gcode_cmd_t) + gcode_len + 1;
+
   cmd->type = CMD_TYPE_SEND_GCODE;
-  cmd->len = strlen(gcode);
-  strcpy(cmd->gcode, gcode);  // Copy the G-code string
-  LOGI(TAG, "Sending '%s'", gcode);
+  cmd->len = gcode_len;
+  memcpy(cmd->gcode, gcode, gcode_len);
+  cmd->gcode[gcode_len] = '\0';
+  
+  LOGI(TAG, "Sending '%s'", cmd->gcode);
   _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
-  free(cmd);
 }
 
 static bool _machine_interface_remote_is_connected(machine_interface_t *self) {

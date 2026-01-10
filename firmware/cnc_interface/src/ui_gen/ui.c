@@ -562,7 +562,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_ext_click_area(button_58, 30);
     data_binding_add_observer("motion.homed.z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)indicator_light_green_21 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)indicator_light_red_20 } } }, 2, NULL);
     data_binding_add_observer("motion.jog.axis_is_z", button_58, 1, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .p_val = (void*)background_purple_27 } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .p_val = (void*)background_none_28 } } }, 2, NULL);
-    data_binding_add_action(button_58, "action.motion.jog.axis_select_x", 0, NULL, 0, NULL);
+    data_binding_add_action(button_58, "action.motion.jog.axis_select_z", 0, NULL, 0, NULL);
     // unnamed: label_59 (label)
     lv_obj_t* label_59 = lv_label_create(button_58);
 

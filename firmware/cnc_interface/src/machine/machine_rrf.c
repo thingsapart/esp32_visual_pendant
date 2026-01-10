@@ -348,23 +348,22 @@ static void _dwc_proc_state_resp_impl(machine_interface_t *self, void *data,
 // --- Transport-Specific Implementations: Serial ---
 
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
-  char *gcode_copy = strdup(gcode);
-  if (!gcode_copy) {
-    LOGE(TAG, "Serial: Failed to allocate memory for G-code copy");
-    return;
-  }
+  const char *start = gcode;
+  const char *end;
 
-  char *saveptr;
-  char *line = strtok_r(gcode_copy, "\n", &saveptr);
-  while (line != NULL) {
-    serial_write(self->transport_state.serial.uart, (const uint8_t *)line,
-                 strlen(line));
+  // Iterate string to find newlines without allocating a copy
+  while (*start) {
+    end = strchr(start, '\n');
+    size_t len = end ? (size_t)(end - start) : strlen(start);
+
+    if (len > 0) {
+      serial_write(self->transport_state.serial.uart, (const uint8_t *)start, len);
+    }
     serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
-    // LOGI(TAG, "Sending: %s", line);
-    line = strtok_r(NULL, "\n", &saveptr);
-  }
 
-  free(gcode_copy);
+    if (!end) break;
+    start = end + 1;
+  }
 }
 
 static bool _serial_parse_json_response(machine_rrf_t *self,
