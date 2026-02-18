@@ -111,6 +111,18 @@ static void tileview_event_handler(lv_event_t * e) {
     }
 }
 
+/**
+ * @brief Event handler for the disconnected overlay - dismiss on long-press.
+ * Allows testing UI without connection by bypassing the connection screen.
+ */
+static void disconnected_overlay_event_handler(lv_event_t * e) {
+    lv_obj_t * overlay = lv_event_get_target(e);
+    if (overlay && !lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN)) {
+        LOGI(TAG, "Disconnected overlay dismissed by long-press");
+        lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 // --- Public API ---
 
 void interface_init(interface_t *interface, machine_interface_t *machine) {
@@ -153,6 +165,12 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   lv_obj_t* tileview = obj_registry_get("main_tileview");
   if (tileview) {
       lv_obj_add_event_cb(tileview, tileview_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+  }
+
+  // Find the disconnected overlay and attach long-press handler to bypass connection screen
+  lv_obj_t* disconnected_overlay = obj_registry_get("disconnected_overlay");
+  if (disconnected_overlay) {
+      lv_obj_add_event_cb(disconnected_overlay, disconnected_overlay_event_handler, LV_EVENT_LONG_PRESSED, NULL);
   }
 
 #ifdef DWC_MACHINE_MODE
