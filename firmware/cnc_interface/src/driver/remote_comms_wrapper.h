@@ -16,6 +16,12 @@
 
 #define REMOTE_COMMS_DATA_MAX (ESP_NOW_MAX_DATA_LEN - 1)
 
+#elif defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_BRIDGE)
+
+/* Bridge payload limit mirrors the ESP-NOW limit enforced by the C6.        */
+/* BRIDGE_MAX_PAYLOAD (250) - 1 byte reserved for the message type prefix.   */
+#define REMOTE_COMMS_DATA_MAX (249)
+
 #else
 
 #define REMOTE_COMMS_DATA_MAX (251)

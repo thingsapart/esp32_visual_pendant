@@ -1,7 +1,13 @@
 #include "mdns_wrapper.h"
 
-#ifdef DWC_MACHINE_MODE
+// Provide a portable mdns wrapper: when DWC_MACHINE_MODE is enabled we use
+// the real MDNS implementation; otherwise provide lightweight stubs so
+// callers (e.g. `wifi_manager`) can link cleanly in builds that don't
+// enable the DWC-specific MDNS code path.
 
+#include "mdns_wrapper.h"
+
+#if defined(DWC_MACHINE_MODE)
 #include <Arduino.h>
 #include <MDNS.h>
 #include <WiFi.h>
@@ -15,10 +21,6 @@ static bool resolution_done = false;
 static IPAddress resolved_ip_address;
 static const char* volatile target_hostname = NULL;
 
-/**
- * @brief Callback function for the MDNS library.
- * This is called when a name is resolved or the query times out.
- */
 static void nameFoundCallback(const char* name, IPAddress ip) {
   if (target_hostname && strcmp(name, target_hostname) == 0) {
     resolved_ip_address = ip;
@@ -26,15 +28,9 @@ static void nameFoundCallback(const char* name, IPAddress ip) {
   }
 }
 
-// --- Public C API Functions ---
-
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 void mdns_wrapper_init() {
-  // The MDNS object is constructed with a UDP instance.
-  // We need to begin it once WiFi is connected.
   if (WiFi.status() == WL_CONNECTED) {
     mdns.begin(WiFi.localIP(), "cnc-pendant");
     mdns.setNameResolvedCallback(nameFoundCallback);
@@ -42,44 +38,50 @@ void mdns_wrapper_init() {
 }
 
 bool mdns_wrapper_query_host(const char* host, uint32_t* ip_addr_out) {
-  if (!host || !ip_addr_out) {
-    return false;
-  }
-
-  // Set up the state for the async query
+  if (!host || !ip_addr_out) return false;
   target_hostname = host;
   resolution_done = false;
   resolved_ip_address = INADDR_NONE;
-
-  // Start the resolution. The result will be delivered to nameFoundCallback.
-  // The timeout parameter here is for the MDNS library's internal query
-  // process.
   mdns.resolveName(host, 5000);
-
-  return true;  // Indicates that the query has started
+  return true;
 }
 
 mdns_query_status_t mdns_wrapper_run(uint32_t* ip_addr_out) {
   mdns.run();
-
   if (resolution_done) {
     if (resolved_ip_address != INADDR_NONE) {
       *ip_addr_out = (uint32_t)resolved_ip_address;
-      target_hostname = NULL;  // Clear for next query
+      target_hostname = NULL;
       return MDNS_QUERY_SUCCESS;
-    } else {
-      *ip_addr_out = 0;
-      target_hostname = NULL;  // Clear for next query
-      return MDNS_QUERY_FAIL;
     }
+    *ip_addr_out = 0;
+    target_hostname = NULL;
+    return MDNS_QUERY_FAIL;
   }
-
   return MDNS_QUERY_PENDING;
 }
 
-#ifdef __cplusplus
+} // extern "C"
+
+#else
+
+// Stubs when DWC_MACHINE_MODE is not set — fast no-op implementations that
+// keep behaviour predictable for callers.
+
+extern "C" {
+
+void mdns_wrapper_init() {
+  // No-op
 }
 
-#endif  // __cplusplus
+bool mdns_wrapper_query_host(const char* host, uint32_t* ip_addr_out) {
+  (void)host; (void)ip_addr_out; return false;
+}
 
-#endif  // DWC_MACHINE_MODE
+mdns_query_status_t mdns_wrapper_run(uint32_t* ip_addr_out) {
+  (void)ip_addr_out; return MDNS_QUERY_FAIL;
+}
+
+} // extern "C"
+
+#endif

@@ -329,6 +329,409 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info,
   }
 }
 
+#elif defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_BRIDGE)
+
+// =============================================================================
+// ESP32-P4 + ESP32-C6 bridge implementation
+//
+// The C6 sidecar chip runs the companion firmware from c6_espnow_bridge/ and
+// communicates with the P4 over a dedicated UART using a simple binary framing
+// protocol (bridge_protocol.h).  From the app's perspective the API is
+// identical to the native ESP-NOW path above.
+// =============================================================================
+
+#include <string.h>
+#include "driver/uart.h"
+#include "debug.h"
+
+static const char *TAG = "remote_comms_wrapper";
+
+// ---- Bridge protocol constants (mirrors c6_espnow_bridge/src/bridge_protocol.h) ----
+#define BRIDGE_SOF0           0xAB
+#define BRIDGE_SOF1           0xCD
+#define BRIDGE_DIR_INCOMING   0x01   /**< C6 → P4: payload received from ESP-NOW */
+#define BRIDGE_DIR_OUTGOING   0x02   /**< P4 → C6: payload to send via ESP-NOW   */
+/** Debug / hello frames — valid framing, but not dispatched to recv_cb.     */
+#define BRIDGE_DIR_DEBUG      0x44   /**< 'D': human-readable info frame        */
+#define BRIDGE_PROTOCOL_VERSION 1
+/** Typing this byte while parser is idle triggers a plain-text info dump.   */
+#define BRIDGE_DEBUG_TRIGGER  0x3F   /**< '?'                                   */
+#define BRIDGE_MAC_LEN        6
+#define BRIDGE_MAX_PAYLOAD    250
+#define BRIDGE_FRAME_OVERHEAD 12     /**< SOF(2)+DIR(1)+MAC(6)+LEN(2)+CRC(1)   */
+#define BRIDGE_MAX_FRAME_SIZE (BRIDGE_FRAME_OVERHEAD + BRIDGE_MAX_PAYLOAD)
+
+// ---- UART pin / port defaults (override via platformio build_flags) ----------
+#ifndef C6_BRIDGE_UART_NUM
+#define C6_BRIDGE_UART_NUM  1
+#endif
+#ifndef C6_BRIDGE_UART_TX
+#define C6_BRIDGE_UART_TX   4    /**< P4 GPIO → C6 RX pin */
+#endif
+#ifndef C6_BRIDGE_UART_RX
+#define C6_BRIDGE_UART_RX   5    /**< P4 GPIO ← C6 TX pin */
+#endif
+#ifndef C6_BRIDGE_UART_BAUD
+#define C6_BRIDGE_UART_BAUD 921600
+#endif
+
+#define C6_BRIDGE_RX_BUF_SIZE 2048
+#define C6_BRIDGE_TX_BUF_SIZE 1024
+
+static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+static remote_wrapper_recv_cb_t g_recv_cb   = NULL;
+static remote_wrapper_send_cb_t g_send_cb   = NULL;
+static void                    *g_user_data = NULL;
+static TaskHandle_t             g_rx_task   = NULL;
+
+// ---- CRC8 (plain XOR over MAC + LEN + payload) ------------------------------
+static uint8_t bridge_crc8(const uint8_t *mac, uint16_t len,
+                             const uint8_t *data)
+{
+    uint8_t crc = 0;
+    for (int i = 0; i < BRIDGE_MAC_LEN; i++) crc ^= mac[i];
+    crc ^= (uint8_t)(len & 0xFF);
+    crc ^= (uint8_t)(len >> 8);
+    for (uint16_t i = 0; i < len; i++) crc ^= data[i];
+    return crc;
+}
+
+// ---- Frame encoder ----------------------------------------------------------
+static size_t bridge_encode_frame(uint8_t *out, uint8_t dir,
+                                   const uint8_t *mac,
+                                   const uint8_t *payload, uint16_t len)
+{
+    size_t i = 0;
+    out[i++] = BRIDGE_SOF0;
+    out[i++] = BRIDGE_SOF1;
+    out[i++] = dir;
+    memcpy(&out[i], mac, BRIDGE_MAC_LEN); i += BRIDGE_MAC_LEN;
+    out[i++] = (uint8_t)(len & 0xFF);
+    out[i++] = (uint8_t)(len >> 8);
+    memcpy(&out[i], payload, len); i += len;
+    out[i++] = bridge_crc8(mac, len, payload);
+    return i;
+}
+
+// ---- Debug / hello helpers --------------------------------------------------
+
+/**
+ * Build a human-readable info string into @p buf.  Returns the length.
+ * Kept under BRIDGE_MAX_PAYLOAD bytes so it fits in one debug frame.
+ */
+static size_t bridge_build_hello(char *buf, size_t buf_size)
+{
+    return (size_t)snprintf(buf, buf_size,
+        "\r\n"
+        "=== P4 C6-Bridge Host ===\r\n"
+        "Protocol version : %d\r\n"
+        "Build            : " __DATE__ " " __TIME__ "\r\n"
+        "Bridge UART      : UART%d, TX=GPIO%d, RX=GPIO%d, %d baud\r\n"
+        "Send '?' on bridge wire for this info again\r\n"
+        "=========================",
+        BRIDGE_PROTOCOL_VERSION,
+        C6_BRIDGE_UART_NUM, C6_BRIDGE_UART_TX,
+        C6_BRIDGE_UART_RX, C6_BRIDGE_UART_BAUD);
+}
+
+/**
+ * Send plain-text hello on the bridge UART.  The C6's frame parser discards
+ * non-0xAB bytes while idle, so plain ASCII causes no framing noise.
+ * Used both at startup and in response to a '?' probe from a human.
+ */
+static void bridge_send_hello_plaintext(void)
+{
+    char   buf[BRIDGE_MAX_PAYLOAD];
+    size_t len = bridge_build_hello(buf, sizeof(buf));
+    if (len < sizeof(buf) - 3) {
+        buf[len++] = '\r';
+        buf[len++] = '\n';
+        buf[len]   = '\0';
+    }
+    uart_write_bytes(C6_BRIDGE_UART_NUM, buf, len);
+    LOGI(TAG, "%s", buf);
+}
+
+// ---- Receive task: byte-stream → frame parser → recv_cb --------------------
+typedef enum {
+    RX_SOF0, RX_SOF1, RX_DIR,
+    RX_MAC, RX_LEN_LO, RX_LEN_HI,
+    RX_DATA, RX_CRC,
+} rx_state_t;
+
+static void c6_bridge_rx_task(void *arg)
+{
+    (void)arg;
+    rx_state_t state       = RX_SOF0;
+    uint8_t    dir         = 0;
+    uint8_t    mac[BRIDGE_MAC_LEN];
+    uint8_t    mac_pos     = 0;
+    uint16_t   payload_len = 0;
+    uint16_t   data_pos    = 0;
+    uint8_t    data_buf[BRIDGE_MAX_PAYLOAD];
+
+    uint8_t b;
+    while (true) {
+        if (uart_read_bytes(C6_BRIDGE_UART_NUM, &b, 1,
+                            pdMS_TO_TICKS(20)) <= 0) {
+            continue;
+        }
+
+        switch (state) {
+            case RX_SOF0:
+                if (b == BRIDGE_SOF0) {
+                    state = RX_SOF1;
+                } else if (b == BRIDGE_DEBUG_TRIGGER) {
+                    // '?' typed on the bridge wire by a human — respond with
+                    // plain text.  The C6's parser discards non-0xAB bytes.
+                    bridge_send_hello_plaintext();
+                }
+                // All other bytes while idle are silently discarded.
+                break;
+            case RX_SOF1:
+                state = (b == BRIDGE_SOF1) ? RX_DIR : RX_SOF0;
+                break;
+            case RX_DIR:
+                dir     = b;
+                mac_pos = 0;
+                state   = RX_MAC;
+                break;
+            case RX_MAC:
+                mac[mac_pos++] = b;
+                if (mac_pos == BRIDGE_MAC_LEN) state = RX_LEN_LO;
+                break;
+            case RX_LEN_LO:
+                payload_len = b;
+                state       = RX_LEN_HI;
+                break;
+            case RX_LEN_HI:
+                payload_len |= ((uint16_t)b << 8);
+                if (payload_len == 0 || payload_len > BRIDGE_MAX_PAYLOAD) {
+                    LOGW(TAG, "Bridge RX: bad length %u — resyncing",
+                         payload_len);
+                    state = RX_SOF0;
+                } else {
+                    data_pos = 0;
+                    state    = RX_DATA;
+                }
+                break;
+            case RX_DATA:
+                data_buf[data_pos++] = b;
+                if (data_pos == payload_len) state = RX_CRC;
+                break;
+            case RX_CRC: {
+                uint8_t expected = bridge_crc8(mac, payload_len, data_buf);
+                if (b == expected) {
+                    if (dir == BRIDGE_DIR_INCOMING && g_recv_cb) {
+                        g_recv_cb(mac, data_buf, (int)payload_len,
+                                  g_user_data);
+                    } else if (dir == BRIDGE_DIR_DEBUG) {
+                        // Human-readable hello / info frame from C6.
+                        // Log it and discard — do NOT call recv_cb.
+                        uint16_t safe_len = payload_len < BRIDGE_MAX_PAYLOAD
+                                           ? payload_len
+                                           : BRIDGE_MAX_PAYLOAD - 1;
+                        data_buf[safe_len] = '\0';
+                        LOGI(TAG, "Debug from C6: %s", (char *)data_buf);
+                    }
+                    // DIR values other than INCOMING / DEBUG are silently
+                    // ignored (e.g. a looped-back OUTGOING frame).
+                } else {
+                    LOGW(TAG, "Bridge RX: CRC mismatch (got 0x%02X exp 0x%02X)",
+                         b, expected);
+                }
+                state = RX_SOF0;
+                break;
+            }
+        }
+    }
+}
+
+// ---- Public API -------------------------------------------------------------
+
+bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
+                         remote_wrapper_send_cb_t send_cb, void *user_data)
+{
+    g_recv_cb   = recv_cb;
+    g_send_cb   = send_cb;
+    g_user_data = user_data;
+
+    const uart_config_t cfg = {
+        .baud_rate           = C6_BRIDGE_UART_BAUD,
+        .data_bits           = UART_DATA_8_BITS,
+        .parity              = UART_PARITY_DISABLE,
+        .stop_bits           = UART_STOP_BITS_1,
+        .flow_ctrl           = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk          = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_param_config(C6_BRIDGE_UART_NUM, &cfg));
+    ESP_ERROR_CHECK(uart_set_pin(C6_BRIDGE_UART_NUM,
+                                  C6_BRIDGE_UART_TX, C6_BRIDGE_UART_RX,
+                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(C6_BRIDGE_UART_NUM,
+                                        C6_BRIDGE_RX_BUF_SIZE,
+                                        C6_BRIDGE_TX_BUF_SIZE,
+                                        0, NULL, 0));
+
+    LOGI(TAG, "C6 bridge UART%d: TX=GPIO%d RX=GPIO%d @%d baud",
+         C6_BRIDGE_UART_NUM, C6_BRIDGE_UART_TX,
+         C6_BRIDGE_UART_RX, C6_BRIDGE_UART_BAUD);
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        c6_bridge_rx_task,
+        "c6_bridge_rx",
+        1024 * 4,
+        NULL,
+        tskIDLE_PRIORITY + 2,
+        &g_rx_task,
+        TASK_MACHINE_STATE_PROC_CORE);
+
+    if (ok != pdPASS) {
+        LOGE(TAG, "Failed to start C6 bridge RX task");
+        return false;
+    }
+
+    LOGI(TAG, "C6 ESP-NOW bridge ready");
+
+    // Send plain-text hello on the bridge UART at boot so a human monitoring
+    // the wire-jumped UART on either end can confirm it is correctly configured
+    // and wired.  The C6's frame parser silently discards non-0xAB bytes.
+    bridge_send_hello_plaintext();
+
+    return true;
+}
+
+bool remote_wrapper_add_peer(const uint8_t *mac_addr)
+{
+    // Peer management is handled transparently by the C6 bridge firmware.
+    LOGI(TAG, "add_peer " MACSTR " (delegated to C6)", MAC2STR(mac_addr));
+    return true;
+}
+
+bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
+                                          uint8_t *stored_mac_addr)
+{
+    bool is_uninit = (memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0) ||
+                     (memcmp(stored_mac_addr, broadcast_mac, 6) != 0);
+
+    LOGI(TAG,
+         "RECV hub MAC " MACSTR " == new MAC " MACSTR " => is_unknown %d",
+         MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr), is_uninit);
+
+    if (is_uninit || memcmp(received_mac_addr, stored_mac_addr, 6) == 0) {
+        if (is_uninit) {
+            memcpy(stored_mac_addr, received_mac_addr, 6);
+            LOGI(TAG, "Learned hub MAC: " MACSTR, MAC2STR(stored_mac_addr));
+        }
+        return true;
+    }
+    LOGI(TAG,
+         "Received broadcast from a different hub! Stored: " MACSTR
+         ", Received: " MACSTR,
+         MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr));
+    return false;
+}
+
+bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
+                              size_t len)
+{
+    if (len > BRIDGE_MAX_PAYLOAD) {
+        LOGE(TAG, "send_now: payload %zu > max %d", len, BRIDGE_MAX_PAYLOAD);
+        return false;
+    }
+    uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
+    size_t  frame_len = bridge_encode_frame(frame, BRIDGE_DIR_OUTGOING,
+                                             mac_addr, data, (uint16_t)len);
+    int written = uart_write_bytes(C6_BRIDGE_UART_NUM,
+                                   (const char *)frame, (size_t)frame_len);
+    if (written != (int)frame_len) {
+        LOGE(TAG, "send_now: wrote %d/%zu bytes", written, frame_len);
+        return false;
+    }
+    LOGV(TAG, "send_now: %zu payload bytes → %zu frame bytes", len, frame_len);
+    return true;
+}
+
+bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                          size_t len)
+{
+    // UART writes are synchronous and fast; no separate send queue needed.
+    return remote_wrapper_send_now(mac_addr, data, len);
+}
+
+bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr,
+                                             uint8_t sub_type,
+                                             const uint8_t *data, size_t len)
+{
+    static uint16_t seq_id_counter = 0;
+    const size_t max_payload_per_fragment =
+        REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
+
+    if (max_payload_per_fragment == 0) {
+        LOGE(TAG, "Cannot send fragmented message: max payload too small");
+        return false;
+    }
+
+    uint16_t total_fragments =
+        (uint16_t)((len + max_payload_per_fragment - 1) /
+                   max_payload_per_fragment);
+    uint16_t current_seq_id = seq_id_counter++;
+
+    LOGI(TAG,
+         "Sending fragmented message: seq=%u, total_size=%zu, "
+         "fragments=%u to " MACSTR,
+         current_seq_id, len, total_fragments, MAC2STR(mac_addr));
+
+    for (uint16_t i = 0; i < total_fragments; i++) {
+        size_t offset       = i * max_payload_per_fragment;
+        size_t fragment_len = (i == total_fragments - 1)
+                                  ? (len - offset)
+                                  : max_payload_per_fragment;
+        size_t total_msg_len =
+            BINARY_FRAGMENT_MSG_HEADER_SIZE + fragment_len;
+
+        uint8_t buf[BRIDGE_MAX_PAYLOAD];
+        binary_fragment_msg_t *fragment_msg = (binary_fragment_msg_t *)buf;
+
+        fragment_msg->type               = MSG_TYPE_BINARY;
+        fragment_msg->sub_type           = sub_type;
+        fragment_msg->seq_id             = current_seq_id;
+        fragment_msg->total_payload_size = (uint32_t)len;
+        fragment_msg->total_fragments    = total_fragments;
+        fragment_msg->fragment_index     = i;
+        fragment_msg->fragment_offset    = (uint32_t)offset;
+        fragment_msg->fragment_len       = (uint16_t)fragment_len;
+        memcpy(fragment_msg->data, data + offset, fragment_len);
+
+        if (!remote_wrapper_send(mac_addr, (const uint8_t *)fragment_msg,
+                                  total_msg_len)) {
+            LOGW(TAG, "Failed to send fragment %u of seq %u", i,
+                 current_seq_id);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool remote_wrapper_broadcast_fragmented_message(uint8_t sub_type,
+                                                  const uint8_t *data,
+                                                  size_t len)
+{
+    return remote_wrapper_send_fragmented_message(broadcast_mac, sub_type,
+                                                   data, len);
+}
+
+void remote_wrapper_deinit()
+{
+    if (g_rx_task) {
+        vTaskDelete(g_rx_task);
+        g_rx_task = NULL;
+    }
+    uart_driver_delete(C6_BRIDGE_UART_NUM);
+}
+
 #else
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data) {
