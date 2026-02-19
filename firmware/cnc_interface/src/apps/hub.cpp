@@ -207,19 +207,38 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
 
 void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
   led_status_sending();
-  spindles_tools_msg_t msg;
-  msg.type = MSG_TYPE_SPINDLES_TOOLS;
-  if (machine->spindles) {
-    msg.rpm = machine->spindles->rpm;
-  } else {
-    msg.rpm = 0;
+  const char *tool = machine->tool ? machine->tool : "";
+  int rpm = machine->spindles ? machine->spindles->rpm : 0;
+  size_t tool_len = strlen(tool);
+
+  size_t total_len = sizeof(uint8_t) + sizeof(int) + sizeof(size_t) + tool_len;
+  uint8_t *buf = (uint8_t *)malloc(total_len);
+  if (!buf) {
+    LOGE(TAG, "Failed to allocate spindles_tools buffer");
+    return;
   }
-  msg.tool = "";  // machine->tool;
-  // we should not send string data directly over the air, it's inefficient.
-  // so we're sending only the length, for this example.
-  remote_wrapper_send(
-      display_mac_address, (uint8_t *)&msg,
-      sizeof(msg.type) + sizeof(msg.rpm) + sizeof(size_t) /* tool len */);
+
+  size_t off = 0;
+  // type
+  buf[off] = (uint8_t)MSG_TYPE_SPINDLES_TOOLS;
+  off += sizeof(uint8_t);
+
+  // rpm
+  memcpy(buf + off, &rpm, sizeof(int));
+  off += sizeof(int);
+
+  // tool length
+  memcpy(buf + off, &tool_len, sizeof(size_t));
+  off += sizeof(size_t);
+
+  // tool chars (may be zero-length)
+  if (tool_len > 0) {
+    memcpy(buf + off, tool, tool_len);
+    off += tool_len;
+  }
+
+  remote_wrapper_send(display_mac_address, buf, total_len);
+  free(buf);
   putchar('.');
 }
 
@@ -379,22 +398,9 @@ void on_connected_change(machine_interface_t *machine, void *user_data) {
   LOGI(TAG, "Machine connection state changed: %s", conn ? "connected" : "disconnected");
 
   if (conn) {
-    // Only show green if we have recent responses from the machine; otherwise
-    // remain in connecting visual state so user can see there's an issue.
-    bool recent = false;
-    if (g_machine) {
-#ifdef ESP32_HW
-      if (g_machine->last_response_ms != 0 && (millis() - g_machine->last_response_ms) <= 8000) {
-        recent = true;
-      }
-#endif
-    }
-    if (recent) {
-      led_status_connected();
-    } else {
-      led_status_connecting();
-      LOGW(TAG, "Machine reported connected but no recent serial responses; keeping LED in connecting state.");
-    }
+    // Rely on the machine interface's `is_connected()` result rather than
+    // inspecting `last_response_ms` directly (poll back-off may delay responses).
+    led_status_connected();
   } else {
     led_status_connecting();
     // Immediately notify clients that the hub has lost the machine so they

@@ -74,6 +74,7 @@ static const char * TAG = "mos_machine_handler";
 #define PROBE_DEFAULT_Z_DISTANCE 10.0f
 // How far below z_top to probe when doing XY probing moves.
 #define PROBE_XY_DEPTH_BELOW_Z_TOP 2.0f
+#define Z_PROBING_BACKOFF_DISTANCE 2.0f
 #define MAX_PROBE_RESULTS 16
 
 // Backoff distance calculation for XY probing moves
@@ -160,10 +161,32 @@ static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void);
 static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* action);
 static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z);
 static void mos_install_probe(lv_obj_t* wizard_obj);
+static void mos_cancel_probe(lv_obj_t* wizard_obj);
+static void mos_home_all_modal_event_handler(lv_event_t * e);
+static void mos_show_home_all_modal(machine_interface_t * machine);
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data);
 static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data);
 static bool _mos_log_message_cb(machine_interface_t* machine, void* user_data, const char* message);
 static void _mos_try_complete_from_fallback(void);
+
+static void mos_cancel_probe(lv_obj_t* wizard_obj) {
+    (void)wizard_obj;
+    LOGI(TAG, "Cancel probe requested from UI. Clearing handler probe state.");
+    handler_state.probe_state = PROBE_STATE_IDLE;
+    handler_state.probe_was_running = false;
+    handler_state.m7601_fallback_pending = false;
+    handler_state.probe_axes_reported_mask = 0;
+    memset(handler_state.last_parsed_axis, 0, sizeof(handler_state.last_parsed_axis));
+    handler_state.parsed_result.x = NAN;
+    handler_state.parsed_result.y = NAN;
+    handler_state.parsed_cnr_pos.x = NAN;
+    handler_state.parsed_cnr_pos.y = NAN;
+    handler_state.parsed_dims.x = NAN;
+    handler_state.parsed_dims.y = NAN;
+    handler_state.parsed_radius = NAN;
+    handler_state.parsed_rotation = NAN;
+    handler_state.parsed_z_result = NAN;
+}
 
 /**
  * @brief Registration function to connect the MOS handler callbacks to the wizard.
@@ -182,7 +205,7 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     for (int i=0;i<3;i++) { handler_state.parsed_sfc_pos_by_axis[i] = NAN; handler_state.parsed_sfc_pos_count[i]=0; }
 
     // Register the three main callbacks with the wizard.
-    lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin, mos_install_probe);
+    lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin, mos_install_probe, mos_cancel_probe);
 
     // Register callbacks with the machine interface to receive status updates.
     // This is crucial for the asynchronous operation of the handler.
@@ -213,11 +236,31 @@ static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void) {
     };
 }
 
-static void mos_install_probe(lv_obj_t* wizard_obj) {
-  machine_interface_send_gcode(handler_state.machine, "T{global.mosPTID}", TOOLS);
+void ensure_homed() {
+    if (!handler_state.machine) return;
 
-  // TODO: Wait and check for probe installation success!
-  lv_probing_wizard_probe_intalled(wizard_obj);
+    // If any axes are not homed, show the "Home All" modal and block until homing is complete.
+    if (!handler_state.machine->axes_homed[0] || !handler_state.machine->axes_homed[1] || !handler_state.machine->axes_homed[2]) {
+        LOGW(TAG, "Axes not homed. Prompting user to home all axes before probing.");
+        mos_show_home_all_modal(handler_state.machine);
+        // The modal will block the UI until homing is complete, at which point the state change callback will allow probing to proceed.
+    } else {
+        LOGI(TAG, "Axes are homed. Proceeding with probe.");  
+    }
+}
+
+static void mos_install_probe(lv_obj_t* wizard_obj) {
+    ensure_homed();
+
+    if (!handler_state.machine) {
+        LOGW(TAG, "Cannot install probe: machine is NULL");
+    } else {
+        LOGI(TAG, "Installing probe tool: T T{global.mosPTID}");
+        handler_state.machine->send_gcode(handler_state.machine, "T T{global.mosPTID}", 0);
+    }
+
+    // TODO: Wait and check for probe installation success!
+    lv_probing_wizard_probe_intalled(wizard_obj);
 }
 
 /**
@@ -229,10 +272,29 @@ static void mos_install_probe(lv_obj_t* wizard_obj) {
  * avoiding pollution of the user's desired WCS. The wizard re-applies results later.
  */
 static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* action) {
-    if (!handler_state.machine || handler_state.probe_state != PROBE_STATE_IDLE) {
-        LOGW(TAG, "Probe command ignored: machine not ready or probe already active.");
+    if (!handler_state.machine) {
+        LOGW(TAG, "Probe command ignored: machine interface is NULL.");
         return;
     }
+
+    if (handler_state.probe_state != PROBE_STATE_IDLE) {
+        // If the machine is not actually running a probe (probe_was_running==false)
+        // then we may have been left in a non-idle state due to a missed completion
+        // message or earlier failure. In that case, clear the stale state and
+        // allow the new probe to proceed. Otherwise, reject the new probe.
+        if (!handler_state.probe_was_running) {
+            LOGW(TAG, "Clearing stale probe_state=%d (no running probe). Allowing new probe.", handler_state.probe_state);
+            handler_state.probe_state = PROBE_STATE_IDLE;
+            handler_state.m7601_fallback_pending = false;
+            handler_state.probe_axes_reported_mask = 0;
+            memset(handler_state.last_parsed_axis, 0, sizeof(handler_state.last_parsed_axis));
+        } else {
+            LOGW(TAG, "Probe command ignored: machine not ready or probe already active.");
+            return;
+        }
+    }
+
+    ensure_homed();
 
     // Reset probe result state for the new operation
     handler_state.parsed_result = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
@@ -262,12 +324,16 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         // I: Max travel distance.
         // O: Overtravel allowance.
         // W: Work offset to store result (scratch WCS).
+        // Move from a safe backoff height above the surface to the probe start
+        // location so travel moves do not collide with the surface. Keep the
+        // actual probe-to depth unchanged (I / probing distance remains the same).
         snprintf(gcode_buf, sizeof(gcode_buf),
-                 "M98 P\"G6510.1.g\" W%d J%.3f K%.3f L%.3f H4 I%.3f O%.3f",
+             "G6510.1 W{%d} J{%.3f} K{%.3f} L{%.3f} H{4} I{%.3f} O{%.3f}",
                  PROBE_SCRATCH_WCS_OFFSET,
-                 current_pos.x, current_pos.y, handler_state.machine->position[2],
+                 current_pos.x, current_pos.y, handler_state.machine->position[2] + Z_PROBING_BACKOFF_DISTANCE,
                  PROBE_DEFAULT_Z_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
 
+        LOGI(TAG, "Sending probe gcode: %s", gcode_buf);
         handler_state.probe_state = PROBE_STATE_PENDING_Z_COMPLETE;
         handler_state.machine->probe(handler_state.machine, gcode_buf);
 
@@ -299,11 +365,14 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 // T: Surface clearance distance.
                 // O: Overtravel distance.
                 // W: Work offset (scratch WCS).
+                // Use a backoff above the detected top surface for travel moves
+                // (L) while leaving the probe target depth (Z) at the requested
+                // depth below `z_top` so probing accuracy is preserved.
                 snprintf(gcode_buf, sizeof(gcode_buf),
-                         "M98 P\"%s\" W%d J%.3f K%.3f L%.3f Z%.3f H%.3f I%.3f T%.3f O%.3f",
-                         is_inside ? "G6502.1.g" : "G6503.1.g",
+                         "%s W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} I{%.3f} T{%.3f} O{%.3f}",
+                         is_inside ? "G6502.1" : "G6503.1",
                          PROBE_SCRATCH_WCS_OFFSET,
-                         center_x, center_y, z_top, probe_z,
+                         center_x, center_y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                          dim_x, dim_y,
                          PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
@@ -334,16 +403,16 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 if (is_inside) {
                     // Bore (G6500.1): No T parameter needed (probes outward from center).
                     snprintf(gcode_buf, sizeof(gcode_buf),
-                             "M98 P\"G6500.1.g\" W%d J%.3f K%.3f L%.3f Z%.3f H%.3f O%.3f",
+                             "G6500.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} O{%.3f}",
                              PROBE_SCRATCH_WCS_OFFSET,
-                             setup_points[0].x, setup_points[0].y, z_top, probe_z,
+                             setup_points[0].x, setup_points[0].y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                              diameter, PROBE_DEFAULT_OVERTRAVEL);
                 } else {
                     // Boss (G6501.1): T parameter = clearance to start outside the boss.
                     snprintf(gcode_buf, sizeof(gcode_buf),
-                             "M98 P\"G6501.1.g\" W%d J%.3f K%.3f L%.3f Z%.3f H%.3f T%.3f O%.3f",
+                             "G6501.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} T{%.3f} O{%.3f}",
                              PROBE_SCRATCH_WCS_OFFSET,
-                             setup_points[0].x, setup_points[0].y, z_top, probe_z,
+                             setup_points[0].x, setup_points[0].y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                              diameter, PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 }
                 break;
@@ -384,10 +453,10 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 // O: Overtravel distance.
                 // W: Work offset (scratch WCS).
                 snprintf(gcode_buf, sizeof(gcode_buf),
-                         "M98 P\"G6508.1.g\" W%d J%.3f K%.3f L%.3f Z%.3f N%d Q1 T%.3f O%.3f",
+                         "G6508.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} N{%d} Q{1} T{%.3f} O{%.3f}",
                          PROBE_SCRATCH_WCS_OFFSET,
                          setup_points[0].x, setup_points[0].y,
-                         z_top, probe_z,
+                         z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                          corner_n,
                          PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
                 break;
@@ -408,6 +477,35 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
     }
 }
 
+static void mos_home_all_modal_event_handler(lv_event_t * e) {
+    lv_obj_t *btn = lv_event_get_current_target(e);
+    lv_obj_t *label = lv_obj_get_child(btn, 0);
+    lv_obj_t *mbox = lv_event_get_user_data(e);
+
+    machine_interface_t * machine = lv_obj_get_user_data(mbox);
+    const char *lbl = NULL;
+    if (label) lbl = lv_label_get_text(label);
+    if (machine && lbl && (lbl[0] == 'O' || lbl[0] == 'o')) {
+        // machine->home_all(machine);
+        LOGI(TAG, "Homing, then installing probe tool: T T{global.mosPTID}");
+        handler_state.machine->send_gcode(handler_state.machine, "G28\nT T{global.mosPTID}", 0);
+    }
+
+    lv_msgbox_close(mbox);
+}
+
+static void mos_show_home_all_modal(machine_interface_t * machine) {
+    lv_obj_t * mbox = lv_msgbox_create(lv_screen_active());
+    lv_msgbox_add_title(mbox, "Home all?");
+    lv_obj_set_user_data(mbox, machine);
+    lv_msgbox_add_text(mbox, "One or more axes are not homed. Home all axes?");
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "OK");
+    lv_obj_add_event_cb(ok, mos_home_all_modal_event_handler, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *close_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(close_btn, mos_home_all_modal_event_handler, LV_EVENT_CLICKED, mbox);
+    lv_obj_center(mbox);
+}
+
 /**
  * @brief Callback to apply the final calculated coordinates as a WCS origin.
  *
@@ -423,7 +521,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
 static void mos_set_wcs_origin(lv_obj_t* wizard_obj, uint8_t wcs_index, float x, float y, float z, bool apply_z) {
     if (!handler_state.machine) return;
 
-    char gcode_buf[128];
+    char gcode_buf[MAX_GCODE_STR_LEN];
     char z_buf[32] = "";
     if (apply_z) {
         snprintf(z_buf, sizeof(z_buf), " Z%.4f", z);

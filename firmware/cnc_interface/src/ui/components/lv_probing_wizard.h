@@ -122,6 +122,10 @@ typedef void (*execute_probe_cb_t)(lv_obj_t * wizard_obj, const lv_probing_actio
  * @return bool, true if successful.
  */
 typedef void (*install_probe_tool_cb_t)(lv_obj_t * wizard_obj);
+/**
+ * @brief Callback to request cancellation/abort of any in-progress probe on the machine.
+ */
+typedef void (*cancel_probe_cb_t)(lv_obj_t * wizard_obj);
 /*
  * @brief Callback for the wizard to command the machine to set a new Work Coordinate System origin.
  * @param wizard_obj Pointer to the wizard object.
@@ -184,7 +188,7 @@ void lv_probing_wizard_probe_intalled(lv_obj_t * obj);
  * @param exec_probe_cb Function to execute a probe cycle.
  * @param set_wcs_cb Function to set a new WCS origin.
  */
-void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb);
+void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb, cancel_probe_cb_t cancel_probe_cb);
 
 /**
  * @brief Sets the connection status of the machine, updating the UI accordingly.

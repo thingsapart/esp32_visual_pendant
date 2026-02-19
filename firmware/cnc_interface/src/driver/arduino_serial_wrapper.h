@@ -90,6 +90,18 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size);
 bool serial_flush(serial_handle_t handle);
 
 /**
+ * @brief Atomically write a buffer (optionally flush) while holding the port
+ *        write mutex so no other writer can interleave bytes.
+ *
+ * @param handle Serial handle
+ * @param buffer Data buffer
+ * @param size Number of bytes to write
+ * @param flush If true, call serial_flush() while still holding the lock
+ * @return Number of bytes written (or 0 on error)
+ */
+size_t serial_write_atomic(serial_handle_t handle, const uint8_t *buffer, size_t size, bool flush);
+
+/**
  * @brief Registers a callback function to be called when a full line (ending in
  * '\n') is received. Multiple callbacks can be registered for the same handle.
  *

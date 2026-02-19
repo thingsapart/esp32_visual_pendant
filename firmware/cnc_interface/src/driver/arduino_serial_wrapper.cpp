@@ -4,10 +4,13 @@
 #include <cstring>  // For memcpy, memset
 #include <map>
 #include <vector>
+#include <mutex>
 
 #if defined(ESP32_HW)
 #include "Arduino.h"
 #include "HardwareSerial.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #endif
 
 #ifdef RRF_SIM
@@ -92,6 +95,13 @@ typedef struct {
   ring_buffer_t rx_buffer;
   char line_buffer[MAX_LINE_LENGTH];
   size_t line_pos;
+
+  // Mutex to serialize writes to the underlying Stream
+#if defined(ESP32_HW)
+  SemaphoreHandle_t write_mutex;
+#else
+  std::mutex *write_mutex;
+#endif
 
   serial_line_callback_t callbacks[MAX_CALLBACKS];
   size_t num_callbacks;
@@ -309,6 +319,20 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
+  // Create write mutex
+#if defined(ESP32_HW)
+  port_data->write_mutex = xSemaphoreCreateMutex();
+  if (!port_data->write_mutex) {
+    LOGE(TAG, "Failed to create write mutex for UART %d", uart_num);
+    rb_free(&port_data->rx_buffer);
+    delete port_data;
+    if (owns_stream && serial_stream) delete serial_stream;
+    return NULL;
+  }
+#else
+  port_data->write_mutex = new std::mutex();
+#endif
+
   serial_handle_t handle = (serial_handle_t)serial_stream;
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
@@ -396,6 +420,19 @@ void serial_end(serial_handle_t handle) {
         ->stream;  // This deletes HardwareSerial or RRFMachineSimStream
   }
 
+  // Delete write mutex
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) {
+    vSemaphoreDelete(port_data->write_mutex);
+    port_data->write_mutex = NULL;
+  }
+#else
+  if (port_data->write_mutex) {
+    delete port_data->write_mutex;
+    port_data->write_mutex = NULL;
+  }
+#endif
+
   // Delete the port data struct itself
   delete port_data;
 
@@ -423,7 +460,46 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
   Serial.print((char*)buffer); //
 #endif
 
-  return port_data->stream->write(buffer, size);
+  // Serialize writes to avoid races between concurrent tasks sending
+  // commands which could interleave and corrupt messages (observed as
+  // partial or malformed M409 responses on the controller).
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->lock();
+#endif
+
+  size_t written = port_data->stream->write(buffer, size);
+
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreGive(port_data->write_mutex);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->unlock();
+#endif
+
+  return written;
+}
+
+size_t serial_write_atomic(serial_handle_t handle, const uint8_t *buffer, size_t size, bool flush) {
+  serial_port_data_t *port_data = find_port_data(handle);
+  if (!port_data || !port_data->stream) return 0;
+
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->lock();
+#endif
+
+  size_t written = port_data->stream->write(buffer, size);
+  if (flush) port_data->stream->flush();
+
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreGive(port_data->write_mutex);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->unlock();
+#endif
+
+  return written;
 }
 
 bool serial_flush(serial_handle_t handle) {
@@ -432,7 +508,20 @@ bool serial_flush(serial_handle_t handle) {
     return false;
   }
 
+  // Ensure flush is serialized with writes
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->lock();
+#endif
+
   port_data->stream->flush();
+
+#if defined(ESP32_HW)
+  if (port_data->write_mutex) xSemaphoreGive(port_data->write_mutex);
+#else
+  if (port_data->write_mutex) port_data->write_mutex->unlock();
+#endif
 
   return true;
 }

@@ -27,6 +27,13 @@ static const char *TAG = "machine_rrf";
 #define SERIAL_MAX_PARSE_FAILURES 10
 #endif
 
+// If this many poll requests go unanswered, treat the machine as disconnected.
+// This helps when poll back-off is active: missing several responses usually
+// indicates the controller is no longer reachable rather than merely busy.
+#ifndef SERIAL_DISCONNECT_UNANSWERED_POLLS
+#define SERIAL_DISCONNECT_UNANSWERED_POLLS 5
+#endif
+
 // --- Poll back-off configuration ---
 // Minimum unanswered poll cycles before back-off kicks in.
 #define POLL_BACKOFF_THRESHOLD     2
@@ -418,16 +425,33 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     size_t len = end ? (size_t)(end - start) : strlen(start);
 
     if (len > 0) {
-      //LOGI(TAG, "Serial send line: %.*s", (int)len, start);
-      serial_write(self->transport_state.serial.uart, (const uint8_t *)start, len);
+      // Compose the full line including a single trailing newline into a
+      // contiguous buffer and send atomically (write+flush) to avoid
+      // interleaving from other writers.
+      size_t out_len = len + 1; /* +1 for '\n' */
+      char stack_buf[MAX_GCODE_STR_LEN + 2];
+      char *out_buf = NULL;
+
+      if (out_len <= sizeof(stack_buf)) {
+        memcpy(stack_buf, start, len);
+        stack_buf[len] = '\n';
+        out_buf = stack_buf;
+      } else {
+        out_buf = (char *)malloc(out_len);
+        if (!out_buf) {
+          LOGE(TAG, "Out of memory composing gcode line");
+          start = end ? end + 1 : start + len; /* advance to next */
+          continue;
+        }
+        memcpy(out_buf, start, len);
+        out_buf[len] = '\n';
+      }
+
+      serial_write_atomic(self->transport_state.serial.uart,
+                          (const uint8_t *)out_buf, out_len, true);
+
+      if (out_buf != stack_buf) free(out_buf);
     }
-    //LOGI(TAG, "Serial send line: <NL>");
-    serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
-    // Flush after each complete line to prevent UART TX FIFO fragmentation
-    // when back-to-back gcode writes are queued (e.g. probe gcode -> M409).
-    // Without this, trailing bytes of one command can merge with the header
-    // bytes of the next write, producing truncated commands at the receiver.
-    serial_flush(self->transport_state.serial.uart);
 
     if (!end) break;
     start = end + 1;
@@ -533,7 +557,23 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   if (self->connected && self->last_response_ms != 0) {
     uint32_t now = millis();
     uint32_t elapsed = now - self->last_response_ms;
-    if (elapsed > SERIAL_NO_RESPONSE_TIMEOUT_MS) {
+    // If we've sent several poll requests with no responses, assume the
+    // controller is unreachable and disconnect immediately. This handles the
+    // case where back-off accumulates many unanswered polls (e.g. controller
+    // crashed) while still allowing short-term back-off delays during long
+    // running macros.
+    if (self->unanswered_polls >= SERIAL_DISCONNECT_UNANSWERED_POLLS) {
+      LOGW(TAG, "Serial: %u unanswered polls — marking disconnected.", (unsigned)self->unanswered_polls);
+      _serial_set_connected_impl(self, false);
+      return;  // Skip sending more queries until reconnected
+    }
+
+    // While poll back-off is active (some unanswered polls but below the
+    // disconnect threshold), avoid using the raw elapsed-time check to
+    // declare the machine disconnected — back-off intentionally spaces polls
+    // and can exceed the simple time threshold. Only apply the elapsed-time
+    // timeout when we have no outstanding unanswered polls.
+    if (self->unanswered_polls == 0 && elapsed > SERIAL_NO_RESPONSE_TIMEOUT_MS) {
       LOGW(TAG, "Serial: No response for %lu ms (timeout %d ms) — marking disconnected.",
            (unsigned long)elapsed, SERIAL_NO_RESPONSE_TIMEOUT_MS);
       _serial_set_connected_impl(self, false);

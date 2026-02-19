@@ -181,6 +181,7 @@ typedef struct {
     execute_probe_cb_t exec_probe_cb;
     set_wcs_origin_cb_t set_wcs_cb;
     install_probe_tool_cb_t install_probe_cb;
+    cancel_probe_cb_t cancel_probe_cb;
 
     char result_label_x_text[32];
     char result_label_y_text[32];
@@ -647,6 +648,19 @@ static void reset_and_start_routine(lv_obj_t * obj) {
     wiz->wizard_state = WIZARD_STATE_CONFIG;
     wiz->corner_type = LV_PROBING_CORNER_NONE;
 
+    // Clear any pending deferred actions or data so a fresh probe run
+    // doesn't accidentally execute stale deferred callbacks from a prior run.
+    wiz->deferred_action = DEFERRED_ACTION_NONE;
+    wiz->deferred_next_step = -1;
+    wiz->deferred_z_top = 0.0f;
+    wiz->deferred_final_result.x = 0.0f;
+    wiz->deferred_final_result.y = 0.0f;
+    memset((void *)&wiz->deferred_details, 0, sizeof(wiz->deferred_details));
+    if (wiz->deferred_update_timer) {
+        lv_timer_pause(wiz->deferred_update_timer);
+        lv_timer_set_repeat_count(wiz->deferred_update_timer, 0);
+    }
+
     if (wiz->mode_btnm) lv_btnmatrix_set_btn_ctrl(wiz->mode_btnm, (uint16_t)wiz->mode, LV_BTNMATRIX_CTRL_CHECKED);
     if (wiz->variant_btnm) lv_btnmatrix_set_btn_ctrl(wiz->variant_btnm, wiz->is_inside ? 0 : 1, LV_BTNMATRIX_CTRL_CHECKED);
     
@@ -671,13 +685,14 @@ void lv_probing_wizard_set_corner_type(lv_obj_t * obj, lv_probing_wizard_corner_
     if(wiz->canvas) lv_obj_invalidate(wiz->canvas);
 }
 
-void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb) {
+void lv_probing_wizard_register_callbacks(lv_obj_t * obj, get_current_jogged_position_cb_t get_pos_cb, execute_probe_cb_t exec_probe_cb, set_wcs_origin_cb_t set_wcs_cb, install_probe_tool_cb_t install_probe_cb, cancel_probe_cb_t cancel_probe_cb) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if(!wiz) return;
     wiz->get_pos_cb = get_pos_cb;
     wiz->exec_probe_cb = exec_probe_cb;
     wiz->set_wcs_cb = set_wcs_cb;
     wiz->install_probe_cb = install_probe_cb;
+    wiz->cancel_probe_cb = cancel_probe_cb;
     LOGV(TAG, "Callbacks registered.");
 }
 
@@ -857,11 +872,8 @@ static void update_ui_state(lv_obj_t * obj) {
          lv_label_set_text(wiz->result_label_y, "Y:   - - -");
          lv_label_set_text(wiz->result_label_z, "Z:   - - -");
     } else if (probing_mode && wiz->current_action) {
-        // Handle enabling/disabling the Next button during a probing sequence.
-        // During automated probe actions (Z or XY), the Next button must be disabled
-        // to prevent the user from advancing before the machine finishes.
-        if (wiz->current_action->type == ACTION_PROBE_Z_TOP ||
-            wiz->current_action->type == ACTION_PROBE_POINT) {
+        // Handle enabling/disabling the Next button during a probing sequence
+        if (wiz->current_action->type == ACTION_PROBE_Z_TOP && !wiz->z_top_is_set) {
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
         } else {
             lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
@@ -950,14 +962,45 @@ static void deferred_update_ui(lv_obj_t* obj) {
             break;
         
         case ACTION_PROBE_POINT:
-        case ACTION_PROBE_Z_TOP:
+        case ACTION_PROBE_Z_TOP: {
+            bool can_execute = true;
+            if (wiz->current_action->type == ACTION_PROBE_POINT) {
+                /* Ensure required setup points and Z-top have been captured before
+                 * invoking the machine handler. This prevents sending probe macros
+                 * without J/K/L/Z parameters which cause the MOS macros to abort.
+                 */
+                lv_probing_wizard_mode_t mode = lv_probing_wizard_get_mode(obj);
+                if (mode == LV_PROBING_WIZARD_MODE_RECTANGLE || mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
+                    if (!wiz->setup_points[0].is_set || !wiz->setup_points[1].is_set) {
+                        LOGW(TAG, "Cannot execute probe: required setup points not set.");
+                        can_execute = false;
+                    }
+                } else if (mode == LV_PROBING_WIZARD_MODE_CORNER) {
+                    if (!wiz->setup_points[0].is_set || wiz->corner_type == LV_PROBING_CORNER_NONE) {
+                        LOGW(TAG, "Cannot execute corner probe: start position or corner not set.");
+                        can_execute = false;
+                    }
+                }
+                if (!wiz->z_top_is_set) {
+                    LOGW(TAG, "Cannot execute probe: Z-top not measured.");
+                    can_execute = false;
+                }
+            }
+
+            if (!can_execute) {
+                /* Keep user in the current step; inform via log and UI label update. */
+                lv_label_set_text(wiz->instruction_label, "Setup incomplete: confirm jog/probe steps first.");
+                lv_obj_invalidate(wiz->canvas);
+                break;
+            }
+
             if (wiz->exec_probe_cb) {
                 LOGV(TAG, "Executing probe callback for action type %d", wiz->current_action->type);
                 wiz->exec_probe_cb(obj, wiz->current_action);
             } else {
                 LOGW(TAG, "Probe callback is NULL, cannot proceed.");
             }
-            break;
+        } break;
         
         case ACTION_COMPLETE:
             update_progress_panel(wiz);
@@ -1102,6 +1145,13 @@ static void next_btn_event_cb(lv_event_t * e) {
 static void cancel_btn_event_cb(lv_event_t * e) {
     lv_obj_t * obj = lv_event_get_user_data(e);
     LOGV(TAG, "Cancel button clicked.");
+    // First notify the machine handler (if any) to cancel any in-flight probe
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (wiz && wiz->cancel_probe_cb) {
+        wiz->cancel_probe_cb(obj);
+    }
+
+    // Then reset the wizard UI state to a clean configuration screen
     reset_and_start_routine(obj);
 }
 

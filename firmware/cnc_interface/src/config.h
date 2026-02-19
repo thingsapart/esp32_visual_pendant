@@ -8,7 +8,7 @@
 #define MACHINE_SEND_GCODE_INTERVAL_MS 50
 
 // --- G-code Queue ---
-#define MAX_GCODE_STR_LEN 128
+#define MAX_GCODE_STR_LEN 192
 
 #ifdef POSIX
 #define RRF_SIM 1
