@@ -37,6 +37,7 @@ typedef struct {
   machine_interface_t *machine;
   volatile uint32_t dirty_flags;
   lv_obj_t *probing_wizard;
+  lv_obj_t *current_msgbox;  // Currently shown RRF machine modal, or NULL.
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow

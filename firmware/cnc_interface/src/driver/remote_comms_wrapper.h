@@ -48,6 +48,7 @@ typedef enum {
   MSG_TYPE_SENSORS_CHANGED,
   MSG_TYPE_BINARY,  // Currently used for dialogs, file lists, sub-typed.
   MSG_TYPE_LOG_MESSAGE,
+  MSG_TYPE_DISMISS_MODAL,  // Hub -> Pendant: dismiss the currently shown modal.
 } remote_message_type_t;
 
 // MSG_TYPE_BINARY sub-types.
@@ -162,7 +163,13 @@ typedef enum {
   CMD_TYPE_START_JOB,
   CMD_TYPE_LIST_FILES,
   CMD_TYPE_PROBE,
-  // Add more command types as needed
+  // Modal response commands (Pendant -> Hub)
+  CMD_TYPE_MODAL_OK,
+  CMD_TYPE_MODAL_CANCEL,
+  CMD_TYPE_MODAL_CHOICE,
+  CMD_TYPE_MODAL_INT,
+  CMD_TYPE_MODAL_FLOAT,
+  CMD_TYPE_MODAL_STR,
 } remote_command_type_t;
 
 typedef struct {
@@ -232,6 +239,48 @@ typedef struct {
   uint16_t len;       // Length of the macro name
   char macro_name[];  // Flexible array member
 } run_macro_cmd_t;
+
+// Hub -> Pendant: dismiss the currently shown modal (modal_id == -1 means any).
+typedef struct {
+  uint8_t type;  // MSG_TYPE_DISMISS_MODAL
+  int modal_id;
+} dismiss_modal_msg_t;
+
+// Pendant -> Hub modal response commands.
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_OK
+  int modal_id;
+} modal_ok_cmd_t;
+
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_CANCEL
+  int modal_id;
+} modal_cancel_cmd_t;
+
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_CHOICE
+  int modal_id;
+  int choice;
+} modal_choice_cmd_t;
+
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_INT
+  int modal_id;
+  int value;
+} modal_int_cmd_t;
+
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_FLOAT
+  int modal_id;
+  float value;
+} modal_float_cmd_t;
+
+typedef struct {
+  uint8_t type;  // CMD_TYPE_MODAL_STR
+  int modal_id;
+  uint16_t len;
+  char value[];  // Flexible array member
+} modal_str_cmd_t;
 
 typedef struct {
   uint8_t type;

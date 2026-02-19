@@ -6,9 +6,11 @@
 
 #include "debug.h"
 #include "lvgl_ui.h"
+#include "lvgl.h"
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
 #include "ui/components/mos_machine_handler.h"
+#include "machine/machine_interface.h"
 
 static const char *TAG = "UI_INTERFACE";
 
@@ -17,6 +19,53 @@ static const char *TAG = "UI_INTERFACE";
 extern bool g_dwc_startup_connection_failed;
 extern char g_dwc_startup_host[65];
 #endif
+
+// --- RRF Machine Modal support ---
+
+// Context passed to every msgbox button event callback.
+typedef struct {
+  machine_interface_t *machine;
+  int seq;
+  int button_index;  // Index for choice-mode buttons
+} modal_btn_ctx_t;
+
+// Handler for "OK / close" buttons on machine modals.
+static void _modal_btn_event_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  modal_btn_ctx_t *ctx = (modal_btn_ctx_t *)lv_event_get_user_data(e);
+  if (!ctx || !ctx->machine) return;
+
+  lv_obj_t *btn = lv_event_get_current_target(e);
+  lv_obj_t *mbox = lv_obj_get_parent(lv_obj_get_parent(btn));  // btn -> footer -> mbox
+
+  message_box_t *mb = ctx->machine->message_box;
+  if (!mb || mb->seq != ctx->seq) {
+    // Already dismissed or replaced - just close the LVGL object.
+    lv_msgbox_close(mbox);
+    return;
+  }
+
+  switch (mb->mode) {
+    case MESSAGE_CHOICE:
+      machine_interface_modal_choice(ctx->machine, ctx->button_index, ctx->seq);
+      break;
+    case MESSAGE_OK_CANCEL:
+      if (ctx->button_index == 0)
+        machine_interface_modal_ok(ctx->machine, ctx->seq);
+      else
+        machine_interface_modal_cancel(ctx->machine, ctx->seq);
+      break;
+    case MESSAGE_OK:
+    case MESSAGE:
+    default:
+      machine_interface_modal_ok(ctx->machine, ctx->seq);
+      break;
+  }
+  // machine_interface_modal_* implementations on the remote side will dismiss
+  // the local modal (setting message_box = NULL) and send the command to hub.
+  // Close the LVGL object explicitly here too in case it wasn't closed.
+  lv_msgbox_close(mbox);
+}
 
 // --- Machine State -> UI Callbacks ---
 // These callbacks are executed in the machine thread. They should only
@@ -130,6 +179,7 @@ static void disconnected_overlay_event_handler(lv_event_t * e) {
 void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->machine = machine;
   interface->dirty_flags = UI_DIRTY_ALL;  // Mark all as dirty for initial sync
+  interface->current_msgbox = NULL;
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
@@ -348,23 +398,111 @@ void interface_tick(interface_t *interface) {
 
   if (flags_to_process & UI_DIRTY_DIALOGS) {
     bool active = (machine->message_box != NULL);
+    // Keep data-bindings in sync for any bound widgets in the YAML UI.
     data_binding_notify_state_changed(
         "dialog.is_active",
         (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = active});
-    if (active) {
+
+    if (!active) {
+      // Modal was dismissed on the machine side - close any open LVGL msgbox.
+      if (interface->current_msgbox) {
+        if (lv_obj_is_valid(interface->current_msgbox)) {
+          lv_msgbox_close(interface->current_msgbox);
+        }
+        interface->current_msgbox = NULL;
+      }
+    } else {
+      // A new (or updated) modal is present. Close the old one first if it
+      // belongs to a different seq.
+      if (interface->current_msgbox) {
+        if (lv_obj_is_valid(interface->current_msgbox)) {
+          // Retrieve the stored seq from user_data on the mbox.
+          int old_seq = (int)(intptr_t)lv_obj_get_user_data(interface->current_msgbox);
+          if (old_seq == machine->message_box->seq) {
+            // Same dialog - already visible, nothing to do.
+            goto after_dialogs;
+          }
+          lv_msgbox_close(interface->current_msgbox);
+        }
+        interface->current_msgbox = NULL;
+      }
+
+      message_box_t *mb = machine->message_box;
+      const char *title = mb->title ? mb->title : "";
+      const char *text  = mb->text  ? mb->text  : "";
+
       data_binding_notify_state_changed(
-          "dialog.title", (binding_value_t){.type = BINDING_TYPE_STRING,
-                                             .as.s_val =
-                                                 machine->message_box->title ? machine->message_box->title : ""});
+          "dialog.title", (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = title});
       data_binding_notify_state_changed(
           "dialog.text",
-          (binding_value_t){.type = BINDING_TYPE_STRING,
-                            .as.s_val = machine->message_box->text ? machine->message_box->text : ""});
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = text});
       data_binding_notify_state_changed(
           "dialog.mode",
-          (binding_value_t){.type = BINDING_TYPE_FLOAT,
-                            .as.f_val = (float)machine->message_box->mode});
+          (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = (float)mb->mode});
+
+      // Create the LVGL msgbox on the active screen.
+      lv_obj_t *mbox = lv_msgbox_create(lv_screen_active());
+      if (!mbox) {
+        LOGE(TAG, "Failed to create msgbox for machine modal");
+        goto after_dialogs;
+      }
+
+      // Store the seq in the mbox user_data for deduplication.
+      lv_obj_set_user_data(mbox, (void *)(intptr_t)mb->seq);
+
+      if (title[0]) lv_msgbox_add_title(mbox, title);
+      if (text[0])  lv_msgbox_add_text(mbox, text);
+
+      // Add buttons depending on mode.
+      if (mb->mode == MESSAGE_CHOICE && mb->num_choices > 0 && mb->choices) {
+        for (size_t i = 0; i < mb->num_choices; ++i) {
+          lv_obj_t *btn = lv_msgbox_add_footer_button(
+              mbox, mb->choices[i] ? mb->choices[i] : "?");
+          modal_btn_ctx_t *ctx = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
+          if (ctx) {
+            ctx->machine = machine;
+            ctx->seq = mb->seq;
+            ctx->button_index = (int)i;
+            lv_obj_add_event_cb(btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx);
+          }
+        }
+      } else if (mb->mode == MESSAGE_OK_CANCEL) {
+        lv_obj_t *ok_btn = lv_msgbox_add_footer_button(mbox, "OK");
+        modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
+        if (ctx_ok) {
+          ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
+          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+        }
+        lv_obj_t *ca_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+        modal_btn_ctx_t *ctx_ca = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
+        if (ctx_ca) {
+          ctx_ca->machine = machine; ctx_ca->seq = mb->seq; ctx_ca->button_index = 1;
+          lv_obj_add_event_cb(ca_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ca);
+        }
+      } else if (mb->mode == MESSAGE_INFO || mb->mode == MESSAGE) {
+        // Non-blocking info - add a close button only.
+        lv_obj_t *close_btn = lv_msgbox_add_footer_button(mbox, "OK");
+        modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
+        if (ctx_ok) {
+          ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
+          lv_obj_add_event_cb(close_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+        }
+      } else {
+        // MESSAGE_OK and blocking input types: show OK button.
+        lv_obj_t *ok_btn = lv_msgbox_add_footer_button(mbox, "OK");
+        modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
+        if (ctx_ok) {
+          ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
+          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+        }
+      }
+
+      lv_obj_center(mbox);
+      interface->current_msgbox = mbox;
+      LOGI(TAG, "Showing machine modal (seq=%d mode=%d): %s / %s",
+           mb->seq, mb->mode, title, text);
     }
+    after_dialogs:;
   }
 
   if (flags_to_process & UI_DIRTY_JOG_STATE) {

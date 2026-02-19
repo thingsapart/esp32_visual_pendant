@@ -63,7 +63,8 @@ void remote_send_task(void *args) {
     if (xQueueReceive(queue, &item, portMAX_DELAY) == pdTRUE) {
       bool res = remote_wrapper_send_now(item.mac, item.data, item.data_len);
       if (res) {
-        LOGI(TAG, "Sent remote message len %d [OK]", item.data_len);
+        LOGV(TAG, "Sent remote message len %d [OK]", item.data_len);
+        LOGD(TAG, "[->%d]", item.data_len);
       } else {
         LOGW(TAG, "Failed to send remote message len %d", item.data_len);
       }

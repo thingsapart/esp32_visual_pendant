@@ -278,7 +278,7 @@ void LOG_CURR_TASK() {
   TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
   // LIST_TASKS();
 
-  LOGI("LOG_CURR_TASK", "Task (%d), memory used: %d", xHandle,
+  LOGV("LOG_CURR_TASK", "Task (%d), memory used: %d", xHandle,
        uxTaskGetStackHighWaterMark(NULL));
 #endif
 }

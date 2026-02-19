@@ -70,7 +70,10 @@ static size_t message_buffer_len;
 // These are called when the machine's state changes.
 
 void on_machine_state_change(machine_interface_t *machine, void *user_data) {
-  LOG_CURR_TASK();
+  static size_t i = 0;
+  if (i++ % 50 == 0) {
+    LOG_CURR_TASK();
+  }
 
   // Send status update message
   led_status_sending();
@@ -78,7 +81,8 @@ void on_machine_state_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_STATUS;
   msg.status = machine->machine_status;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGV(TAG, "Sending status %d", machine->machine_status);
+  /* Minimal console pulse to avoid log flooding */
+  putchar('.');
 }
 
 void on_position_change(machine_interface_t *machine, void *user_data) {
@@ -91,9 +95,8 @@ void on_position_change(machine_interface_t *machine, void *user_data) {
   msg.wcs_x = machine->wcs_position[0];
   msg.wcs_y = machine->wcs_position[1];
   msg.wcs_z = machine->wcs_position[2];
-  LOGD(TAG, "Sending position %f, %f, %f (%f, %f, %f)", machine->position[0],
-       machine->position[1], machine->position[2], machine->wcs_position[0],
-       machine->wcs_position[1], machine->wcs_position[2]);
+  /* Minimal pulse instead of verbose log */
+  putchar('.');
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
 }
 
@@ -105,8 +108,7 @@ void on_home_change(machine_interface_t *machine, void *user_data) {
   msg.x_homed = machine->axes_homed[0];
   msg.y_homed = machine->axes_homed[1];
   msg.z_homed = machine->axes_homed[2];
-  LOGD(TAG, "Sending axes homed %d, %d, %d", machine->axes_homed[0],
-       machine->axes_homed[1], machine->axes_homed[2]);
+  putchar('.');
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
 }
 
@@ -117,7 +119,7 @@ void on_wcs_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_WCS;
   msg.wcs = machine->wcs;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGD(TAG, "Sending wcs changed: %d", machine->wcs);
+  putchar('.');
 }
 
 void on_feed_change(machine_interface_t *machine, void *user_data) {
@@ -128,8 +130,7 @@ void on_feed_change(machine_interface_t *machine, void *user_data) {
   msg.feed_req = machine->feed_req;
   msg.feed_multiplier = machine->feed_multiplier;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGD(TAG, "Sending feed changed: %f/%f (x%f)", machine->feed,
-       machine->feed_req, machine->feed_multiplier);
+  putchar('.');
 }
 
 void on_sensors_change(machine_interface_t *machine, void *user_data) {
@@ -154,6 +155,14 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
       LOGE(TAG, "Failed to serialize message box.");
       led_status_error();
     }
+  } else {
+    // Modal was dismissed on the hub side – tell the pendant to remove it too.
+    LOGI(TAG, "Dialog dismissed, sending MSG_TYPE_DISMISS_MODAL to pendant.");
+    dismiss_modal_msg_t msg;
+    msg.type = MSG_TYPE_DISMISS_MODAL;
+    msg.modal_id = -1;  // -1 means "dismiss whatever is currently shown"
+    led_status_sending();
+    remote_wrapper_send(display_mac_address, (const uint8_t *)&msg, sizeof(msg));
   }
 }
 
@@ -172,7 +181,7 @@ void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
   remote_wrapper_send(
       display_mac_address, (uint8_t *)&msg,
       sizeof(msg.type) + sizeof(msg.rpm) + sizeof(size_t) /* tool len */);
-  LOGI(TAG, "Sending tool/spindle changed: rpm %d / %s", msg.rpm, msg.tool);
+  putchar('.');
 }
 
 void on_files_changed(machine_interface_t *mach, void *user_data,
@@ -260,7 +269,22 @@ void on_connected_change(machine_interface_t *machine, void *user_data) {
   LOGI(TAG, "Machine connection state changed: %s", conn ? "connected" : "disconnected");
 
   if (conn) {
-    led_status_connected();
+    // Only show green if we have recent responses from the machine; otherwise
+    // remain in connecting visual state so user can see there's an issue.
+    bool recent = false;
+    if (g_machine) {
+#ifdef ESP32_HW
+      if (g_machine->last_response_ms != 0 && (millis() - g_machine->last_response_ms) <= 8000) {
+        recent = true;
+      }
+#endif
+    }
+    if (recent) {
+      led_status_connected();
+    } else {
+      led_status_connecting();
+      LOGW(TAG, "Machine reported connected but no recent serial responses; keeping LED in connecting state.");
+    }
   } else {
     led_status_connecting();
     // Immediately notify clients that the hub has lost the machine so they
@@ -468,6 +492,55 @@ static void process_probe_cmd(const uint8_t *data, int data_len) {
   g_machine_base->probe(g_machine_base, gcode);
 }
 
+static void process_modal_ok_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_ok_cmd_t)) { LOGE(TAG, "Invalid modal_ok len"); return; }
+  const modal_ok_cmd_t *cmd = (const modal_ok_cmd_t *)data;
+  LOGI(TAG, "Modal OK seq=%d", cmd->modal_id);
+  machine_interface_modal_ok(g_machine_base, cmd->modal_id);
+}
+
+static void process_modal_cancel_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_cancel_cmd_t)) { LOGE(TAG, "Invalid modal_cancel len"); return; }
+  const modal_cancel_cmd_t *cmd = (const modal_cancel_cmd_t *)data;
+  LOGI(TAG, "Modal Cancel seq=%d", cmd->modal_id);
+  machine_interface_modal_cancel(g_machine_base, cmd->modal_id);
+}
+
+static void process_modal_choice_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_choice_cmd_t)) { LOGE(TAG, "Invalid modal_choice len"); return; }
+  const modal_choice_cmd_t *cmd = (const modal_choice_cmd_t *)data;
+  LOGI(TAG, "Modal Choice seq=%d choice=%d", cmd->modal_id, cmd->choice);
+  machine_interface_modal_choice(g_machine_base, cmd->choice, cmd->modal_id);
+}
+
+static void process_modal_int_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_int_cmd_t)) { LOGE(TAG, "Invalid modal_int len"); return; }
+  const modal_int_cmd_t *cmd = (const modal_int_cmd_t *)data;
+  LOGI(TAG, "Modal Int seq=%d val=%d", cmd->modal_id, cmd->value);
+  machine_interface_modal_int(g_machine_base, cmd->value, cmd->modal_id);
+}
+
+static void process_modal_float_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_float_cmd_t)) { LOGE(TAG, "Invalid modal_float len"); return; }
+  const modal_float_cmd_t *cmd = (const modal_float_cmd_t *)data;
+  LOGI(TAG, "Modal Float seq=%d val=%.3f", cmd->modal_id, cmd->value);
+  machine_interface_modal_float(g_machine_base, cmd->value, cmd->modal_id);
+}
+
+static void process_modal_str_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(modal_str_cmd_t)) { LOGE(TAG, "Invalid modal_str len"); return; }
+  const modal_str_cmd_t *cmd = (const modal_str_cmd_t *)data;
+  if (data_len < (int)(sizeof(modal_str_cmd_t) + cmd->len)) {
+    LOGE(TAG, "Invalid modal_str len, incomplete data");
+    return;
+  }
+  char val[cmd->len + 1];
+  memcpy(val, cmd->value, cmd->len);
+  val[cmd->len] = '\0';
+  LOGI(TAG, "Modal Str seq=%d val=%s", cmd->modal_id, val);
+  machine_interface_modal_str(g_machine_base, val, cmd->modal_id);
+}
+
 // --- ESP-NOW Callbacks ---
 
 void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
@@ -536,6 +609,30 @@ void process_message(const uint8_t *data, const size_t data_len) {
     case CMD_TYPE_PROBE:
       LOGI(TAG, "<PROBE_CMD>");
       process_probe_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_OK:
+      LOGI(TAG, "<MODAL_OK>");
+      process_modal_ok_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_CANCEL:
+      LOGI(TAG, "<MODAL_CANCEL>");
+      process_modal_cancel_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_CHOICE:
+      LOGI(TAG, "<MODAL_CHOICE>");
+      process_modal_choice_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_INT:
+      LOGI(TAG, "<MODAL_INT>");
+      process_modal_int_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_FLOAT:
+      LOGI(TAG, "<MODAL_FLOAT>");
+      process_modal_float_cmd(data, data_len);
+      break;
+    case CMD_TYPE_MODAL_STR:
+      LOGI(TAG, "<MODAL_STR>");
+      process_modal_str_cmd(data, data_len);
       break;
 
     default:
@@ -756,7 +853,7 @@ void machine_poll_send_task_iter() {
       smsg.status = MACHINE_STATUS_WAITING_FOR_MACHINE;
       led_status_sending();
       remote_wrapper_send(display_mac_address, (uint8_t *)&smsg, sizeof(smsg));
-      LOGD(TAG, "Not connected — broadcasting WAITING_FOR_MACHINE.");
+      putchar('.');
     }
     if (iter == 2) {
       // Also send a keep-alive so the client knows the hub itself is running.
@@ -764,6 +861,25 @@ void machine_poll_send_task_iter() {
       ka.type = MSG_TYPE_KEEP_ALIVE;
       led_status_sending();
       remote_wrapper_send(display_mac_address, (uint8_t *)&ka, sizeof(ka));
+    }
+    // Periodic diagnostic logging for serial issues (suppress flooding)
+    static int diag_tick = 0;
+    if (++diag_tick >= 25) {  // approx every 25 * HUB_POLL_INTERVAL_MS
+      diag_tick = 0;
+      if (g_machine) {
+        if (g_machine->consecutive_parse_failures > 0) {
+          LOGW(TAG, "Serial parse failures: %d",
+               g_machine->consecutive_parse_failures);
+        } else if (g_machine->last_response_ms == 0) {
+          LOGW(TAG, "No serial responses received yet.");
+        } else {
+          unsigned long age = 0;
+#ifdef ESP32_HW
+          age = millis() - g_machine->last_response_ms;
+#endif
+          LOGW(TAG, "Last serial response %lu ms ago.", age);
+        }
+      }
     }
     return;
   }

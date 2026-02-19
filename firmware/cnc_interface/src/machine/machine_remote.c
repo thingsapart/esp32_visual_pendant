@@ -77,6 +77,18 @@ static void _machine_interface_remote_set_wcs_zero(machine_interface_t *self,
 static void _machine_interface_remote_next_wcs(machine_interface_t *self);
 static void _machine_interface_remote_probe(machine_interface_t *self,
                                             const char *probe_gcode);
+static void _machine_interface_remote_modal_ok(machine_interface_t *self,
+                                               int modal_id);
+static void _machine_interface_remote_modal_cancel(machine_interface_t *self,
+                                                   int modal_id);
+static void _machine_interface_remote_modal_choice(machine_interface_t *self,
+                                                   int choice, int modal_id);
+static void _machine_interface_remote_modal_int(machine_interface_t *self,
+                                                int val, int modal_id);
+static void _machine_interface_remote_modal_float(machine_interface_t *self,
+                                                  float val, int modal_id);
+static void _machine_interface_remote_modal_str(machine_interface_t *self,
+                                                const char *val, int modal_id);
 static void _machine_interface_remote_update_machine_state(
     machine_interface_t *self, uint32_t poll_state);
 
@@ -278,6 +290,91 @@ static void _machine_interface_remote_probe(machine_interface_t *self,
   free(cmd);
 }
 
+// --- Modal response implementations ---
+// Each function dismisses the local modal immediately, then sends the
+// appropriate response command back to the hub.
+
+static void _dismiss_local_modal(machine_interface_t *self, int modal_id) {
+  if (self->message_box && self->message_box->seq == modal_id) {
+    free_message_box_t(self->message_box);
+    self->message_box = NULL;
+    machine_interface_dialogs_updated(self);
+  }
+}
+
+static void _machine_interface_remote_modal_ok(machine_interface_t *self,
+                                               int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  modal_ok_cmd_t cmd;
+  cmd.type = CMD_TYPE_MODAL_OK;
+  cmd.modal_id = modal_id;
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
+static void _machine_interface_remote_modal_cancel(machine_interface_t *self,
+                                                   int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  modal_cancel_cmd_t cmd;
+  cmd.type = CMD_TYPE_MODAL_CANCEL;
+  cmd.modal_id = modal_id;
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
+static void _machine_interface_remote_modal_choice(machine_interface_t *self,
+                                                   int choice, int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  modal_choice_cmd_t cmd;
+  cmd.type = CMD_TYPE_MODAL_CHOICE;
+  cmd.modal_id = modal_id;
+  cmd.choice = choice;
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
+static void _machine_interface_remote_modal_int(machine_interface_t *self,
+                                                int val, int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  modal_int_cmd_t cmd;
+  cmd.type = CMD_TYPE_MODAL_INT;
+  cmd.modal_id = modal_id;
+  cmd.value = val;
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
+static void _machine_interface_remote_modal_float(machine_interface_t *self,
+                                                  float val, int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  modal_float_cmd_t cmd;
+  cmd.type = CMD_TYPE_MODAL_FLOAT;
+  cmd.modal_id = modal_id;
+  cmd.value = val;
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
+static void _machine_interface_remote_modal_str(machine_interface_t *self,
+                                                const char *val, int modal_id) {
+  _dismiss_local_modal(self, modal_id);
+  size_t val_len = val ? strlen(val) : 0;
+  size_t cmd_len = sizeof(modal_str_cmd_t) + val_len + 1;
+  modal_str_cmd_t *cmd = (modal_str_cmd_t *)malloc(cmd_len);
+  if (!cmd) {
+    LOGE(TAG, "Failed to allocate modal_str_cmd");
+    return;
+  }
+  cmd->type = CMD_TYPE_MODAL_STR;
+  cmd->modal_id = modal_id;
+  cmd->len = (uint16_t)val_len;
+  if (val) memcpy(cmd->value, val, val_len);
+  cmd->value[val_len] = '\0';
+  _send_command((machine_interface_remote_t *)self, (const uint8_t *)cmd,
+                cmd_len);
+  free(cmd);
+}
+
 void _machine_interface_remote_set_connected(machine_interface_t *self,
                                              bool connected) {
   machine_interface_remote_t *rself = (machine_interface_remote_t *)self;
@@ -343,6 +440,12 @@ machine_interface_remote_t *machine_interface_remote_init(
   self->base.set_wcs_zero = _machine_interface_remote_set_wcs_zero;
   self->base.next_wcs = _machine_interface_remote_next_wcs;
   self->base.probe = _machine_interface_remote_probe;
+  self->base.modal_ok = _machine_interface_remote_modal_ok;
+  self->base.modal_cancel = _machine_interface_remote_modal_cancel;
+  self->base.modal_choice = _machine_interface_remote_modal_choice;
+  self->base.modal_int = _machine_interface_remote_modal_int;
+  self->base.modal_float = _machine_interface_remote_modal_float;
+  self->base.modal_str = _machine_interface_remote_modal_str;
   self->base.process_machine_state_response =
       _machine_interface_remote_process_state;
   self->base.set_connected = _machine_interface_remote_set_connected;
@@ -765,6 +868,23 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       log_msg_t *msg = (log_msg_t *)data;
       machine_interface_log_message_updated(&self->base, msg->message);
       LOGI(TAG, "Received log message: %s", msg->message);
+      break;
+    }
+    case MSG_TYPE_DISMISS_MODAL: {
+      if (len < sizeof(dismiss_modal_msg_t)) {
+        LOGE(TAG, "Invalid dismiss_modal message length: %zu", len);
+        return;
+      }
+      dismiss_modal_msg_t *msg = (dismiss_modal_msg_t *)data;
+      // modal_id == -1 is a broadcast dismiss (dismiss whatever is shown).
+      if (self->base.message_box &&
+          (msg->modal_id == -1 ||
+           self->base.message_box->seq == msg->modal_id)) {
+        free_message_box_t(self->base.message_box);
+        self->base.message_box = NULL;
+        machine_interface_dialogs_updated(&self->base);
+        LOGI(TAG, "Modal dismissed by hub (seq %d)", msg->modal_id);
+      }
       break;
     }
     case MSG_TYPE_BINARY: {

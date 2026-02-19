@@ -425,20 +425,14 @@ void setup() {
     abort = true;
   }
 #else  // RRF Mode
-  LOGI(TAG, "Creating RRF Machine Task... ");
-  if (!abort && machine_task_run("MachineRRF", &machine_rrf.base,
+  // Run a single machine task for the multi-machine wrapper. Child
+  // implementations (RRF/Remote/DWC) are polled through the multi-machine
+  // interface which decides which child is active. Running per-child
+  // machine tasks causes duplicate polling and undesired probes (e.g.
+  // machine_rrf sending probe queries while machine_remote is active).
+  LOGI(TAG, "Creating Machine Task (multi-machine)... ");
+  if (!abort && machine_task_run("Machine", &machine.base,
                                  &machine_rrf_task, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
-
-  ram_usage();
-
-  LOGI(TAG, "Creating Remote Machine Task... ");
-  if (!abort && machine_task_run("MachineRemote", &machine_remote.base,
-                                 &machine_remote_task, TASK_MACHINE_CORE)) {
     LOGI(TAG, "DONE\n");
   } else {
     LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
