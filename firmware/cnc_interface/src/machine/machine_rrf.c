@@ -418,10 +418,10 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     size_t len = end ? (size_t)(end - start) : strlen(start);
 
     if (len > 0) {
-      LOGI(TAG, "Serial send line: %.*s", (int)len, start);
+      //LOGI(TAG, "Serial send line: %.*s", (int)len, start);
       serial_write(self->transport_state.serial.uart, (const uint8_t *)start, len);
     }
-    LOGI(TAG, "Serial send line: <NL>");
+    //LOGI(TAG, "Serial send line: <NL>");
     serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
     // Flush after each complete line to prevent UART TX FIFO fragmentation
     // when back-to-back gcode writes are queued (e.g. probe gcode -> M409).
@@ -441,6 +441,13 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   if (!root) {
     self->consecutive_parse_failures++;
     _maybe_forward_failed_json(self, json_response, "Serial");
+    // Treat this as a received response for back-off bookkeeping so we don't
+    // overly throttle polling due to transmission/parse errors.
+    if (self->unanswered_polls > 0) {
+      self->unanswered_polls--;
+      LOGD(TAG, "Poll backoff: unparseable response — counting against one pending poll (unanswered now: %u).",
+           (unsigned)self->unanswered_polls);
+    }
     if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
       LOGE(TAG, "Serial: %d consecutive parse failures — marking disconnected.",
            self->consecutive_parse_failures);
@@ -496,6 +503,13 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
     self->consecutive_parse_failures++;
     LOGD(TAG, "Serial: parse returned false (consecutive failures: %d)",
          self->consecutive_parse_failures);
+    // Even if parsing/semantic handling failed, count this as a response so
+    // an outstanding poll isn't treated as unanswered (avoid aggressive backoff).
+    if (self->unanswered_polls > 0) {
+      self->unanswered_polls--;
+      LOGD(TAG, "Poll backoff: unrecognized response — counting against one pending poll (unanswered now: %u).",
+           (unsigned)self->unanswered_polls);
+    }
     if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
       LOGE(TAG, "Serial: %d consecutive unrecognised responses — marking disconnected.",
            self->consecutive_parse_failures);
@@ -796,7 +810,39 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->base.modal_str = _machine_rrf_modal_str;
   self->base.probe = _machine_rrf_probe;
 
+  /* Respect transport-specific poll/backoff policy (RRF serial implements backoff). */
+  self->base.should_poll = NULL; /* will be set below for serial/dwc specific */
+
   return self;
+}
+
+// Transport-specific poll decision: respects unanswered poll back-off.
+static bool _machine_rrf_should_poll(machine_interface_t *iself) {
+  machine_rrf_t *self = (machine_rrf_t *)iself;
+#ifdef ESP32_HW
+  uint32_t now = millis();
+  uint32_t since_last_poll = now - self->last_poll_sent_ms;
+
+  if (self->unanswered_polls > 0 && since_last_poll > POLL_BACKOFF_FORGET_MS) {
+    LOGD(TAG, "Poll backoff: %lu ms since last poll — forgetting %u unanswered.",
+         (unsigned long)since_last_poll, (unsigned)self->unanswered_polls);
+    self->unanswered_polls = 0;
+  }
+
+  if (self->unanswered_polls >= POLL_BACKOFF_THRESHOLD) {
+    uint8_t shift = self->unanswered_polls - POLL_BACKOFF_THRESHOLD;
+    if (shift > 3) shift = 3;
+    uint32_t backoff_ms = POLL_BACKOFF_BASE_MS << shift;
+    if (backoff_ms > POLL_BACKOFF_MAX_MS) backoff_ms = POLL_BACKOFF_MAX_MS;
+    if (since_last_poll < backoff_ms) {
+      LOGD(TAG, "Poll backoff: skipping poll (%u unanswered, need %lu ms, only %lu ms elapsed).",
+           (unsigned)self->unanswered_polls, (unsigned long)backoff_ms,
+           (unsigned long)since_last_poll);
+      return false;
+    }
+  }
+#endif
+  return true;
 }
 
 // --- Public Constructors/Initializers ---
@@ -830,6 +876,9 @@ machine_rrf_t *machine_rrf_init_serial(machine_rrf_t *self, int rrf_serial_num,
   self->_list_files_impl = _serial_list_files_impl;
   self->_deinit_impl = _serial_deinit_impl;
   self->_proc_state_resp_impl = _serial_proc_state_resp_impl;
+
+  /* RRF-specific poll/backoff hook */
+  self->base.should_poll = _machine_rrf_should_poll;
 
 #ifndef ASYNC_RESPONSE_PROCESSING
   // Register a synchronous line callback so serial responses are parsed
@@ -883,6 +932,9 @@ machine_rrf_t *machine_rrf_init_dwc(machine_rrf_t *self, const char *host,
   self->_list_files_impl = _dwc_list_files_impl;
   self->_deinit_impl = _dwc_deinit_impl;
   self->_proc_state_resp_impl = _dwc_proc_state_resp_impl;
+
+  /* RRF-specific poll/backoff hook */
+  self->base.should_poll = _machine_rrf_should_poll;
 
   // Attempt to connect immediately
   _machine_rrf_attempt_connect(&self->base);

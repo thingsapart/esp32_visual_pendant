@@ -118,8 +118,14 @@ void machine_send_task(void *pvParameters) {
     now = xTaskGetTickCount();
     if ((now - last_poll_time) >= poll_interval_ticks) {
         if (poll_counter++ % MACHINE_POLL_EVERY_NTH_INTERVAL == 0) {
+          // Ask the machine interface if it's ok to poll now (backoff may skip
+          // polling when no responses have been received).
+          if (machine_interface_should_poll(machine)) {
             // This triggers _update_machine_state -> _serial_poll_state_impl -> queues M409
             machine_interface_task_loop_iter(machine);
+          } else {
+            LOGD(TAG, "Skipping poll due to backoff policy");
+          }
         }
         
         // Advance last_poll_time to maintain steady cadence, but don't fall behind if blocked long

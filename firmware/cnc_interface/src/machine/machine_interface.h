@@ -209,6 +209,7 @@ typedef struct machine_interface_t {
   void (*process_machine_state_response)(
       machine_interface_t *self, void *data,
       size_t len);  // Called when new machine state data is available.
+  bool (*should_poll)(machine_interface_t *self);
   bool (*is_connected)(machine_interface_t *self);
   void (*attempt_connect)(machine_interface_t *self);
   void (*list_files)(machine_interface_t *self, const char *path);
@@ -299,6 +300,8 @@ void machine_interface_probe(machine_interface_t *self,
                              const char *probe_gcode);
 void machine_interface_process_machine_state_response(machine_interface_t *self,
                                                       void *data, size_t len);
+
+bool machine_interface_should_poll(machine_interface_t *self);
 
 bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             const char *path, void *user_data,

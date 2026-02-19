@@ -740,6 +740,12 @@ void machine_interface_process_machine_state_response(machine_interface_t *self,
   self->process_machine_state_response(self, data, len);
 }
 
+bool machine_interface_should_poll(machine_interface_t *self) {
+  if (!self) return false;
+  if (self->should_poll) return self->should_poll(self);
+  return true;
+}
+
 void free_message_box_t(message_box_t *msg_box) {
   if (!msg_box) {
     return;

@@ -28,7 +28,9 @@
 static const char *TAG = "hub_main";
 
 // --- Configuration ---
-#define HUB_POLL_INTERVAL_MS 200
+// Default poll interval for hub loop (ms). Reduced to ~120ms to improve
+// responsiveness while avoiding excessive polling.
+#define HUB_POLL_INTERVAL_MS 120
 #define FULL_STATE_INTERVAL \
   20  // Send full state every nth poll (every n * interval secs)
 

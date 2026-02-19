@@ -4,8 +4,8 @@
 // every 10th time the GCode send interval function is called.
 // MACHINE_POLL_EVERY_NTH_PROCESS * MACHINE_SEND_GCODE_INTERVAL_MS should work
 // out to about 100-200ms.
-#define MACHINE_POLL_EVERY_NTH_INTERVAL 2
-#define MACHINE_SEND_GCODE_INTERVAL_MS 100
+#define MACHINE_POLL_EVERY_NTH_INTERVAL 3
+#define MACHINE_SEND_GCODE_INTERVAL_MS 50
 
 // --- G-code Queue ---
 #define MAX_GCODE_STR_LEN 128
