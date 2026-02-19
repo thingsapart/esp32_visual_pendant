@@ -16,7 +16,7 @@
 // #  define RRF_SIM 1
 #endif
 
-#define RRF_SERIAL_UART_NUM 0
+#define RRF_SERIAL_UART_NUM 1
 // Connect to real RRF controller, but simulate moves via "G92 <AXIS>NN" when
 // motors are not connected to controller. #define CONTROLLER_BENCH_TEST
 
