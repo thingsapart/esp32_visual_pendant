@@ -1063,12 +1063,8 @@ void setup_machine_interface() {
   led_status_connecting();  // Start in connecting state
   
   // Initialize the machine interface
-  // Use the standard Serial (USB/CDC) handle when available to avoid
-  // allocating a new HardwareSerial for UART0 which can conflict with the
-  // USB CDC driver and cause crashes on disconnect. Pass -1 to request the
-  // standard serial handle from the wrapper.
-  g_machine = machine_rrf_create_serial(-1, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
-                                 MACH_UART_PIN_RX);
+  g_machine = machine_rrf_create_serial(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
+                                 MACH_UART_PIN_RX);  // Use UART 0
   if (!g_machine) {
     LOGI(TAG, "Failed to create machine interface");
     led_status_error();  // Signal error with red LED
