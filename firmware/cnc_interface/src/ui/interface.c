@@ -266,8 +266,14 @@ static void _show_toast(interface_t *interface, const char *message) {
 static void on_log_message(machine_interface_t *machine, void *user_data,
                            const char *message) {
   interface_t *interface = (interface_t *)user_data;
-  // Log verbatim to the pendant's serial output.
+  // Log verbatim to the pendant's serial output regardless.
   LOGI(TAG, "Hub msg: %s", message);
+  // Suppress noisy "Error: Bad command:" lines from the toast bar — these are
+  // echoed back by the machine when it doesn't recognise a polled M409 query
+  // and do not represent actionable errors for the operator.
+  if (strncmp(message, "Error: Bad command:", 19) == 0) {
+    return;
+  }
   // Store and request UI toast.
   snprintf(interface->log_message_buf, sizeof(interface->log_message_buf),
            "%s", message);
