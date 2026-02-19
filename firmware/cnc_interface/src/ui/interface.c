@@ -174,12 +174,114 @@ static void disconnected_overlay_event_handler(lv_event_t * e) {
     }
 }
 
+// --- Toast bar (hub error/log messages) ---
+
+// Forward declaration
+static void _show_toast(interface_t *interface, const char *message);
+
+typedef struct {
+  interface_t *interface;
+  lv_timer_t  *timer;
+} toast_timer_ctx_t;
+
+static void _toast_timer_cb(lv_timer_t *timer) {
+  toast_timer_ctx_t *ctx = (toast_timer_ctx_t *)lv_timer_get_user_data(timer);
+  if (ctx) {
+    interface_t *iface = ctx->interface;
+    if (iface && iface->toast_bar && lv_obj_is_valid(iface->toast_bar)) {
+      lv_obj_del(iface->toast_bar);
+      iface->toast_bar = NULL;
+    }
+    free(ctx);
+  }
+  lv_timer_delete(timer);
+}
+
+static void _toast_dismiss_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  interface_t *iface = (interface_t *)lv_event_get_user_data(e);
+  if (iface && iface->toast_bar && lv_obj_is_valid(iface->toast_bar)) {
+    lv_obj_del(iface->toast_bar);
+    iface->toast_bar = NULL;
+  }
+}
+
+static void _show_toast(interface_t *interface, const char *message) {
+  // Dismiss any existing toast first.
+  if (interface->toast_bar && lv_obj_is_valid(interface->toast_bar)) {
+    lv_obj_del(interface->toast_bar);
+    interface->toast_bar = NULL;
+  }
+
+  lv_obj_t *screen  = lv_screen_active();
+  int32_t screen_w  = lv_obj_get_width(screen);
+  const int32_t bar_h = 50;
+
+  // Outer container pinned to the bottom of the screen.
+  lv_obj_t *bar = lv_obj_create(screen);
+  lv_obj_set_size(bar, screen_w, bar_h);
+  lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(0xFFD000), LV_PART_MAIN);  // amber – high-vis
+  lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_radius(bar, 0, LV_PART_MAIN);
+  lv_obj_set_style_border_width(bar, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(bar, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Message label – black text, scrolls if too long.
+  lv_obj_t *lbl = lv_label_create(bar);
+  lv_obj_set_style_text_color(lbl, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_label_set_text(lbl, message);
+  lv_obj_set_width(lbl, screen_w - 52);   // leave room for X button
+  lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 6, 0);
+
+  // X dismiss button on the right.
+  lv_obj_t *btn = lv_button_create(bar);
+  lv_obj_set_size(btn, 40, 40);
+  lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
+  lv_obj_set_style_bg_color(btn, lv_color_hex(0xCC2200), LV_PART_MAIN);
+  lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
+  lv_obj_add_event_cb(btn, _toast_dismiss_cb, LV_EVENT_CLICKED, interface);
+  lv_obj_t *x_lbl = lv_label_create(btn);
+  lv_label_set_text(x_lbl, LV_SYMBOL_CLOSE);
+  lv_obj_set_style_text_color(x_lbl, lv_color_white(), LV_PART_MAIN);
+  lv_obj_center(x_lbl);
+
+  interface->toast_bar = bar;
+
+  // Auto-dismiss after 5 seconds.
+  toast_timer_ctx_t *ctx = (toast_timer_ctx_t *)malloc(sizeof(toast_timer_ctx_t));
+  if (ctx) {
+    ctx->interface = interface;
+    lv_timer_t *t = lv_timer_create(_toast_timer_cb, 5000, ctx);
+    ctx->timer = t;
+    lv_timer_set_repeat_count(t, 1);
+  }
+}
+
+// --- Log message callback (called from machine thread) ---
+
+static void on_log_message(machine_interface_t *machine, void *user_data,
+                           const char *message) {
+  interface_t *interface = (interface_t *)user_data;
+  // Log verbatim to the pendant's serial output.
+  LOGI(TAG, "Hub msg: %s", message);
+  // Store and request UI toast.
+  snprintf(interface->log_message_buf, sizeof(interface->log_message_buf),
+           "%s", message);
+  interface->dirty_flags |= UI_DIRTY_LOG_MESSAGE;
+}
+
 // --- Public API ---
 
 void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->machine = machine;
   interface->dirty_flags = UI_DIRTY_ALL;  // Mark all as dirty for initial sync
   interface->current_msgbox = NULL;
+  interface->log_message_buf[0] = '\0';
+  interface->toast_bar = NULL;
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
@@ -212,6 +314,7 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
                                          on_files_change);
   machine_interface_add_files_changed_cb(machine, "macros", interface,
                                          on_files_change);
+  machine_interface_add_log_message_cb(machine, interface, on_log_message);
 
   // Find the main tileview and attach an event handler to track its state
   lv_obj_t* tileview = obj_registry_get("main_tileview");
@@ -503,6 +606,12 @@ void interface_tick(interface_t *interface) {
            mb->seq, mb->mode, title, text);
     }
     after_dialogs:;
+  }
+
+  if (flags_to_process & UI_DIRTY_LOG_MESSAGE) {
+    if (interface->log_message_buf[0] != '\0') {
+      _show_toast(interface, interface->log_message_buf);
+    }
   }
 
   if (flags_to_process & UI_DIRTY_JOG_STATE) {

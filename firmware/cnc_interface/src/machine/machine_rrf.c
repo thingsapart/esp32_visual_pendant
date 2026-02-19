@@ -390,8 +390,10 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
     self->consecutive_parse_failures++;
-    LOGW(TAG, "Serial: Failed to parse JSON (failure #%d). Raw: %.80s",
+    LOGW(TAG, "Serial: Failed to parse JSON (failure #%d). Raw: %s",
          self->consecutive_parse_failures, json_response);
+    // Relay the raw unparseable line verbatim to the pendant.
+    machine_interface_log_message_updated(&self->base, json_response);
     if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
       LOGE(TAG, "Serial: %d consecutive parse failures — marking disconnected.",
            self->consecutive_parse_failures);
@@ -404,7 +406,7 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   if (cJSON_GetObjectItemCaseSensitive(root, "key")) {
     succ = machine_rrf_parse_m409_response(self, root);
     if (!succ) {
-      LOGW(TAG, "Serial: m409 parse returned false for: %.80s", json_response);
+      LOGW(TAG, "Serial: m409 parse returned false for: %s", json_response);
     }
   } else if (cJSON_GetObjectItemCaseSensitive(root, "seq") &&
              cJSON_GetObjectItemCaseSensitive(root, "resp")) {
@@ -421,7 +423,9 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
       succ = true;
     }
   } else {
-    LOGW(TAG, "Serial: Unrecognized JSON response structure: %.80s", json_response);
+    LOGW(TAG, "Serial: Unrecognized JSON response structure: %s", json_response);
+    // Relay unexpected structures verbatim to the pendant.
+    machine_interface_log_message_updated(&self->base, json_response);
   }
 
   cJSON_Delete(root);

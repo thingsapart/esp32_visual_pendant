@@ -29,6 +29,7 @@ typedef enum {
   UI_DIRTY_JOG_STATE = (1 << 9),     // Active jog axis and step values
   UI_DIRTY_FILES_GCODES = (1 << 10),
   UI_DIRTY_FILES_MACROS = (1 << 11),
+  UI_DIRTY_LOG_MESSAGE  = (1 << 12),  // Verbatim message from hub to toast
   UI_DIRTY_ALL = 0xFFFFFFFF,
 } ui_dirty_flags_t;
 
@@ -38,6 +39,8 @@ typedef struct {
   volatile uint32_t dirty_flags;
   lv_obj_t *probing_wizard;
   lv_obj_t *current_msgbox;  // Currently shown RRF machine modal, or NULL.
+  char log_message_buf[256];  // Latest log/error message pending display as toast.
+  lv_obj_t *toast_bar;        // Currently visible toast bar, or NULL.
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow
