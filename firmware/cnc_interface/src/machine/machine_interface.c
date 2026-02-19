@@ -631,9 +631,22 @@ void machine_interface_current_move_axis_updated(machine_interface_t *self) {
   call_callbacks(current_move_axis_changed_cb);
 }
 
-void machine_interface_log_message_updated(machine_interface_t *self,
+bool machine_interface_log_message_updated(machine_interface_t *self,
                                            const char *message) {
-  call_callbacks_with_args(log_message_cb, message);
+  bool handled = false;
+  self->last_log_message_handled = false;
+  for (int i = 0; i < MAX_CALLBACKS; i++) {
+    if (self->log_message_cb[i].cb_fn) {
+      bool cb_handled = false;
+      // Call the callback and honor its return value indicating it handled
+      // the message. Protect against callbacks that still use the old
+      // signature by assuming false if the function pointer is NULL.
+      cb_handled = self->log_message_cb[i].cb_fn(self, self->log_message_cb[i].user_data, message);
+      handled = handled || cb_handled;
+      self->last_log_message_handled = handled; // expose to later callbacks
+    }
+  }
+  return handled;
 }
 
 void machine_interface_update_position(machine_interface_t *self, float *values,

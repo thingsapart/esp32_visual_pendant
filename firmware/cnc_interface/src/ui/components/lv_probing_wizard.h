@@ -136,6 +136,7 @@ typedef void (*set_wcs_origin_cb_t)(lv_obj_t * wizard_obj, uint8_t wcs_index, fl
 // --- Deferred (Thread-Safe) Functions for Callbacks ---
 void lv_probing_wizard_set_z_top_deferred(lv_obj_t * obj, float z_top);
 void lv_probing_wizard_report_final_result_deferred(lv_obj_t * obj, float x, float y);
+void lv_probing_wizard_report_full_result_deferred(lv_obj_t * obj, float x, float y, const lv_probing_wizard_details_t * details);
 void lv_probing_wizard_advance_step_deferred(lv_obj_t * obj);
 void lv_probing_wizard_set_active_step_deferred(lv_obj_t * obj, int8_t step_index);
 

@@ -56,9 +56,10 @@ static const lv_probing_action_t circle_probe_actions[] = {
 static const lv_probing_action_t corner_probe_actions[] = {
     {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Click on the corner you wish to probe.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_SELECT_CORNER},
+    {.instruction_text = "Jog near the selected corner, above the workpiece.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
     {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Probing corner...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
-    {.instruction_text = "Probing complete. Corner is set.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
+    {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
 
 static const lv_probing_action_t * const probe_routines[] = {
@@ -122,6 +123,8 @@ typedef enum {
     DEFERRED_ACTION_UPDATE_UI,
     DEFERRED_ACTION_SET_Z_AND_ADVANCE,
     DEFERRED_ACTION_SET_FINAL_AND_ADVANCE,
+    DEFERRED_ACTION_ADVANCE_STEP,
+    DEFERRED_ACTION_SET_FULL_RESULT_AND_ADVANCE,
 } deferred_action_t;
 
 typedef struct {
@@ -192,6 +195,7 @@ typedef struct {
     volatile int8_t deferred_next_step;
     volatile float deferred_z_top;
     volatile lv_probing_wizard_point_float_t deferred_final_result;
+    volatile lv_probing_wizard_details_t deferred_details;
 } lv_probing_wizard_t;
 
 static void deferred_update_timer_cb(lv_timer_t * timer);
@@ -853,8 +857,11 @@ static void update_ui_state(lv_obj_t * obj) {
          lv_label_set_text(wiz->result_label_y, "Y:   - - -");
          lv_label_set_text(wiz->result_label_z, "Z:   - - -");
     } else if (probing_mode && wiz->current_action) {
-        // Handle enabling/disabling the Next button during a probing sequence
-        if (wiz->current_action->type == ACTION_PROBE_Z_TOP && !wiz->z_top_is_set) {
+        // Handle enabling/disabling the Next button during a probing sequence.
+        // During automated probe actions (Z or XY), the Next button must be disabled
+        // to prevent the user from advancing before the machine finishes.
+        if (wiz->current_action->type == ACTION_PROBE_Z_TOP ||
+            wiz->current_action->type == ACTION_PROBE_POINT) {
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
         } else {
             lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
@@ -1154,7 +1161,23 @@ void lv_probing_wizard_advance_step_deferred(lv_obj_t * obj) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if (!wiz) return;
     wiz->deferred_next_step = wiz->active_step + 1;
-    wiz->deferred_action = DEFERRED_ACTION_SET_Z_AND_ADVANCE; // Z is the only one using this currently
+    wiz->deferred_action = DEFERRED_ACTION_ADVANCE_STEP;
+    schedule_deferred_update(wiz);
+}
+
+void lv_probing_wizard_report_full_result_deferred(lv_obj_t * obj, float x, float y, const lv_probing_wizard_details_t * details) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+    wiz->deferred_final_result.x = x;
+    wiz->deferred_final_result.y = y;
+    if (details) {
+        // Copy details into volatile storage (safe for cross-task)
+        lv_probing_wizard_details_t * dst = (lv_probing_wizard_details_t *)&wiz->deferred_details;
+        *dst = *details;
+    }
+    uint8_t num_steps = probe_routine_sizes[wiz->mode];
+    wiz->deferred_next_step = num_steps - 1;
+    wiz->deferred_action = DEFERRED_ACTION_SET_FULL_RESULT_AND_ADVANCE;
     schedule_deferred_update(wiz);
 }
 
@@ -1185,6 +1208,18 @@ static void deferred_update_timer_cb(lv_timer_t * timer) {
             lv_probing_wizard_report_final_result(obj, wiz->deferred_final_result.x, wiz->deferred_final_result.y);
             lv_probing_wizard_set_active_step(obj, wiz->deferred_next_step, false);
             break;
+        case DEFERRED_ACTION_ADVANCE_STEP:
+            if (wiz->deferred_next_step >= 0 && wiz->deferred_next_step < probe_routine_sizes[wiz->mode]) {
+                set_active_step(obj, wiz->deferred_next_step, false);
+            }
+            break;
+        case DEFERRED_ACTION_SET_FULL_RESULT_AND_ADVANCE: {
+            lv_probing_wizard_details_t details = *(lv_probing_wizard_details_t *)&wiz->deferred_details;
+            lv_probing_wizard_report_details(obj, &details);
+            lv_probing_wizard_report_final_result(obj, wiz->deferred_final_result.x, wiz->deferred_final_result.y);
+            lv_probing_wizard_set_active_step(obj, wiz->deferred_next_step, false);
+            break;
+        }
         case DEFERRED_ACTION_NONE:
         default:
             break;

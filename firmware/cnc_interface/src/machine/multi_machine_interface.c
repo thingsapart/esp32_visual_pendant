@@ -594,15 +594,15 @@ void _mach_cb_files(machine_interface_t *mach, void *user_data,
   machine_interface_files_updated(&self->base, path);
 }
 
-static void _mach_cb_log_message(machine_interface_t *mach, void *user_data,
+static bool _mach_cb_log_message(machine_interface_t *mach, void *user_data,
                                  const char *message) {
   multi_machine_interface_t *self = (multi_machine_interface_t *)user_data;
-  
+
   // Only process/broadcast logs from the currently active machine
-  if (!IS_ACTIVE_MACHINE(self, mach)) return;
-  
+  if (!IS_ACTIVE_MACHINE(self, mach)) return false;
+
   // Propagate the log message up to listeners of this multi_machine interface (e.g., the UI)
-  machine_interface_log_message_updated(&self->base, message);
+  return machine_interface_log_message_updated(&self->base, message);
 }
 
 static void _mach_cb_connected(machine_interface_t* mach, void* user_data) {

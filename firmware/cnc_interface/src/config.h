@@ -42,3 +42,11 @@
 #define TASK_MACHINE_STATE_PROC_CORE 1  // Machine State Processing Task Core.
 
 #endif
+
+// Control how raw, unparseable M409 JSON is forwarded to clients.
+// 0 = send short message to client (no raw JSON)
+// 1 = log locally only, do NOT forward to client (default)
+// 2 = log only on hub and do not forward to client
+#ifndef M409_FAILED_JSON_MODE
+#define M409_FAILED_JSON_MODE 1
+#endif

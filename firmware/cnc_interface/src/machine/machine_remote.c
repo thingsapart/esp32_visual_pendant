@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "driver/remote_comms_wrapper.h"  // For ESP-NOW communication
 
@@ -22,9 +23,10 @@ static const char *TAG = "machine_remote";
 // separate messages and thus reassembled here.
 
 #ifndef MAX_CONCURRENT_FRAGMENTED_MSGS
-// Max fragmented binary messages being reassembled at once, any more and new
-// messages overwrite old ones and received fragments are discarded.
-#define MAX_CONCURRENT_FRAGMENTED_MSGS 2
+// Max fragmented binary messages being reassembled at once. Increase default
+// from 2 to 4 to reduce the probability of overwriting in-progress
+// reassemblies when multiple large messages are in flight.
+#define MAX_CONCURRENT_FRAGMENTED_MSGS 4
 #endif
 
 // Structure to hold state for one in-progress fragmentede msg reassembly.
@@ -38,14 +40,15 @@ typedef struct {
   uint16_t fragments_received_count;  // How many fragments have arrived so far
   bool *fragments_received_mask;  // Bitmap (or bool array) tracking received
                                   // fragments
-  // uint32_t last_active_time; // Optional: For LRU eviction
+  uint32_t last_active_tick; // Monotonic activity tick for LRU eviction
 } binary_payload_buffer_t;
 
 // --- Global State for Reassembly ---
 static binary_payload_buffer_t
-    g_binary_payload_buffers[MAX_CONCURRENT_FRAGMENTED_MSGS];
+  g_binary_payload_buffers[MAX_CONCURRENT_FRAGMENTED_MSGS];
 static size_t g_next_binary_buffer_slot =
-    0;  // Index for next allocation/overwrite
+  0;  // Index for next allocation/overwrite
+static uint32_t g_reassembly_tick = 0; // Incremented on activity for LRU
 
 // --- Forward Declarations ---
 static void _machine_interface_remote_send_gcode(machine_interface_t *self,
@@ -584,22 +587,46 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
     }
   }
 
-  // If no existing buffer, try to allocate a new one
+  // If no existing buffer, try to allocate a new one. Prefer an unused slot
+  // if available; only overwrite when all slots are busy.
   if (target_slot == -1) {
-    target_slot = g_next_binary_buffer_slot;
-    LOGI(TAG,
-         "New binary sequence %u detected. Attempting allocation in slot %d.",
-         frag_msg->seq_id, target_slot);
+    // Search for a free slot first
+    int free_slot = -1;
+    for (size_t i = 0; i < MAX_CONCURRENT_FRAGMENTED_MSGS; ++i) {
+      if (!g_binary_payload_buffers[i].is_valid) {
+        free_slot = (int)i;
+        break;
+      }
+    }
 
-    // If the chosen slot is already in use, discard the old one
-    if (g_binary_payload_buffers[target_slot].is_valid) {
+    if (free_slot != -1) {
+      target_slot = free_slot;
+    } else {
+      // No free slot: pick the least-recently-used (oldest) slot for eviction
+      uint32_t oldest_tick = 0xFFFFFFFFu;
+      int oldest_idx = -1;
+      for (size_t i = 0; i < MAX_CONCURRENT_FRAGMENTED_MSGS; ++i) {
+        if (g_binary_payload_buffers[i].last_active_tick < oldest_tick) {
+          oldest_tick = g_binary_payload_buffers[i].last_active_tick;
+          oldest_idx = (int)i;
+        }
+      }
+      if (oldest_idx == -1) {
+        // Fallback to circular if something unexpected happened
+        target_slot = g_next_binary_buffer_slot;
+      } else {
+        target_slot = oldest_idx;
+      }
       LOGW(TAG,
-           "Overwriting in-progress reassembly in slot %d (Seq ID: %u) for new "
-           "Seq ID %u.",
+           "No free reassembly slots available; evicting slot %d (Seq ID: %u) for new Seq ID %u.",
            target_slot, g_binary_payload_buffers[target_slot].seq_id,
            frag_msg->seq_id);
       binary_payload_slot_cleanup(target_slot);
     }
+
+    LOGI(TAG,
+         "New binary sequence %u detected. Allocating in slot %d.",
+         frag_msg->seq_id, target_slot);
 
     // Allocate main buffer
     g_binary_payload_buffers[target_slot].buffer =
@@ -607,8 +634,6 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
     if (!g_binary_payload_buffers[target_slot].buffer) {
       LOGE(TAG, "Failed to allocate %u bytes for reassembly buffer (Seq %u).",
            frag_msg->total_payload_size, frag_msg->seq_id);
-      // No slot allocated, subsequent fragments for this seq will also fail
-      // here
       return;
     }
 
@@ -617,11 +642,9 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
         (bool *)calloc(frag_msg->total_fragments, sizeof(bool));
     if (!g_binary_payload_buffers[target_slot].fragments_received_mask) {
       LOGE(TAG,
-           "Failed to allocate fragment mask (%u bools) for reassembly (Seq "
-           "%u).",
+           "Failed to allocate fragment mask (%u bools) for reassembly (Seq %u).",
            frag_msg->total_fragments, frag_msg->seq_id);
-      free(g_binary_payload_buffers[target_slot]
-               .buffer);  // Clean up partial allocation
+      free(g_binary_payload_buffers[target_slot].buffer);
       g_binary_payload_buffers[target_slot].buffer = NULL;
       return;
     }
@@ -631,16 +654,15 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
     g_binary_payload_buffers[target_slot].seq_id = frag_msg->seq_id;
     g_binary_payload_buffers[target_slot].sub_type = frag_msg->sub_type;
     g_binary_payload_buffers[target_slot].total_size =
-        frag_msg->total_payload_size;
+      frag_msg->total_payload_size;
     g_binary_payload_buffers[target_slot].total_fragments =
-        frag_msg->total_fragments;
+      frag_msg->total_fragments;
     g_binary_payload_buffers[target_slot].fragments_received_count = 0;
-    // g_binary_payload_buffers[target_slot].last_active_time =
-    // esp_log_timestamp(); // Optional
+    g_binary_payload_buffers[target_slot].last_active_tick = ++g_reassembly_tick;
 
-    // Move to the next slot for the *next* allocation
+    // Move to the next slot for compatibility with older logic
     g_next_binary_buffer_slot =
-        (g_next_binary_buffer_slot + 1) % MAX_CONCURRENT_FRAGMENTED_MSGS;
+      (g_next_binary_buffer_slot + 1) % MAX_CONCURRENT_FRAGMENTED_MSGS;
 
     LOGI(TAG, "Allocated slot %d for Seq %u (Total Size: %u, Fragments: %u)",
          target_slot, frag_msg->seq_id, frag_msg->total_payload_size,
@@ -681,7 +703,8 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
     // Mark fragment as received
     target_buffer->fragments_received_mask[frag_msg->fragment_index] = true;
     target_buffer->fragments_received_count++;
-    // target_buffer->last_active_time = esp_log_timestamp(); // Optional
+    // Update LRU tick
+    target_buffer->last_active_tick = ++g_reassembly_tick;
 
     LOGV(TAG, "Seq %u: Received %u / %u fragments.", target_buffer->seq_id,
          target_buffer->fragments_received_count,
@@ -866,8 +889,32 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
         return;
       }
       log_msg_t *msg = (log_msg_t *)data;
-      machine_interface_log_message_updated(&self->base, msg->message);
-      LOGI(TAG, "Received log message: %s", msg->message);
+      // Split batched messages by newline and dispatch each line separately.
+      const char *p = msg->message;
+      const char *line_start = p;
+      while (*p) {
+        if (*p == '\n') {
+          size_t line_len = p - line_start;
+          if (line_len > 0) {
+            char *tmp = (char *)malloc(line_len + 1);
+            if (tmp) {
+              memcpy(tmp, line_start, line_len);
+              tmp[line_len] = '\0';
+              machine_interface_log_message_updated(&self->base, tmp);
+              LOGI(TAG, "Received log message: %s", tmp);
+              free(tmp);
+            }
+          }
+          p++; line_start = p;
+        } else {
+          p++;
+        }
+      }
+      // Final trailing line
+      if (p != line_start) {
+        machine_interface_log_message_updated(&self->base, line_start);
+        LOGI(TAG, "Received log message: %s", line_start);
+      }
       break;
     }
     case MSG_TYPE_DISMISS_MODAL: {
@@ -1298,10 +1345,35 @@ static void process_binary_payload(machine_interface_t *self, uint8_t sub_type,
     case MSG_SUB_TYPE_FILE_LIST:
       process_binary_msg_file_list(mach, data, size);
       break;
-    case MSG_SUB_TYPE_LOG_MESSAGE:
-      machine_interface_log_message_updated(self, (const char *)data);
-      LOGI(TAG, "Received fragmented log message: %s", (const char *)data);
+    case MSG_SUB_TYPE_LOG_MESSAGE: {
+      // Fragmented message has been reassembled into data (NUL-terminated).
+      const char *buf = (const char *)data;
+      const char *p = buf;
+      const char *line_start = p;
+      while (*p) {
+        if (*p == '\n') {
+          size_t line_len = p - line_start;
+          if (line_len > 0) {
+            char *tmp = (char *)malloc(line_len + 1);
+            if (tmp) {
+              memcpy(tmp, line_start, line_len);
+              tmp[line_len] = '\0';
+              machine_interface_log_message_updated(self, tmp);
+              LOGI(TAG, "Received fragmented log message: %s", tmp);
+              free(tmp);
+            }
+          }
+          p++; line_start = p;
+        } else {
+          p++;
+        }
+      }
+      if (p != line_start) {
+        machine_interface_log_message_updated(self, line_start);
+        LOGI(TAG, "Received fragmented log message: %s", line_start);
+      }
       break;
+    }
     default:
       LOGT(TAG, "Received unknown reassembled payload sub-type: %u", sub_type);
       break;

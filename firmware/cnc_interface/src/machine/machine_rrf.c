@@ -27,6 +27,36 @@ static const char *TAG = "machine_rrf";
 #define SERIAL_MAX_PARSE_FAILURES 10
 #endif
 
+// Control how raw, unparseable M409 JSON is forwarded to the pendant/client.
+// 0 = send short message to client (no raw JSON)
+// 1 = send full raw JSON to client and log (default/current behaviour)
+// 2 = log on hub only and do not forward to client
+#ifndef M409_FAILED_JSON_MODE
+#define M409_FAILED_JSON_MODE 1
+#endif
+
+static void _maybe_forward_failed_json(machine_rrf_t *self,
+                                      const char *json_response,
+                                      const char *context) {
+  (void)context;
+#if M409_FAILED_JSON_MODE == 0
+  char short_msg[128];
+  if (context && context[0])
+    snprintf(short_msg, sizeof(short_msg), "M409 parse failed (%s)", context);
+  else
+    snprintf(short_msg, sizeof(short_msg), "M409 parse failed");
+  machine_interface_log_message_updated(&self->base, short_msg);
+  LOGV(TAG, "Failed JSON (not forwarded): %s", json_response);
+#elif M409_FAILED_JSON_MODE == 1
+  // Log the full raw JSON locally only (do not forward to client / show toast).
+  LOGW(TAG, "Raw failed JSON: %s", json_response);
+#else
+  // Do not forward to client; only log locally.
+  LOGW(TAG, "JSON parse failed (not forwarded) [%s]: %s",
+       context ? context : "", json_response);
+#endif
+}
+
 #ifdef TFT_WIDTH
 #include "lvgl.h"
 #endif
@@ -196,7 +226,8 @@ static bool _dwc_parse_json_response(machine_rrf_t *self,
                                      const char *json_response) {
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
-    // Caller will log with more context
+    // Forward/log the failing JSON according to configuration
+    _maybe_forward_failed_json(self, json_response, "DWC");
     return false;
   }
   bool success = machine_rrf_parse_m409_response(self, root);
@@ -390,10 +421,7 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
     self->consecutive_parse_failures++;
-    LOGW(TAG, "Serial: Failed to parse JSON (failure #%d). Raw: %s",
-         self->consecutive_parse_failures, json_response);
-    // Relay the raw unparseable line verbatim to the pendant.
-    machine_interface_log_message_updated(&self->base, json_response);
+    _maybe_forward_failed_json(self, json_response, "Serial");
     if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
       LOGE(TAG, "Serial: %d consecutive parse failures — marking disconnected.",
            self->consecutive_parse_failures);

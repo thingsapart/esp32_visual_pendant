@@ -94,16 +94,16 @@ static void simulate_mos_probe(RRFMachineSimStream* stream, const char* line) {
     // Parse params common to MOS macros
     float j_start_x = get_gcode_param(line, 'J', vm.m_pos[0]);
     float k_start_y = get_gcode_param(line, 'K', vm.m_pos[1]);
-    // float l_start_z = get_gcode_param(line, 'L', vm.m_pos[2]);
-    // float h_size = get_gcode_param(line, 'H', 0); // Dim or Dia
+    float l_start_z = get_gcode_param(line, 'L', vm.m_pos[2]);
+    float h_size    = get_gcode_param(line, 'H', 20.0f);
+    float i_size    = get_gcode_param(line, 'I', 20.0f);
 
     char buf[128];
 
-    if (strstr(macro, "G6510.1")) { // Z Probe
+    if (strstr(macro, "G6510.1")) { // Z Single-Surface Probe
         LOGI(TAG, "Simulating Z Probe...");
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Probing...
+        vTaskDelay(pdMS_TO_TICKS(1000));
         
-        // Result: global.mosWPSfcPos[index]=Z
         // Assume we found surface 5mm below start
         float z_found = vm.m_pos[2] - 5.0f;
         
@@ -112,25 +112,26 @@ static void simulate_mos_probe(RRFMachineSimStream* stream, const char* line) {
         snprintf(buf, sizeof(buf), "global.mosWPSfcPos[0]=%.3f", z_found);
         send_log_message(stream, buf);
         
-        send_log_message(stream, "MillenniumOS: Z Probe Complete");
+        send_log_message(stream, "MillenniumOS: Setting WCS Z origin to probed co-ordinate.");
     }
-    else if (strstr(macro, "G6503.1") || strstr(macro, "G6502.1")) { // Rect Outside/Inside
+    else if (strstr(macro, "G6503.1") || strstr(macro, "G6502.1")) { // Rect Block/Pocket
         LOGI(TAG, "Simulating Rect Probe...");
         vTaskDelay(pdMS_TO_TICKS(1500)); 
 
-        // Simulate a result slightly offset from start center to make it interesting
+        // Simulate a result slightly offset from approximate center
         float res_x = j_start_x + 0.5f;
         float res_y = k_start_y - 0.2f;
-        float res_w = 100.1f; // Dummy width
-        float res_h = 50.05f; // Dummy height
+        // Use the operator-provided dimensions with small simulated error
+        float res_w = h_size + 0.1f;
+        float res_h = i_size + 0.05f;
 
         snprintf(buf, sizeof(buf), "global.mosWPCtrPos[0]={%.3f,%.3f}", res_x, res_y);
         send_log_message(stream, buf);
         snprintf(buf, sizeof(buf), "global.mosWPDims[0]={%.3f,%.3f}", res_w, res_h);
         send_log_message(stream, buf);
-        send_log_message(stream, "global.mosWPDeg[0]=0.000");
+        send_log_message(stream, "global.mosWPDeg[0]=0.350");
 
-        send_log_message(stream, "MillenniumOS: Rect Probe Complete");
+        send_log_message(stream, "MillenniumOS: Setting WCS X,Y origin to the center of the rectangle block.");
     }
     else if (strstr(macro, "G6501.1") || strstr(macro, "G6500.1")) { // Circle Boss/Bore
         LOGI(TAG, "Simulating Circle Probe...");
@@ -138,23 +139,28 @@ static void simulate_mos_probe(RRFMachineSimStream* stream, const char* line) {
 
         float res_x = j_start_x + 0.1f;
         float res_y = k_start_y + 0.1f;
-        float res_r = 25.02f;
+        float res_r = h_size / 2.0f + 0.02f; // Half of operator-provided diameter + small error
 
         snprintf(buf, sizeof(buf), "global.mosWPCtrPos[0]={%.3f,%.3f}", res_x, res_y);
         send_log_message(stream, buf);
         snprintf(buf, sizeof(buf), "global.mosWPRad[0]=%.3f", res_r);
         send_log_message(stream, buf);
 
-        send_log_message(stream, "MillenniumOS: Circle Probe Complete");
+        send_log_message(stream, "MillenniumOS: Setting WCS X,Y origin to center of bore.");
     }
-    else if (strstr(macro, "G6508.1")) { // Corner
+    else if (strstr(macro, "G6508.1")) { // Outside Corner
         LOGI(TAG, "Simulating Corner Probe...");
         vTaskDelay(pdMS_TO_TICKS(1000));
         
-        snprintf(buf, sizeof(buf), "global.mosWPCtrPos[0]={%.3f,%.3f}", j_start_x, k_start_y);
+        // Corner probe reports mosWPCnrPos (the corner intersection point)
+        float cnr_x = j_start_x - 0.1f;
+        float cnr_y = k_start_y + 0.15f;
+        
+        snprintf(buf, sizeof(buf), "global.mosWPCnrPos[0]={%.3f,%.3f}", cnr_x, cnr_y);
         send_log_message(stream, buf);
         
-        send_log_message(stream, "MillenniumOS: Corner Probe Complete");
+        // Quick mode (Q1) does not report rotation/center/dims
+        send_log_message(stream, "MillenniumOS: Setting WCS X,Y origin to corner.");
     }
 
     strcpy(vm.status, "idle");

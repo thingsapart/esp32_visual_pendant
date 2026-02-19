@@ -121,7 +121,7 @@ typedef struct files_changed_callback_t {
   files_changed_callback_cb_t cb_fn;
 } files_changed_callback_t;
 
-typedef void (*log_message_cb_t)(machine_interface_t *mach, void *user_data,
+typedef bool (*log_message_cb_t)(machine_interface_t *mach, void *user_data,
                                  const char *message);
 typedef struct log_message_callback_t {
   void *user_data;
@@ -196,6 +196,7 @@ typedef struct machine_interface_t {
   // --- Internal State ---
   int polli;
   unsigned long last_continuous_tick;
+  bool last_log_message_handled;
 
   // --- "Virtual" Methods (Function Pointers) ---
   void (*send_gcode)(machine_interface_t *self, const char *gcode,
@@ -269,7 +270,7 @@ void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir);
 void machine_interface_connected_updated(machine_interface_t *self);
 void machine_interface_current_move_axis_updated(machine_interface_t *self);
-void machine_interface_log_message_updated(machine_interface_t *self,
+bool machine_interface_log_message_updated(machine_interface_t *self,
                                            const char *message);
 void machine_interface_update_position(machine_interface_t *self, float *values,
                                        float *values_wcs);

@@ -16,6 +16,8 @@
 #include "driver/remote_comms_wrapper.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_timer.h"
 #include "led_status.h"
 #include "machine/machine_interface.h"
 #include "machine/machine_remote.h"  // for message_box_t_to_payload function.
@@ -35,6 +37,41 @@ static const char *TAG = "hub_main";
 
 // Replace with the display's MAC address
 static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
+
+// --- Log coalescing configuration ---
+#define LOG_COALESCE_MS 30
+#define LOG_BATCH_CAP 1024
+
+static char log_batch_buf[LOG_BATCH_CAP];
+static size_t log_batch_len = 0;
+static esp_timer_handle_t log_batch_timer = NULL;
+static SemaphoreHandle_t log_batch_lock = NULL;
+
+static void log_batch_timer_cb(void *arg) {
+  // Flush batched log messages
+  if (!log_batch_lock) return;
+  if (xSemaphoreTake(log_batch_lock, pdMS_TO_TICKS(100)) != pdTRUE) return;
+  if (log_batch_len > 0) {
+    size_t len = log_batch_len + 1; // include NUL
+    led_status_sending();
+    if (len <= (REMOTE_COMMS_DATA_MAX - offsetof(log_msg_t, message))) {
+      size_t total_len = offsetof(log_msg_t, message) + len;
+      log_msg_t* msg = (log_msg_t*)malloc(total_len);
+      if (msg) {
+        msg->type = MSG_TYPE_LOG_MESSAGE;
+        memcpy(msg->message, log_batch_buf, log_batch_len);
+        msg->message[log_batch_len] = '\0';
+        remote_wrapper_send(display_mac_address, (const uint8_t*)msg, total_len);
+        free(msg);
+      }
+    } else {
+      remote_wrapper_send_fragmented_message(display_mac_address, MSG_SUB_TYPE_LOG_MESSAGE, (const uint8_t*)log_batch_buf, log_batch_len + 1);
+    }
+    log_batch_len = 0;
+    log_batch_buf[0] = '\0';
+  }
+  xSemaphoreGive(log_batch_lock);
+}
 
 // --- Global Variables ---
 static machine_rrf_t *g_machine = NULL;
@@ -242,27 +279,98 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
   }
 }
 
-void on_log_message_received(machine_interface_t *machine, void *user_data, const char *message) {
-    size_t len = strlen(message) + 1; // Include null terminator
+bool on_log_message_received(machine_interface_t *machine, void *user_data, const char *message) {
+  // Default pointer to the original message; may be replaced for client
+  // forwarding when we want to suppress large/unparseable JSON payloads.
+  const char *msg_to_send = message;
+  char short_msg[] = "Failed to parse RRF response";
 
-    LOGI(TAG, "Broadcasting log message: %s", message);
-    led_status_sending();
+  // If this looks like a raw M409/rr_model JSON response it means the hub
+  // couldn't parse it into state. Log the raw JSON at error level for
+  // diagnostics. Behavior for forwarding to clients is controlled by
+  // M409_FAILED_JSON_MODE (see config.h):
+  // 0 = send short message to client
+  // 1 = log locally only, do NOT forward
+  // 2 = log only on hub and do not forward
+  if (message && message[0] == '{' && strstr(message, "\"key\"") != NULL) {
+    LOGE(TAG, "Failed to parse machine model JSON response; raw: %s", message);
+#if M409_FAILED_JSON_MODE == 0
+    msg_to_send = short_msg;
+#else
+    // Don't forward to clients when configured to log-only.
+    return false;
+#endif
+  }
 
-    // If message is short enough for a single packet, use the simple format
-    if (len <= (REMOTE_COMMS_DATA_MAX - offsetof(log_msg_t, message))) {
-        size_t total_len = offsetof(log_msg_t, message) + len;
-        log_msg_t* msg = (log_msg_t*)malloc(total_len);
-        if (msg) {
-            msg->type = MSG_TYPE_LOG_MESSAGE;
-            strcpy(msg->message, message);
-            remote_wrapper_send(display_mac_address, (const uint8_t*)msg, total_len);
-            free(msg);
-        }
+  size_t len = strlen(msg_to_send) + 1; // Include null terminator
+
+  LOGI(TAG, "Broadcasting log message: %s", msg_to_send);
+
+  // Lazy init for lock and timer
+  if (!log_batch_lock) {
+    log_batch_lock = xSemaphoreCreateMutex();
+  }
+
+  if (!log_batch_timer) {
+    const esp_timer_create_args_t args = {
+      .callback = &log_batch_timer_cb,
+      .arg = NULL,
+      .name = "log_batch_timer"
+    };
+    esp_timer_create(&args, &log_batch_timer);
+  }
+
+  // Append to the batch buffer (thread-safe)
+  if (log_batch_lock && xSemaphoreTake(log_batch_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+    size_t mlen = strlen(msg_to_send);
+    // If there's space, append with newline separator
+    if (log_batch_len + mlen + 2 < LOG_BATCH_CAP) {
+      if (log_batch_len > 0) {
+        log_batch_buf[log_batch_len++] = '\n';
+      }
+      memcpy(&log_batch_buf[log_batch_len], msg_to_send, mlen);
+      log_batch_len += mlen;
+      log_batch_buf[log_batch_len] = '\0';
     } else {
-        // Otherwise, use the robust fragmentation logic
-        remote_wrapper_send_fragmented_message(display_mac_address, MSG_SUB_TYPE_LOG_MESSAGE, (const uint8_t*)message, len);
+      // No space: flush current batch synchronously, then start new batch
+      xSemaphoreGive(log_batch_lock);
+      log_batch_timer_cb(NULL);
+      if (xSemaphoreTake(log_batch_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        // start new batch with this message
+        size_t copy_len = (mlen < LOG_BATCH_CAP - 1) ? mlen : (LOG_BATCH_CAP - 1);
+        memcpy(log_batch_buf, msg_to_send, copy_len);
+        log_batch_len = copy_len;
+        log_batch_buf[log_batch_len] = '\0';
+      }
     }
+
+    // Restart the coalescing timer to flush after the window
+    if (log_batch_timer) {
+      esp_timer_start_once(log_batch_timer, LOG_COALESCE_MS * 1000);
+    }
+
+    xSemaphoreGive(log_batch_lock);
+  } else {
+    // Failed to take lock: fallback to immediate send
+    led_status_sending();
+    if (len <= (REMOTE_COMMS_DATA_MAX - offsetof(log_msg_t, message))) {
+      size_t total_len = offsetof(log_msg_t, message) + len;
+      log_msg_t* msg = (log_msg_t*)malloc(total_len);
+      if (msg) {
+        msg->type = MSG_TYPE_LOG_MESSAGE;
+        strncpy(msg->message, msg_to_send, len);
+        msg->message[len-1] = '\0';
+        remote_wrapper_send(display_mac_address, (const uint8_t*)msg, total_len);
+        free(msg);
+      }
+    } else {
+      remote_wrapper_send_fragmented_message(display_mac_address, MSG_SUB_TYPE_LOG_MESSAGE, (const uint8_t*)msg_to_send, len);
+    }
+  }
+
+  return false; // hub does not 'handle' the message for client UI suppression
 }
+
 
 void on_connected_change(machine_interface_t *machine, void *user_data) {
   bool conn = machine->is_connected(machine);
@@ -955,8 +1063,12 @@ void setup_machine_interface() {
   led_status_connecting();  // Start in connecting state
   
   // Initialize the machine interface
-  g_machine = machine_rrf_create_serial(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
-                                 MACH_UART_PIN_RX);  // Use UART 0
+  // Use the standard Serial (USB/CDC) handle when available to avoid
+  // allocating a new HardwareSerial for UART0 which can conflict with the
+  // USB CDC driver and cause crashes on disconnect. Pass -1 to request the
+  // standard serial handle from the wrapper.
+  g_machine = machine_rrf_create_serial(-1, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
+                                 MACH_UART_PIN_RX);
   if (!g_machine) {
     LOGI(TAG, "Failed to create machine interface");
     led_status_error();  // Signal error with red LED

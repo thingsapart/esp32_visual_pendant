@@ -44,7 +44,7 @@ static void wifi_init() {
 #define USE_SEND_QUEUE
 
 #ifdef USE_SEND_QUEUE
-#define QUEUE_LENGTH 2
+#define QUEUE_LENGTH 4
 #define TASK_PRIORITY (tskIDLE_PRIORITY + 1)
 
 typedef struct {
@@ -124,7 +124,7 @@ bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
   memcpy(&item.mac[0], mac_addr, sizeof(item.mac));
   memcpy(&item.data[0], data, len);
 
-  BaseType_t res = xQueueSend(remote_send_queue, &item, 0);
+  BaseType_t res = xQueueSend(remote_send_queue, &item, pdMS_TO_TICKS(50));
   if (res != pdTRUE) {
     LOGW(TAG, "Remote send queue most likely full.");
     return false;

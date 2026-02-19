@@ -263,7 +263,7 @@ static void _show_toast(interface_t *interface, const char *message) {
 
 // --- Log message callback (called from machine thread) ---
 
-static void on_log_message(machine_interface_t *machine, void *user_data,
+static bool on_log_message(machine_interface_t *machine, void *user_data,
                            const char *message) {
   interface_t *interface = (interface_t *)user_data;
   // Log verbatim to the pendant's serial output regardless.
@@ -272,12 +272,19 @@ static void on_log_message(machine_interface_t *machine, void *user_data,
   // echoed back by the machine when it doesn't recognise a polled M409 query
   // and do not represent actionable errors for the operator.
   if (strncmp(message, "Error: Bad command:", 19) == 0) {
-    return;
+    return true; // handled (suppress further UI toasts)
   }
+
+  // If a prior handler already claimed this message, avoid showing the toast.
+  if (machine && machine->last_log_message_handled) {
+    return false; // not handled by UI
+  }
+
   // Store and request UI toast.
   snprintf(interface->log_message_buf, sizeof(interface->log_message_buf),
            "%s", message);
   interface->dirty_flags |= UI_DIRTY_LOG_MESSAGE;
+  return true;
 }
 
 // --- Public API ---

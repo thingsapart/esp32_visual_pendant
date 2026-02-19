@@ -244,7 +244,7 @@ void lvgl_task(void *pv_params) {
     uint32_t sleep_time = lv_task_handler();
     vTaskDelay(sleep_time / portTICK_PERIOD_MS);
 
-    if ((ctr++ % 10) == 0) {
+    if ((ctr++ % 500) == 0) {
       LOGE(TAG, "LVGL task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
     }
