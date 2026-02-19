@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "debug.h"
@@ -28,6 +29,9 @@ static const char *TAG = "hub_main";
 #define HUB_POLL_INTERVAL_MS 200
 #define FULL_STATE_INTERVAL \
   20  // Send full state every nth poll (every n * interval secs)
+
+// Print a machine state summary every N ticks (N * HUB_POLL_INTERVAL_MS ms)
+#define STATE_LOG_INTERVAL_TICKS 25  // ~5 s
 
 // Replace with the display's MAC address
 static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
@@ -87,7 +91,7 @@ void on_position_change(machine_interface_t *machine, void *user_data) {
   msg.wcs_x = machine->wcs_position[0];
   msg.wcs_y = machine->wcs_position[1];
   msg.wcs_z = machine->wcs_position[2];
-  LOGI(TAG, "Sending position %f, %f, %f (%f, %f, %f)", machine->position[0],
+  LOGD(TAG, "Sending position %f, %f, %f (%f, %f, %f)", machine->position[0],
        machine->position[1], machine->position[2], machine->wcs_position[0],
        machine->wcs_position[1], machine->wcs_position[2]);
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
@@ -101,7 +105,7 @@ void on_home_change(machine_interface_t *machine, void *user_data) {
   msg.x_homed = machine->axes_homed[0];
   msg.y_homed = machine->axes_homed[1];
   msg.z_homed = machine->axes_homed[2];
-  LOGI(TAG, "Sending axes homed %d, %d, %d", machine->axes_homed[0],
+  LOGD(TAG, "Sending axes homed %d, %d, %d", machine->axes_homed[0],
        machine->axes_homed[1], machine->axes_homed[2]);
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
 }
@@ -113,7 +117,7 @@ void on_wcs_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_WCS;
   msg.wcs = machine->wcs;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGI(TAG, "Sending wcs changed: %d", machine->wcs);
+  LOGD(TAG, "Sending wcs changed: %d", machine->wcs);
 }
 
 void on_feed_change(machine_interface_t *machine, void *user_data) {
@@ -124,7 +128,7 @@ void on_feed_change(machine_interface_t *machine, void *user_data) {
   msg.feed_req = machine->feed_req;
   msg.feed_multiplier = machine->feed_multiplier;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  LOGI(TAG, "Sending feed changed: %f/%f (x%f)", machine->feed,
+  LOGD(TAG, "Sending feed changed: %f/%f (x%f)", machine->feed,
        machine->feed_req, machine->feed_multiplier);
 }
 
@@ -252,13 +256,20 @@ void on_log_message_received(machine_interface_t *machine, void *user_data, cons
 }
 
 void on_connected_change(machine_interface_t *machine, void *user_data) {
-  LOGI(TAG, "Machine connection state changed: %s",
-      machine->is_connected(machine) ? "connected" : "disconnected");
-  
-  if (machine->is_connected(machine)) {
+  bool conn = machine->is_connected(machine);
+  LOGI(TAG, "Machine connection state changed: %s", conn ? "connected" : "disconnected");
+
+  if (conn) {
     led_status_connected();
   } else {
     led_status_connecting();
+    // Immediately notify clients that the hub has lost the machine so they
+    // don't keep showing stale positions/status.
+    status_msg_t msg;
+    msg.type = MSG_TYPE_STATUS;
+    msg.status = MACHINE_STATUS_WAITING_FOR_MACHINE;
+    remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
+    LOGI(TAG, "Broadcasted WAITING_FOR_MACHINE to clients.");
   }
 }
 
@@ -654,18 +665,111 @@ void remote_recv_task_run() {
 #endif
 
 unsigned int ctr = 0;
+
+// ---------------------------------------------------------------------------
+// Compact machine state summary logger
+// ---------------------------------------------------------------------------
+
+static const char *status_str(machine_status_t s) {
+  switch (s) {
+    case MACHINE_STATUS_INITIALIZING:      return "INIT";
+    case MACHINE_STATUS_FLASHING_FIRMWARE: return "FLASH";
+    case MACHINE_STATUS_EMERGENCY_HALTED:  return "E-HALT";
+    case MACHINE_STATUS_OFF:               return "OFF";
+    case MACHINE_STATUS_PAUSED_DEC:        return "PAUSED-DEC";
+    case MACHINE_STATUS_PAUSED_RESUME:     return "PAUSED-RESUME";
+    case MACHINE_STATUS_PAUSED:            return "PAUSED";
+    case MACHINE_STATUS_SIMULATING:        return "SIM";
+    case MACHINE_STATUS_IDLE:              return "IDLE";
+    case MACHINE_STATUS_TOOL_CHANGING:     return "TOOL-CHG";
+    case MACHINE_STATUS_RUNNING:            return "RUNNING";
+    case MACHINE_STATUS_WAITING_FOR_MACHINE: return "WAITING";
+    default:                               return "UNKNOWN";
+  }
+}
+
+static void log_machine_state_summary(machine_interface_t *m) {
+  // Axis homed string: "XYZ", "XY-", etc.
+  char homed[4] = {'-', '-', '-', '\0'};
+  if (m->axes_homed[0]) homed[0] = 'X';
+  if (m->axes_homed[1]) homed[1] = 'Y';
+  if (m->axes_homed[2]) homed[2] = 'Z';
+
+  // WCS label G54..G59
+  char wcs_str[8];
+  snprintf(wcs_str, sizeof(wcs_str), "G%d", 54 + m->wcs);
+
+  // Spindle RPM (first spindle if present)
+  int rpm = (m->spindles && m->num_spindles > 0) ? m->spindles[0].rpm : 0;
+
+  // Tool string (guard NULL)
+  const char *tool = (m->tool && m->tool[0]) ? m->tool : "-";
+
+  bool conn = m->is_connected ? m->is_connected(m) : false;
+
+  LOGI(TAG,
+       "--- STATUS: %s  conn:%s  homed:%s  WCS:%s ---",
+       status_str(m->machine_status), conn ? "Y" : "N", homed, wcs_str);
+  LOGI(TAG,
+       "    POS  M[ X:%.3f  Y:%.3f  Z:%.3f ]  W[ X:%.3f  Y:%.3f  Z:%.3f ]",
+       m->position[0], m->position[1], m->position[2],
+       m->wcs_position[0], m->wcs_position[1], m->wcs_position[2]);
+  LOGI(TAG,
+       "    FEED %.1f mm/min (req %.1f  x%.2f)  RPM:%d  tool:%s",
+       m->feed, m->feed_req, m->feed_multiplier, rpm, tool);
+}
+
 void machine_poll_send_task_iter() {
   // Update LED status display
   led_status_task_update();
-  
-  // Send queued g-code commands.
+
+#ifndef ASYNC_GCODE_SENDING
+  // Send queued g-code commands (non-async path only - in async mode
+  // machine_send_task owns the gcode queue and the machine poll loop).
   machine_interface_process_gcode_q(&g_machine->base);
 
-  // Poll the new machine state.
+  // Poll the new machine state (non-async only - machine_send_task handles
+  // this in async mode; calling it from a second task corrupts the shared
+  // serial line_buffer).
   machine_interface_task_loop_iter(&g_machine->base);
+#endif
 
-  const unsigned int iter = ctr++ % 10;
+  // Periodic compact state summary
+  static unsigned int log_tick = 0;
+  if (++log_tick >= STATE_LOG_INTERVAL_TICKS) {
+    log_tick = 0;
+    log_machine_state_summary(&g_machine->base);
+  }
+
   machine_interface_t *mach = &g_machine->base;
+  bool is_connected = mach->is_connected ? mach->is_connected(mach) : false;
+
+  if (!is_connected) {
+    // Hub is alive but has no connection to the CNC controller.
+    // Periodically tell clients so they can show a meaningful state instead
+    // of stale coordinates.  We piggyback on the keep-alive slot (iter == 0)
+    // plus the status slot (iter == 1) of the round-robin to avoid flooding.
+    const unsigned int iter = ctr++ % 10;
+    if (iter == 0 || iter == 1) {
+      status_msg_t smsg;
+      smsg.type   = MSG_TYPE_STATUS;
+      smsg.status = MACHINE_STATUS_WAITING_FOR_MACHINE;
+      led_status_sending();
+      remote_wrapper_send(display_mac_address, (uint8_t *)&smsg, sizeof(smsg));
+      LOGD(TAG, "Not connected — broadcasting WAITING_FOR_MACHINE.");
+    }
+    if (iter == 2) {
+      // Also send a keep-alive so the client knows the hub itself is running.
+      keep_alive_msg_t ka;
+      ka.type = MSG_TYPE_KEEP_ALIVE;
+      led_status_sending();
+      remote_wrapper_send(display_mac_address, (uint8_t *)&ka, sizeof(ka));
+    }
+    return;
+  }
+
+  // --- Connected path: round-robin push of real machine state ---
+  const unsigned int iter = ctr++ % 10;
   if (iter == 1) {
     on_machine_state_change(mach, mach);
   } else if (iter == 2) {

@@ -16,6 +16,17 @@
 
 static const char *TAG = "machine_rrf";
 
+// How long (ms) without a successful serial response before the hub considers
+// the machine disconnected.
+#ifndef SERIAL_NO_RESPONSE_TIMEOUT_MS
+#define SERIAL_NO_RESPONSE_TIMEOUT_MS 8000
+#endif
+
+// How many consecutive JSON parse failures trigger a disconnect.
+#ifndef SERIAL_MAX_PARSE_FAILURES
+#define SERIAL_MAX_PARSE_FAILURES 10
+#endif
+
 #ifdef TFT_WIDTH
 #include "lvgl.h"
 #endif
@@ -24,7 +35,14 @@ static const char *TAG = "machine_rrf";
 static machine_status_t machine_status_from_rrf_string(const char *rrf_status);
 void _free_modal(machine_interface_t *self, int modal_id);
 static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect);
+static void _serial_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _machine_rrf_attempt_connect(machine_interface_t *self);
+static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode);
+
+#ifdef ESP32_HW
+// millis() is provided by the Arduino framework; declare it for the C compiler.
+extern unsigned long millis(void);
+#endif
 
 
 // --- Generic "Virtual" Method Implementations ---
@@ -371,14 +389,23 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
   LOGD(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
   cJSON *root = cJSON_Parse(json_response);
   if (!root) {
-    LOGE(TAG, "Serial: Failed to parse JSON.");
-    LOGV(TAG, "Serial: Failing JSON was: %s", json_response);
+    self->consecutive_parse_failures++;
+    LOGW(TAG, "Serial: Failed to parse JSON (failure #%d). Raw: %.80s",
+         self->consecutive_parse_failures, json_response);
+    if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
+      LOGE(TAG, "Serial: %d consecutive parse failures — marking disconnected.",
+           self->consecutive_parse_failures);
+      _serial_set_connected_impl(self, false);
+    }
     return false;
   }
 
   bool succ = false;
   if (cJSON_GetObjectItemCaseSensitive(root, "key")) {
     succ = machine_rrf_parse_m409_response(self, root);
+    if (!succ) {
+      LOGW(TAG, "Serial: m409 parse returned false for: %.80s", json_response);
+    }
   } else if (cJSON_GetObjectItemCaseSensitive(root, "seq") &&
              cJSON_GetObjectItemCaseSensitive(root, "resp")) {
     // This is a log message or simple response, not a full model query
@@ -394,13 +421,28 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
       succ = true;
     }
   } else {
-    LOGW(TAG, "Serial: Unrecognized JSON response: %s", json_response);
+    LOGW(TAG, "Serial: Unrecognized JSON response structure: %.80s", json_response);
   }
 
   cJSON_Delete(root);
 
-  if (succ && self->base.set_connected) {
-    self->base.set_connected(&self->base, true);
+  if (succ) {
+#ifdef ESP32_HW
+    self->last_response_ms = millis();
+#endif
+    self->consecutive_parse_failures = 0;
+    if (self->base.set_connected) {
+      self->base.set_connected(&self->base, true);
+    }
+  } else {
+    self->consecutive_parse_failures++;
+    LOGD(TAG, "Serial: parse returned false (consecutive failures: %d)",
+         self->consecutive_parse_failures);
+    if (self->consecutive_parse_failures >= SERIAL_MAX_PARSE_FAILURES) {
+      LOGE(TAG, "Serial: %d consecutive unrecognised responses — marking disconnected.",
+           self->consecutive_parse_failures);
+      _serial_set_connected_impl(self, false);
+    }
   }
 
   return succ;
@@ -413,14 +455,39 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   // Process any data that has been received since the last poll.
   serial_process_input(self->transport_state.serial.uart);
 
+#ifdef ESP32_HW
+  // Check for response timeout: if we have been connected but nothing has been
+  // received in a while, consider the machine gone.
+  if (self->connected && self->last_response_ms != 0) {
+    uint32_t now = millis();
+    uint32_t elapsed = now - self->last_response_ms;
+    if (elapsed > SERIAL_NO_RESPONSE_TIMEOUT_MS) {
+      LOGW(TAG, "Serial: No response for %lu ms (timeout %d ms) — marking disconnected.",
+           (unsigned long)elapsed, SERIAL_NO_RESPONSE_TIMEOUT_MS);
+      _serial_set_connected_impl(self, false);
+      return;  // Skip sending more queries until reconnected
+    }
+  }
+#endif
+
+  if (!self->connected) {
+    // Not connected: probe with a lightweight status query every poll cycle.
+    // Responses are handled asynchronously; _serial_set_connected_impl will
+    // mark us connected once valid JSON arrives.
+    LOGD(TAG, "Serial: Not connected, sending probe query.");
+    machine_interface_send_gcode(&self->base, "M409 K\"state.status\" F\"v\"", 0);
+    return;
+  }
+
   // Commands are sent via the queue. The response is handled asynchronously.
   char cmd[128];
-  if (poll_state & MACHINE_POSITION) {
-    snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d5,f\"");
-    machine_interface_send_gcode(&self->base, cmd, 0);
-  }
-  if (poll_state & MACHINE_POSITION_EXT) {
-    snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d5,v\"");
+  if ((poll_state & MACHINE_POSITION) || (poll_state & MACHINE_POSITION_EXT)) {
+    // Use verbose flag ("v") so infrequently-changing fields like "homed" are
+    // always present (with "f" RRF omits them). Use d3 instead of d5 to exclude
+    // workplaceOffsets[9] and other deep arrays — the response at d5 exceeds
+    // the serial line buffer and is silently discarded. All fields we parse
+    // (machinePosition, userPosition, homed, letter) are at depth 1-2.
+    snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d3,v\"");
     machine_interface_send_gcode(&self->base, cmd, 0);
   }
   if (poll_state & JOB_STATUS) {
@@ -448,6 +515,13 @@ static void _serial_set_connected_impl(machine_rrf_t *self, bool connect) {
     self->connected = connect;
     if (connect) {
       self->message_box_last_dismissed_seq = -99999;
+      self->consecutive_parse_failures = 0;
+#ifdef ESP32_HW
+      self->last_response_ms = millis();
+#endif
+      LOGI(TAG, "Serial: Connected.");
+    } else {
+      self->last_response_ms = 0;
     }
     machine_interface_connected_updated(&self->base);
   }
@@ -466,14 +540,45 @@ static void _serial_deinit_impl(machine_rrf_t *self) {
 static void _serial_proc_state_resp_impl(machine_interface_t *iself, void *data,
                                          size_t len) {
   machine_rrf_t *self = (machine_rrf_t *)iself;
-  _serial_parse_json_response(self, (const char *)data);
-  if (!self->connected) {
-    _serial_set_connected_impl(self, true);
+  bool was_connected = self->connected;
+  bool parsed_ok = _serial_parse_json_response(self, (const char *)data);
+
+  // On first successful parse after a disconnected period, push full state so
+  // clients get a complete picture immediately.
+  if (parsed_ok && !was_connected && self->connected) {
     machine_interface_position_updated(&self->base);
     machine_interface_wcs_updated(&self->base);
     machine_interface_home_updated(&self->base);
   }
 }
+
+// --- Non-Async Serial Response Dispatching ---
+// When ASYNC_RESPONSE_PROCESSING is not defined there is no task queue and no
+// call to machine_rrf_setup_response_processing_task(), so no line callback is
+// ever registered.  The table below provides the same service synchronously:
+// responses are parsed inline when serial_process_input() drains the ring
+// buffer inside _serial_poll_state_impl().
+#ifndef ASYNC_RESPONSE_PROCESSING
+
+#define MAX_SERIAL_SYNC_INSTANCES 2
+
+static struct {
+  serial_handle_t serial;
+  machine_rrf_t  *self;
+} g_sync_serial_map[MAX_SERIAL_SYNC_INSTANCES];  // zero-initialised (static)
+
+static void _serial_line_received_sync_cb(serial_handle_t handle,
+                                          const char *line, size_t len) {
+  for (size_t i = 0; i < MAX_SERIAL_SYNC_INSTANCES; ++i) {
+    if (g_sync_serial_map[i].serial == handle) {
+      _serial_proc_state_resp_impl(&g_sync_serial_map[i].self->base,
+                                   (void *)line, len);
+      return;
+    }
+  }
+}
+
+#endif  // !ASYNC_RESPONSE_PROCESSING
 
 static void _machine_rrf_attempt_connect(machine_interface_t *self) {
     machine_rrf_t *rrf_self = (machine_rrf_t *)self;
@@ -562,6 +667,8 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->input_idx = 0;
   self->message_box_last_dismissed_seq = -99999;
   self->current_tool_idx = -1;
+  self->last_response_ms = 0;
+  self->consecutive_parse_failures = 0;
 
   // Assign generic virtual methods
   self->base._send_gcode = _machine_rrf_send_gcode;
@@ -623,6 +730,25 @@ machine_rrf_t *machine_rrf_init_serial(machine_rrf_t *self, int rrf_serial_num,
   self->_list_files_impl = _serial_list_files_impl;
   self->_deinit_impl = _serial_deinit_impl;
   self->_proc_state_resp_impl = _serial_proc_state_resp_impl;
+
+#ifndef ASYNC_RESPONSE_PROCESSING
+  // Register a synchronous line callback so serial responses are parsed
+  // immediately in serial_process_input() rather than being silently dropped.
+  for (size_t i = 0; i < MAX_SERIAL_SYNC_INSTANCES; ++i) {
+    if (g_sync_serial_map[i].serial == NULL) {
+      g_sync_serial_map[i].serial = self->transport_state.serial.uart;
+      g_sync_serial_map[i].self   = self;
+      if (!serial_register_line_callback(self->transport_state.serial.uart,
+                                         _serial_line_received_sync_cb)) {
+        LOGE(TAG, "Failed to register sync serial line callback!");
+      } else {
+        LOGI(TAG, "Sync serial line callback registered for UART handle %p",
+             self->transport_state.serial.uart);
+      }
+      break;
+    }
+  }
+#endif
 
   return self;
 }
@@ -794,11 +920,27 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
         }
       }
       item = cJSON_GetObjectItemCaseSensitive(axis_item, "homed");
-      if (item && cJSON_IsBool(item)) {
-        bool homed = cJSON_IsTrue(item);
-        if (self->base.axes_homed[i] != homed) {
-          self->base.axes_homed[i] = homed;
-          home_updated = true;
+      if (!item || cJSON_IsNull(item)) {
+        LOGW(TAG, "axis[%d] 'homed' field missing from M409 response (RRF version mismatch?)", i);
+      } else {
+        bool homed = false;
+        bool homed_valid = false;
+        if (cJSON_IsBool(item)) {
+          homed = cJSON_IsTrue(item);
+          homed_valid = true;
+        } else if (cJSON_IsNumber(item)) {
+          // RRF 3.6+ may return 0/1 instead of false/true
+          homed = (item->valueint != 0);
+          homed_valid = true;
+        } else {
+          LOGW(TAG, "axis[%d] 'homed' has unexpected JSON type (%d)", i, item->type);
+        }
+        if (homed_valid) {
+          LOGD(TAG, "axis[%d] homed=%d", i, (int)homed);
+          if (self->base.axes_homed[i] != homed) {
+            self->base.axes_homed[i] = homed;
+            home_updated = true;
+          }
         }
       }
       i++;

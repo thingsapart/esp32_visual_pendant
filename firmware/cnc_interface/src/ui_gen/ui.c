@@ -1934,7 +1934,9 @@ void create_ui(lv_obj_t* parent) {
 
     lv_label_set_text(label_218, "Connecting...");
     lv_obj_set_style_text_font(label_218, font_kode_34_1, 0);
+    lv_obj_set_style_text_align(label_218, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(label_218);
+    data_binding_add_observer("machine.overlay_status_text", label_218, 0, "%s", 0, NULL);
 
 
     // jog_axis_selector: jog_axis_selector_219 (button)

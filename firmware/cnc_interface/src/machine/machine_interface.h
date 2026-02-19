@@ -49,6 +49,7 @@ typedef enum {
   MACHINE_STATUS_TOOL_CHANGING,
   MACHINE_STATUS_RUNNING,
   MACHINE_STATUS_UNKNOWN = 100,
+  MACHINE_STATUS_WAITING_FOR_MACHINE = 101,  // Hub is alive but has no connection to CNC controller
 } machine_status_t;
 
 // --- Data Structures ---

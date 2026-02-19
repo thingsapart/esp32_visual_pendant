@@ -633,7 +633,7 @@ static void _mach_cb_connected(machine_interface_t* mach, void* user_data) {
             machine_interface_spindles_tools_updated(&self->base);
             machine_interface_connected_updated(&self->base);
         } else {
-             LOGW(TAG, "Machine %d connected, but machine %d is already active. Ignoring.", mach_idx, self->active_machine_idx);
+             // LOGV(TAG, "Machine %d connected, but machine %d is already active. Ignoring.", mach_idx, self->active_machine_idx);
         }
     } else {
         if (self->active_machine_idx == mach_idx) {

@@ -27,7 +27,7 @@ static const char *TAG = "arduino_serial_wrapper";
 #define RING_BUFFER_SIZE \
   4096  // Size of the ring buffer for incoming serial data
 #define MAX_LINE_LENGTH \
-  (256 * 6)  // Maximum length of a line to buffer before calling callback
+  4096  // Maximum length of a line; must fit largest RRF M409 response (move.axes[] at d3 ~600B, d5 can exceed 1536B)
 #define MAX_CALLBACKS 5      // Maximum number of callbacks per serial port
 #define RRF_SIM_UART_NUM 99  // Logical UART number for the RRF simulator
 
@@ -135,7 +135,8 @@ static void process_received_data(serial_port_data_t *port_data) {
     // Check for line buffer overflow before adding the character
     if (port_data->line_pos >= MAX_LINE_LENGTH - 1) {
       // Line too long, discard the current line buffer content and start over
-      LOGW(TAG, "Serial line buffer overflow for UART %d", port_data->uart_num);
+      LOGE(TAG, "Serial line buffer overflow for UART %d (pos=%zu, max=%d) - response truncated and DISCARDED",
+           port_data->uart_num, port_data->line_pos, MAX_LINE_LENGTH);
       port_data->line_pos = 0;
       // Optionally, add the current byte if it's not part of the overflowed
       // line This depends on desired behavior: discard whole long line vs.

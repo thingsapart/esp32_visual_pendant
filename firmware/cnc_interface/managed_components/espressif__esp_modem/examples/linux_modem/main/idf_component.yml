@@ -1,4 +1,3 @@
 dependencies:
   espressif/esp_modem:
-    version: "^1.0.1"
-    override_path: "../../../"
+    version: ^1.0.1

@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.2](https://github.com/espressif/esp-protocols/commits/modem-v1.4.2)
+
+### Bug Fixes
+
+- CEREG parsing fails due to incorrect state index ([a80a3cbb](https://github.com/espressif/esp-protocols/commit/a80a3cbb))
+
+## [1.4.1](https://github.com/espressif/esp-protocols/commits/modem-v1.4.1)
+
+### Bug Fixes
+
+- Remove unused kconfig ([97194507](https://github.com/espressif/esp-protocols/commit/97194507))
+- Fix modem console dependencies ([0d17f19f](https://github.com/espressif/esp-protocols/commit/0d17f19f))
+- Fix CI build issues with IDFv6.0 ([d65f8f69](https://github.com/espressif/esp-protocols/commit/d65f8f69))
+- Address build issues ([b4520660](https://github.com/espressif/esp-protocols/commit/b4520660))
+- Fix driver dependency issue on v6.0 ([26b3859c](https://github.com/espressif/esp-protocols/commit/26b3859c))
+
 ## [1.4.0](https://github.com/espressif/esp-protocols/commits/modem-v1.4.0)
 
 ### Features

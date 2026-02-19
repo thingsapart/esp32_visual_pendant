@@ -64,6 +64,10 @@ typedef struct machine_rrf_t {
   int input_idx;
   int message_box_last_dismissed_seq;
   int current_tool_idx;
+
+  // --- Connection health tracking ---
+  uint32_t last_response_ms;          // millis() timestamp of last successful JSON parse
+  int      consecutive_parse_failures; // count of consecutive parse failures
 } machine_rrf_t;
 
 // --- Function Prototypes ---

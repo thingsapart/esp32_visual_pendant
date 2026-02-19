@@ -609,7 +609,7 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
 
 void machine_interface_remote_process_message(machine_interface_remote_t *self,
                                               const uint8_t *data, size_t len) {
-  LOGI(TAG, "RECV: len %d => %d:%d:%d", len, data[0], data[1], data[2]);
+  LOGD(TAG, "RECV: len %d t=%d d=%d:%d", len, data[0], data[1], data[2]);
 
   if (len == 0) {
     return;
@@ -622,7 +622,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
   switch (message_type) {
     case MSG_TYPE_KEEP_ALIVE:
       // Handle keep-alive (could update a last-seen timestamp)
-      LOGI(TAG, "Received keep-alive");  // Use LOGD for debugging
+      LOGV(TAG, "keep-alive");
       break;
 
     case MSG_TYPE_POSITION: {
@@ -643,7 +643,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
 
       machine_interface_position_updated(&self->base);
 
-      LOGI(TAG, "Received position %f, %f, %f (%f, %f, %f)",
+      LOGD(TAG, "pos %.3f %.3f %.3f / wcs %.3f %.3f %.3f",
            machine->position[0], machine->position[1], machine->position[2],
            machine->wcs_position[0], machine->wcs_position[1],
            machine->wcs_position[2]);
@@ -659,7 +659,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       self->base.wcs = msg->wcs;
       machine_interface_wcs_updated(&self->base);
 
-      LOGI(TAG, "Received wcs: %d", machine->wcs);
+      LOGD(TAG, "wcs=%d", machine->wcs);
 
       break;
     }
@@ -672,7 +672,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       self->base.machine_status = msg->status;
       machine_interface_state_updated(&self->base);
 
-      LOGI(TAG, "Received status %d", machine->machine_status);
+      LOGD(TAG, "status=%d", machine->machine_status);
 
       break;
     }
@@ -687,7 +687,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       self->base.axes_homed[2] = msg->z_homed;
       machine_interface_home_updated(&self->base);
 
-      LOGI(TAG, "Received axes homed %d, %d, %d", machine->axes_homed[0],
+      LOGI(TAG, "homed x=%d y=%d z=%d", machine->axes_homed[0],
            machine->axes_homed[1], machine->axes_homed[2]);
 
       break;
@@ -703,7 +703,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       self->base.feed_multiplier = msg->feed_multiplier;
       machine_interface_feed_updated(&self->base);
 
-      LOGI(TAG, "Received feed changed: %f/%f (x%f)", machine->feed,
+      LOGD(TAG, "feed %.1f/%.1f x%.2f", machine->feed,
            machine->feed_req, machine->feed_multiplier);
 
       break;
@@ -753,8 +753,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
 
       machine_interface_spindles_tools_updated(&self->base);
 
-      LOGI(TAG, "Received tool/spindle changed: rpm %d / %s",
-           machine->spindles->rpm, machine->tool);
+      LOGD(TAG, "spindle rpm=%d tool=%s", machine->spindles->rpm, machine->tool);
 
       break;
     }
@@ -794,16 +793,16 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
 void machine_interface_remote_process_messages(
     machine_interface_remote_t *self) {
   size_t len = self->msg_buf_len;
-  LOGI(TAG, "Processing %d saved messages...", self->msg_buf_len);
   self->msg_buf_len = MAX_MSG_BUFFERED;
 
+  if (len > 0) {
+    LOGD(TAG, "Processing %d msgs", (int)len);
+  }
   for (size_t i = 0; i < len; ++i) {
-    LOGI(TAG, "...message[%d / %d]", i, len);
     machine_interface_remote_process_message(
         self, (uint8_t *)&self->msg_buffer[i], self->msg_buffer_msg_len[i]);
   }
   self->msg_buf_len = 0;
-  LOGI(TAG, "DONE.");
 }
 
 static void _machine_interface_remote_process_state(machine_interface_t *self,
@@ -814,7 +813,7 @@ static void _machine_interface_remote_process_state(machine_interface_t *self,
 
 static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status,
                                             void *user_data) {
-  LOGI(TAG, "ESP-NOW send status: %s", status == 0 ? "success" : "fail");
+  if (status != 0) LOGW(TAG, "ESP-NOW send failed");
 }
 
 void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
@@ -824,8 +823,7 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
 static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr,
                                             const uint8_t *data, int data_len,
                                             void *user_data) {
-  LOGI(TAG, "Received ESP-NOW data from " MACSTR ", len: %d", MAC2STR(mac_addr),
-       data_len);
+  LOGD(TAG, "ESPNOW from " MACSTR " len=%d", MAC2STR(mac_addr), data_len);
 
   machine_interface_remote_t *self = (machine_interface_remote_t *)user_data;
 

@@ -93,6 +93,8 @@ static const char *machine_status_to_string(machine_status_t status) {
       return "HALTED";
     case MACHINE_STATUS_OFF:
       return "OFF";
+    case MACHINE_STATUS_WAITING_FOR_MACHINE:
+      return "NO MACHINE";
     default:
       return "IDLE";
   }
@@ -173,6 +175,15 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
       lv_obj_add_event_cb(disconnected_overlay, disconnected_overlay_event_handler, LV_EVENT_LONG_PRESSED, NULL);
   }
 
+  // Set initial overlay text (will be overwritten by data bindings as state arrives)
+  data_binding_notify_state_changed(
+      "machine.overlay_status_text",
+      (binding_value_t){.type = BINDING_TYPE_STRING,
+                        .as.s_val = "Connecting..."});
+  data_binding_notify_state_changed(
+      "machine.connection_status",
+      (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = false});
+
 #ifdef DWC_MACHINE_MODE
   // Check if we need to show the DWC setup screen
   bool needs_config =
@@ -213,13 +224,38 @@ void interface_tick(interface_t *interface) {
   // --- Update UI based on dirty flags ---
 
   if (flags_to_process & UI_DIRTY_CONNECTION) {
+    bool connected = machine->is_connected(machine);
+    // When ESP-NOW link itself is down, show a "connecting to hub" message.
+    if (!connected) {
+      data_binding_notify_state_changed(
+          "machine.overlay_status_text",
+          (binding_value_t){.type = BINDING_TYPE_STRING,
+                            .as.s_val = "Connecting to hub..."});
+    }
     data_binding_notify_state_changed(
         "machine.connection_status",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
-                          .as.b_val = machine->is_connected(machine)});
+                          .as.b_val = connected});
   }
 
   if (flags_to_process & UI_DIRTY_MACHINE_STATE) {
+    bool waiting = (machine->machine_status == MACHINE_STATUS_WAITING_FOR_MACHINE);
+    if (waiting) {
+      // Hub is reachable over ESP-NOW but the CNC controller isn't responding.
+      // Show the overlay with a descriptive message instead of stale data.
+      data_binding_notify_state_changed(
+          "machine.overlay_status_text",
+          (binding_value_t){.type = BINDING_TYPE_STRING,
+                            .as.s_val = "Hub connected\nWaiting for\nmachine..."});
+      data_binding_notify_state_changed(
+          "machine.connection_status",
+          (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = false});
+    } else if (machine->is_connected(machine)) {
+      // Machine is connected and sending real status: ensure overlay is gone.
+      data_binding_notify_state_changed(
+          "machine.connection_status",
+          (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = true});
+    }
     data_binding_notify_state_changed(
         "machine.status_text",
         (binding_value_t){.type = BINDING_TYPE_STRING,
