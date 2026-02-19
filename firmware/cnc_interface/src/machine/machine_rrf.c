@@ -27,6 +27,18 @@ static const char *TAG = "machine_rrf";
 #define SERIAL_MAX_PARSE_FAILURES 10
 #endif
 
+// --- Poll back-off configuration ---
+// Minimum unanswered poll cycles before back-off kicks in.
+#define POLL_BACKOFF_THRESHOLD     2
+// Base interval (ms) once back-off is active (doubles per extra unanswered).
+#define POLL_BACKOFF_BASE_MS       1000
+// Hard cap on the back-off interval so we stay well under the 8 s disconnect
+// timeout and keep probing the controller regularly.
+#define POLL_BACKOFF_MAX_MS        5000
+// After this many ms without a response we "forget" all unanswered polls and
+// resume normal-rate polling (the controller may have finished its operation).
+#define POLL_BACKOFF_FORGET_MS     10000
+
 // Control how raw, unparseable M409 JSON is forwarded to the pendant/client.
 // 0 = send short message to client (no raw JSON)
 // 1 = send full raw JSON to client and log (default/current behaviour)
@@ -406,9 +418,16 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     size_t len = end ? (size_t)(end - start) : strlen(start);
 
     if (len > 0) {
+      LOGI(TAG, "Serial send line: %.*s", (int)len, start);
       serial_write(self->transport_state.serial.uart, (const uint8_t *)start, len);
     }
+    LOGI(TAG, "Serial send line: <NL>");
     serial_write(self->transport_state.serial.uart, (const uint8_t *)"\n", 1);
+    // Flush after each complete line to prevent UART TX FIFO fragmentation
+    // when back-to-back gcode writes are queued (e.g. probe gcode -> M409).
+    // Without this, trailing bytes of one command can merge with the header
+    // bytes of the next write, producing truncated commands at the receiver.
+    serial_flush(self->transport_state.serial.uart);
 
     if (!end) break;
     start = end + 1;
@@ -462,6 +481,13 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
 #ifdef ESP32_HW
     self->last_response_ms = millis();
 #endif
+    // Any valid response means the controller is alive and processing — reset
+    // the back-off counter so polling resumes at normal cadence.
+    if (self->unanswered_polls > 0) {
+      LOGD(TAG, "Poll backoff: response received — resetting from %u unanswered.",
+           (unsigned)self->unanswered_polls);
+      self->unanswered_polls = 0;
+    }
     self->consecutive_parse_failures = 0;
     if (self->base.set_connected) {
       self->base.set_connected(&self->base, true);
@@ -511,6 +537,38 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
     return;
   }
 
+#ifdef ESP32_HW
+  // --- Poll back-off: avoid spamming M409 while the controller is busy ---
+  // When we have sent polls but received no responses, progressively slow down.
+  {
+    uint32_t now_bo = millis();
+    uint32_t since_last_poll = now_bo - self->last_poll_sent_ms;
+
+    // Forget mechanism: if nothing heard for POLL_BACKOFF_FORGET_MS, reset and
+    // resume normal-rate polling (the controller may have finished).
+    if (self->unanswered_polls > 0 && since_last_poll > POLL_BACKOFF_FORGET_MS) {
+      LOGD(TAG, "Poll backoff: %lu ms since last poll — forgetting %u unanswered.",
+           (unsigned long)since_last_poll, (unsigned)self->unanswered_polls);
+      self->unanswered_polls = 0;
+    }
+
+    if (self->unanswered_polls >= POLL_BACKOFF_THRESHOLD) {
+      // Exponential back-off: 1 s, 2 s, 4 s, … capped at POLL_BACKOFF_MAX_MS.
+      uint8_t shift = self->unanswered_polls - POLL_BACKOFF_THRESHOLD;  // 0, 1, 2, …
+      if (shift > 3) shift = 3;  // cap the shift to avoid overflow
+      uint32_t backoff_ms = POLL_BACKOFF_BASE_MS << shift;
+      if (backoff_ms > POLL_BACKOFF_MAX_MS) backoff_ms = POLL_BACKOFF_MAX_MS;
+
+      if (since_last_poll < backoff_ms) {
+        LOGD(TAG, "Poll backoff: skipping poll (%u unanswered, need %lu ms, only %lu ms elapsed).",
+             (unsigned)self->unanswered_polls, (unsigned long)backoff_ms,
+             (unsigned long)since_last_poll);
+        return;  // Skip this poll cycle
+      }
+    }
+  }
+#endif
+
   // Commands are sent via the queue. The response is handled asynchronously.
   char cmd[128];
   if ((poll_state & MACHINE_POSITION) || (poll_state & MACHINE_POSITION_EXT)) {
@@ -540,6 +598,13 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
                                  "M409 K\"state.currentTool\" F\"v\"", 0);
     machine_interface_send_gcode(&self->base, "M409 K\"tools[]\" F\"v\"", 0);
   }
+
+#ifdef ESP32_HW
+  // Track that we just sent a poll cycle for back-off bookkeeping.
+  self->last_poll_sent_ms = millis();
+  if (self->unanswered_polls < 255) self->unanswered_polls++;
+  LOGD(TAG, "Poll sent (unanswered: %u).", (unsigned)self->unanswered_polls);
+#endif
 }
 
 static void _serial_set_connected_impl(machine_rrf_t *self, bool connect) {
@@ -682,9 +747,10 @@ void _machine_rrf_modal_str(machine_interface_t *self, const char *val,
 }
 
 void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
-  //machine_interface_send_gcode(self, "M98 P\"/macros/pre-probe.g\"",
-  //                             MACHINE_POSITION);
-  machine_interface_send_gcode(self, "T T{global.mosPTID}", TOOLS);
+  // NOTE: Do NOT re-select T{global.mosPTID} here. Sending T{...} triggers the
+  // full tpre.g tool-change sequence (blocking M291 dialog + M8002 wait up to
+  // 30 s), which hangs the machine mid-probe-wizard. The wizard already
+  // ensures the probe tool is selected and activated before calling this.
   machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
 }
 
@@ -701,6 +767,8 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->current_tool_idx = -1;
   self->last_response_ms = 0;
   self->consecutive_parse_failures = 0;
+  self->last_poll_sent_ms = 0;
+  self->unanswered_polls = 0;
 
   // Assign generic virtual methods
   self->base._send_gcode = _machine_rrf_send_gcode;

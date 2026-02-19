@@ -201,7 +201,7 @@ static void _toast_dismiss_cb(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   interface_t *iface = (interface_t *)lv_event_get_user_data(e);
   if (iface && iface->toast_bar && lv_obj_is_valid(iface->toast_bar)) {
-    lv_obj_del(iface->toast_bar);
+    lv_obj_del_async(iface->toast_bar);
     iface->toast_bar = NULL;
   }
 }
@@ -209,7 +209,7 @@ static void _toast_dismiss_cb(lv_event_t *e) {
 static void _show_toast(interface_t *interface, const char *message) {
   // Dismiss any existing toast first.
   if (interface->toast_bar && lv_obj_is_valid(interface->toast_bar)) {
-    lv_obj_del(interface->toast_bar);
+    lv_obj_del_async(interface->toast_bar);
     interface->toast_bar = NULL;
   }
 

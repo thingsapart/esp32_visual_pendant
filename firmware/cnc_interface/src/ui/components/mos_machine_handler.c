@@ -74,7 +74,7 @@ static const char * TAG = "mos_machine_handler";
 #define PROBE_DEFAULT_Z_DISTANCE 10.0f
 // How far below z_top to probe when doing XY probing moves.
 #define PROBE_XY_DEPTH_BELOW_Z_TOP 2.0f
-#define MAX_PROBE_RESULTS 4
+#define MAX_PROBE_RESULTS 16
 
 // Backoff distance calculation for XY probing moves
 #define PROBE_TIP_RADIUS 1.0f // Assumed 2mm diameter probe tip
@@ -148,6 +148,8 @@ static struct {
     char last_parsed_axis[MAX_PROBE_RESULTS];          // mosWPSfcAxis
     uint8_t probe_axes_reported_mask;                  // Bitmask: 1=X, 2=Y, 4=Z
     float parsed_sfc_pos;                              // mosWPSfcPos (non-Z)
+    float parsed_sfc_pos_by_axis[3];                    // accumulated surface positions by axis: 0=X,1=Y,2=Z
+    uint8_t parsed_sfc_pos_count[3];                    // count of samples per axis
     uint8_t current_probe_index;
     bool m7601_fallback_pending;                        // Set when M7601 query was sent; cleared on completion
 } handler_state = {0};
@@ -177,6 +179,7 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
     handler_state.machine = machine;
     handler_state.probe_state = PROBE_STATE_IDLE;
     handler_state.probe_axes_reported_mask = 0;
+    for (int i=0;i<3;i++) { handler_state.parsed_sfc_pos_by_axis[i] = NAN; handler_state.parsed_sfc_pos_count[i]=0; }
 
     // Register the three main callbacks with the wizard.
     lv_probing_wizard_register_callbacks(wizard_obj, mos_get_current_jogged_position, mos_execute_probe, mos_set_wcs_origin, mos_install_probe);
@@ -211,7 +214,7 @@ static lv_probing_wizard_point_float_t mos_get_current_jogged_position(void) {
 }
 
 static void mos_install_probe(lv_obj_t* wizard_obj) {
-  machine_interface_send_gcode(handler_state.machine, "T T{global.mosPTID}", TOOLS);
+  machine_interface_send_gcode(handler_state.machine, "T{global.mosPTID}", TOOLS);
 
   // TODO: Wait and check for probe installation success!
   lv_probing_wizard_probe_intalled(wizard_obj);
@@ -242,6 +245,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
     handler_state.probe_was_running = false;
     handler_state.probe_axes_reported_mask = 0;
     memset(handler_state.last_parsed_axis, 0, sizeof(handler_state.last_parsed_axis));
+    for (int i=0;i<3;i++) { handler_state.parsed_sfc_pos_by_axis[i] = NAN; handler_state.parsed_sfc_pos_count[i]=0; }
 
     char gcode_buf[256];
     const probe_point_t* setup_points = lv_probing_wizard_get_setup_points(wizard_obj);
@@ -391,7 +395,16 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         }
 
         handler_state.probe_state = PROBE_STATE_PENDING_XY_COMPLETE;
-        handler_state.machine->probe(handler_state.machine, gcode_buf);
+        LOGI(TAG, "Sending probe gcode: %s", gcode_buf);
+        if (handler_state.machine && handler_state.machine->probe) {
+            // _serial_send_gcode_impl (and all other transport send paths)
+            // always appends '\n'. Adding one here would be a no-op and only
+            // adds confusion. The real fix for command separation is a
+            // serial_flush() after each line in _serial_send_gcode_impl.
+            handler_state.machine->probe(handler_state.machine, gcode_buf);
+        } else {
+            LOGW(TAG, "No machine probe function available — probe not sent.");
+        }
     }
 }
 
@@ -587,7 +600,23 @@ static bool _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
                 if (reported_axis == 'Z') {
                     handler_state.parsed_z_result = f1;
                 } else {
-                    handler_state.parsed_sfc_pos = f1;
+                    // Map axis char to index: X=0, Y=1, Z=2
+                    int ax = -1;
+                    if (reported_axis == 'X') ax = 0;
+                    else if (reported_axis == 'Y') ax = 1;
+                    else if (reported_axis == 'Z') ax = 2;
+                    if (ax >= 0) {
+                        if (isnan(handler_state.parsed_sfc_pos_by_axis[ax])) {
+                            handler_state.parsed_sfc_pos_by_axis[ax] = f1;
+                        } else {
+                            // accumulate (average) multiple values
+                            handler_state.parsed_sfc_pos_by_axis[ax] = (handler_state.parsed_sfc_pos_by_axis[ax] * handler_state.parsed_sfc_pos_count[ax] + f1) / (handler_state.parsed_sfc_pos_count[ax] + 1);
+                        }
+                        handler_state.parsed_sfc_pos_count[ax]++;
+                        handler_state.parsed_sfc_pos = f1; // keep last for compatibility
+                    } else {
+                        handler_state.parsed_sfc_pos = f1;
+                    }
                 }
                 handled = true;
             }
@@ -640,6 +669,19 @@ static bool _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
                 if (!isnan(handler_state.parsed_result.x)) {
                     final_x = handler_state.parsed_result.x;
                     final_y = handler_state.parsed_result.y;
+                }
+            }
+
+            // If we don't have parsed center but do have surface probe positions
+            // recorded per-axis (from mosWPSfcAxis/mosWPSfcPos), derive a final
+            // X/Y by averaging the values reported for X and Y axes.
+            if ((isnan(final_x) || isnan(final_y))) {
+                bool have_x = handler_state.parsed_sfc_pos_count[0] > 0;
+                bool have_y = handler_state.parsed_sfc_pos_count[1] > 0;
+                if (have_x || have_y) {
+                    if (have_x) final_x = handler_state.parsed_sfc_pos_by_axis[0];
+                    if (have_y) final_y = handler_state.parsed_sfc_pos_by_axis[1];
+                    LOGI(TAG, "Derived final from surface positions: X=%.4f Y=%.4f (have_x=%d have_y=%d)", final_x, final_y, have_x, have_y);
                 }
             }
 

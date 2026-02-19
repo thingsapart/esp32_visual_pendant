@@ -68,6 +68,12 @@ typedef struct machine_rrf_t {
   // --- Connection health tracking ---
   uint32_t last_response_ms;          // millis() timestamp of last successful JSON parse
   int      consecutive_parse_failures; // count of consecutive parse failures
+
+  // --- Poll back-off tracking (serial only) ---
+  // Throttles M409 spam when the controller is busy (e.g. executing a probe
+  // or long-running macro).  Only 5 bytes (+padding) of RAM.
+  uint32_t last_poll_sent_ms;          // millis() when last poll cycle was actually sent
+  uint8_t  unanswered_polls;           // consecutive poll cycles without a response
 } machine_rrf_t;
 
 // --- Function Prototypes ---
