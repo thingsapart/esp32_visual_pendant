@@ -17,6 +17,7 @@
 #include <freertos/task.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "cam_pins.h"
 #include "cam_protocol.h"
@@ -384,6 +385,43 @@ void loop() {
             cam_espnow_send_status(has_peer ? g_settings.hub_mac : NULL,
                                    has_peer ? CAM_STATUS_IDLE : CAM_STATUS_IDLE,
                                    g_frame_id, g_fps_x10);
+            // Periodically broadcast grid mapping if available
+            if (g_settings.grid_calibrated) {
+                uint16_t pts = g_settings.grid_points_count;
+                if (pts > 0 && pts <= CAM_SETTINGS_MAX_GRID_POINTS) {
+                    int8_t offsets[CAM_SETTINGS_MAX_GRID_POINTS * 2];
+                    uint16_t nx = g_settings.grid_nx;
+                    uint16_t ny = g_settings.grid_ny;
+                    uint16_t img_w = 0, img_h = 0;
+                    if (g_transform) cam_transform_get_size(g_transform, &img_w, &img_h);
+                    if (img_w == 0 || img_h == 0 || g_settings.surface_width <= 0.0f || g_settings.surface_height <= 0.0f) {
+                        for (uint16_t i = 0; i < pts; i++) { offsets[i*2] = 0; offsets[i*2+1] = 0; }
+                    } else {
+                        for (uint16_t i = 0; i < pts; i++) {
+                            uint16_t ix = i % nx;
+                            uint16_t iy = i / nx;
+                            float real_x = g_settings.grid_minx + (float)ix * g_settings.grid_dx;
+                            float real_y = g_settings.grid_miny + (float)iy * g_settings.grid_dy;
+                            float ideal_px = (real_x / g_settings.surface_width) * (float)img_w;
+                            float ideal_py = (real_y / g_settings.surface_height) * (float)img_h;
+                            float actual_px = g_settings.grid_points[i][0] * (float)img_w;
+                            float actual_py = g_settings.grid_points[i][1] * (float)img_h;
+                            int dx_px = (int)lroundf(actual_px - ideal_px);
+                            int dy_px = (int)lroundf(actual_py - ideal_py);
+                            if (dx_px < -127) dx_px = -127; if (dx_px > 127) dx_px = 127;
+                            if (dy_px < -127) dy_px = -127; if (dy_px > 127) dy_px = 127;
+                            offsets[i*2 + 0] = (int8_t)dx_px;
+                            offsets[i*2 + 1] = (int8_t)dy_px;
+                        }
+                    }
+                    const uint8_t *dst = (g_settings.hub_mac[0]||g_settings.hub_mac[1]||g_settings.hub_mac[2]||g_settings.hub_mac[3]||g_settings.hub_mac[4]||g_settings.hub_mac[5]) ? g_settings.hub_mac : NULL;
+                    cam_espnow_send_grid_compact(dst,
+                                                 g_settings.surface_width, g_settings.surface_height,
+                                                 g_settings.grid_dx, g_settings.grid_dy,
+                                                 g_settings.grid_nx, g_settings.grid_ny,
+                                                 offsets, pts);
+                }
+            }
         }
 
         // Reset FPS counter every 10 seconds.

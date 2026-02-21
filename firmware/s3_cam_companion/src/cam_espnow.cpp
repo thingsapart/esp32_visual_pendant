@@ -274,3 +274,99 @@ bool cam_espnow_send_status(const uint8_t *peer_mac,
 void cam_espnow_get_mac(uint8_t mac[6]) {
     esp_wifi_get_mac(WIFI_IF_STA, mac);
 }
+
+// ---------------------------------------------------------------------------
+// Send grid mapping (simple single-packet format)
+// Format: [type=CAM_MSG_GRID_MAP][minx][maxx][miny][maxy][dx][dy][nx(uint16_t)][ny(uint16_t)][count(uint16_t)][points...]
+// points: count * (float x, float y) normalized
+// If the total payload exceeds CAM_ESPNOW_MAX_DATA, the function returns false.
+bool cam_espnow_send_grid(const uint8_t *peer_mac,
+                          float minx, float maxx, float miny, float maxy,
+                          float dx, float dy,
+                          uint16_t nx, uint16_t ny,
+                          const float *points_xy, uint16_t points_count) {
+    // Header: 1 + 6*4 bytes for floats + 3*2 bytes = 1 + 24 + 6 = 31
+    size_t header = 1 + 6 * sizeof(float) + 3 * sizeof(uint16_t);
+    size_t points_bytes = (size_t)points_count * 2 * sizeof(float);
+    size_t total = header + points_bytes;
+    if (total > CAM_ESPNOW_MAX_DATA) {
+        ESP_LOGW(TAG, "grid send: payload %zu > %d bytes, skipping",
+                 total, CAM_ESPNOW_MAX_DATA);
+        return false;
+    }
+
+    uint8_t buf[CAM_ESPNOW_MAX_DATA];
+    size_t off = 0;
+    buf[off++] = (uint8_t)CAM_MSG_GRID_MAP;
+
+    auto write_f = [&](float v) {
+        memcpy(&buf[off], &v, sizeof(float)); off += sizeof(float);
+    };
+    auto write_u16 = [&](uint16_t v) {
+        memcpy(&buf[off], &v, sizeof(uint16_t)); off += sizeof(uint16_t);
+    };
+
+    write_f(minx); write_f(maxx); write_f(miny); write_f(maxy);
+    write_f(dx); write_f(dy);
+    write_u16(nx); write_u16(ny); write_u16(points_count);
+
+    for (uint16_t i = 0; i < points_count; i++) {
+        float x = points_xy[i * 2 + 0];
+        float y = points_xy[i * 2 + 1];
+        write_f(x); write_f(y);
+    }
+
+    const uint8_t *dst = peer_mac ? peer_mac : BROADCAST_MAC;
+    esp_err_t err = esp_now_send(dst, buf, off);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_now_send grid err=%d", err);
+        return false;
+    }
+    return true;
+}
+
+// Compact grid send implementation (see prototype in header).
+bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
+                                  float w, float h, float dx, float dy,
+                                  uint16_t nx, uint16_t ny,
+                                  const int8_t *offsets_xy, uint16_t points_count) {
+    // Layout: [type:1][w:4][h:4][dx:4][dy:4][nx:2][ny:2][count:2][offsets: count*2]
+    size_t header = 1 + 4 * sizeof(float) + 3 * sizeof(uint16_t);
+    size_t payload = (size_t)points_count * 2 * sizeof(int8_t);
+    size_t total = header + payload;
+    if (total > CAM_ESPNOW_MAX_DATA) {
+        ESP_LOGW(TAG, "grid send (compact): payload %zu > %d bytes, skipping",
+                 total, CAM_ESPNOW_MAX_DATA);
+        return false;
+    }
+
+    uint8_t buf[CAM_ESPNOW_MAX_DATA];
+    size_t off = 0;
+    buf[off++] = (uint8_t)CAM_MSG_GRID_MAP;
+
+    auto write_f = [&](float v) {
+        memcpy(&buf[off], &v, sizeof(float)); off += sizeof(float);
+    };
+    auto write_u16 = [&](uint16_t v) {
+        memcpy(&buf[off], &v, sizeof(uint16_t)); off += sizeof(uint16_t);
+    };
+
+    write_f(w); write_f(h); write_f(dx); write_f(dy);
+    write_u16(nx); write_u16(ny); write_u16(points_count);
+
+    // Offsets are int8 pairs: x,y
+    for (uint16_t i = 0; i < points_count; i++) {
+        int8_t x = offsets_xy[i*2 + 0];
+        int8_t y = offsets_xy[i*2 + 1];
+        buf[off++] = (uint8_t)x;
+        buf[off++] = (uint8_t)y;
+    }
+
+    const uint8_t *dst = peer_mac ? peer_mac : BROADCAST_MAC;
+    esp_err_t err = esp_now_send(dst, buf, off);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_now_send grid compact err=%d", err);
+        return false;
+    }
+    return true;
+}

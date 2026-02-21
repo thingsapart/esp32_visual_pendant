@@ -31,6 +31,17 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->wifi_channel      = CAM_WIFI_CHANNEL;
     s->calibrated        = false;
 
+    // Grid defaults
+    s->grid_calibrated = false;
+    s->grid_minx = s->grid_miny = 0.0f;
+    s->grid_maxx = s->grid_maxy = 0.0f;
+    s->grid_dx = s->grid_dy = 0.0f;
+    s->grid_nx = s->grid_ny = 0;
+    s->grid_points_count = 0;
+    for (int i = 0; i < CAM_SETTINGS_MAX_GRID_POINTS; i++) { s->grid_points[i][0] = 0.0f; s->grid_points[i][1] = 0.0f; }
+    s->surface_width = 100.0f;
+    s->surface_height = 100.0f;
+
     // Identity homography (no transform)
     s->homography[0] = 1.0f; s->homography[1] = 0.0f; s->homography[2] = 0.0f;
     s->homography[3] = 0.0f; s->homography[4] = 1.0f; s->homography[5] = 0.0f;

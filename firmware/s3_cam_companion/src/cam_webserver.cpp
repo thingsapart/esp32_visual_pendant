@@ -194,9 +194,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
                         touch-action: none; }
   #snap-container canvas { position: absolute; top:0; left:0;
                            width: 100%; height: 100%; pointer-events: none; }
+  #grid-snap-container { position: relative; display: inline-block; cursor: crosshair;
+                         max-width: 100%; padding: 0; border: 2px solid #ffffff;
+                         border-radius: 6px; background: #0f3460; }
+  #grid-snap-container img { max-width: 100%; display: block; border-radius: 4px;
+                             touch-action: none; }
+  #grid-snap-container canvas { position: absolute; top:0; left:0;
+                                width: 100%; height: 100%; pointer-events: none; }
   .dot { width:10px; height:10px; border-radius: 50%; background: #e94560;
          border: 2px solid #fff; position: absolute;
          transform: translate(-50%,-50%); pointer-events: none; }
+  .grid-dot { background: #2f8efb; border: 2px solid #fff; width:8px; height:8px; }
+  .target-dot { box-sizing: border-box; width:18px; height:18px; border-radius:50%; border:3px solid rgba(47,142,251,0.9); background: rgba(0,0,0,0); position:absolute; transform: translate(-50%,-50%); pointer-events:none; }
   .status { font-size: 0.8em; color: #888; margin-top: 8px; }
   #corner-list { font-size: 0.8em; color: #53d8fb; margin-top: 8px;
                  font-family: monospace; }
@@ -225,6 +234,44 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
     <canvas id="overlay"></canvas>
   </div>
   <div id="corner-list">Click image to set corners...</div>
+</div>
+
+<!-- Grid Calibration -->
+<div class="card">
+  <h2>Grid Calibration — Pixel → Real Mapping</h2>
+  <p style="font-size:0.8em; color:#888; margin-bottom:8px;">
+    Define the real-world extent and grid spacing that correspond to the
+    currently visible area, then run the wizard to mark each grid point
+    by placing a tape measure, ruler intersection, or moving a visible
+    object to the requested location and clicking the image.
+  </p>
+  <!-- Min/Max removed; Min assumed 0, Max = project width/height -->
+  <div class="row">
+    <div>
+      <label>Grid DX <input type="number" id="grid_dx" step="0.1" value="25"></label>
+    </div>
+    <div>
+      <label>Grid DY <input type="number" id="grid_dy" step="0.1" value="25"></label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Project Width (real units) <input type="number" id="proj_w" step="0.1" value="100"></label>
+    </div>
+    <div>
+      <label>Project Height (real units) <input type="number" id="proj_h" step="0.1" value="100"></label>
+    </div>
+  </div>
+  <div style="margin-top:8px;">
+    <button class="btn-primary" onclick="startGridWizard()">Start Grid Wizard</button>
+    <button class="btn-danger" onclick="clearGrid()" style="margin-left:8px;">Clear Grid</button>
+  </div>
+  <!-- Separate grid preview used only for the grid wizard so corners don't interfere -->
+  <div id="grid-snap-container" style="margin-top:8px; display:none;">
+    <img id="grid-snap" src="/snapshot" alt="Grid Snapshot" crossorigin="anonymous">
+    <canvas id="grid-overlay"></canvas>
+  </div>
+  <div id="grid-wizard-status" style="margin-top:8px; font-size:0.9em; color:#a0e0a0;"></div>
 </div>
 
 <!-- Camera Settings -->
@@ -295,9 +342,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
 
 <script>
 const corners = []; // source-space normalized corners (0..1)
+let gridWizardActive = false;
+let gridTargets = []; // array of {x:real, y:real, display:[nx,ny]}
+let gridPoints = [];  // array of source-space normalized [x,y] matches
+let grid_nx = 0, grid_ny = 0;
+let wizardIndex = 0;
 const img = document.getElementById('snap');
 const overlay = document.getElementById('overlay');
 const container = document.getElementById('snap-container');
+// Grid-specific elements (separate preview for wizard)
+const gridImg = document.getElementById('grid-snap');
+const gridOverlay = document.getElementById('grid-overlay');
+const gridContainer = document.getElementById('grid-snap-container');
 let dragIndex = -1;
 let hasDragged = false;
 let refreshTimer = null;
@@ -314,6 +370,22 @@ function imageWidthPx() {
 
 function imageHeightPx() {
   return Math.max(1, img.clientHeight || img.naturalHeight || 480);
+}
+
+function gridImageWidthPx() {
+  return Math.max(1, gridImg.clientWidth || gridImg.naturalWidth || 640);
+}
+
+function gridImageHeightPx() {
+  return Math.max(1, gridImg.clientHeight || gridImg.naturalHeight || 480);
+}
+
+function gridContainerWidthPx() {
+  return Math.max(1, gridContainer.clientWidth || gridImageWidthPx());
+}
+
+function gridContainerHeightPx() {
+  return Math.max(1, gridContainer.clientHeight || gridImageHeightPx());
 }
 
 function containerWidthPx() {
@@ -336,6 +408,40 @@ function borderFracY() {
   const ir = img.getBoundingClientRect();
   if (cr.height <= 0) return 0;
   return Math.max(0, Math.min(0.49, (ir.top - cr.top) / cr.height));
+}
+
+function gridBorderFracX() {
+  const cr = gridContainer.getBoundingClientRect();
+  const ir = gridImg.getBoundingClientRect();
+  if (cr.width <= 0) return 0;
+  return Math.max(0, Math.min(0.49, (ir.left - cr.left) / cr.width));
+}
+
+function gridBorderFracY() {
+  const cr = gridContainer.getBoundingClientRect();
+  const ir = gridImg.getBoundingClientRect();
+  if (cr.height <= 0) return 0;
+  return Math.max(0, Math.min(0.49, (ir.top - cr.top) / cr.height));
+}
+
+function gridDisplayToUiX(x) {
+  const bx = gridBorderFracX();
+  return (x + bx) / (1 + 2 * bx);
+}
+
+function gridDisplayToUiY(y) {
+  const by = gridBorderFracY();
+  return (y + by) / (1 + 2 * by);
+}
+
+function gridUiToDisplayX(x) {
+  const bx = gridBorderFracX();
+  return x * (1 + 2 * bx) - bx;
+}
+
+function gridUiToDisplayY(y) {
+  const by = gridBorderFracY();
+  return y * (1 + 2 * by) - by;
 }
 
 function displayToUiX(x) {
@@ -411,6 +517,32 @@ function displayToSourceNorm(dstPt) {
   const inv = invert3x3(H);
   if (!inv) return [dstPt[0], dstPt[1]];
   return applyHomographyNorm(dstPt, inv);
+}
+
+function gridApplyHomographyNorm(pt, h) {
+  const w = gridImageWidthPx();
+  const hgt = gridImageHeightPx();
+  const sx = pt[0] * (w - 1);
+  const sy = pt[1] * (hgt - 1);
+  const den = h[6] * sx + h[7] * sy + h[8];
+  if (!Number.isFinite(den) || Math.abs(den) < 1e-9) return [pt[0], pt[1]];
+  const dx = (h[0] * sx + h[1] * sy + h[2]) / den;
+  const dy = (h[3] * sx + h[4] * sy + h[5]) / den;
+  return [dx / (w - 1), dy / (hgt - 1)];
+}
+
+function gridDisplayToSourceNorm(dstPt) {
+  if (viewMode === 'raw') return [dstPt[0], dstPt[1]];
+  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
+  const inv = invert3x3(H);
+  if (!inv) return [dstPt[0], dstPt[1]];
+  return gridApplyHomographyNorm(dstPt, inv);
+}
+
+function gridSourceToDisplayNorm(srcPt) {
+  if (viewMode === 'raw') return [srcPt[0], srcPt[1]];
+  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
+  return gridApplyHomographyNorm(srcPt, H);
 }
 
 function getRenderedCorners() {
@@ -497,6 +629,23 @@ async function syncPreviewCalibration() {
       currentHomography = j.homography;
       drawCorners();
       updateCornerList();
+      // After updating homography/corners, fetch config to pick up any server-generated grid
+      try {
+        const rc = await fetch('/config');
+        const cc = await rc.json();
+        if (cc && cc.grid_calibrated) {
+          gridPoints = [];
+          if (Array.isArray(cc.grid_points)) {
+            cc.grid_points.forEach(p => { if (Array.isArray(p) && p.length === 2) gridPoints.push([p[0], p[1]]); });
+            if (typeof cc.grid_nx !== 'undefined') grid_nx = cc.grid_nx;
+            if (typeof cc.grid_ny !== 'undefined') grid_ny = cc.grid_ny;
+            document.getElementById('grid_dx').value = cc.grid_dx || document.getElementById('grid_dx').value;
+            document.getElementById('grid_dy').value = cc.grid_dy || document.getElementById('grid_dy').value;
+            drawGridPoints();
+            document.getElementById('grid-wizard-status').textContent = 'Loaded generated grid';
+          }
+        }
+      } catch (e) { /* ignore config fetch errors */ }
     }
   } catch (e) {
     console.warn('Preview calibration sync failed', e);
@@ -509,20 +658,51 @@ async function refreshProcessedSnapshot() {
 }
 
 img.addEventListener('click', function(e) {
+  if (gridWizardActive) {
+    // Ignore clicks on main preview while grid wizard uses its own preview
+    return;
+  }
   if (hasDragged) {
     hasDragged = false;
     return;
   }
-  if (corners.length >= 4) return;
+
   const rect = img.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width;
   const y = (e.clientY - rect.top) / rect.height;
+  
+
+  if (corners.length >= 4) return;
   corners.push(displayToSourceNorm([x, y]));
   normalizeCornerOrder();
   drawCorners();
   updateCornerList();
   if (corners.length === 4) {
     refreshProcessedSnapshot();
+  }
+});
+
+// Grid preview click handler: used only when wizard is active
+gridImg.addEventListener('click', function(e) {
+  if (!gridWizardActive) return;
+  const rect = gridImg.getBoundingClientRect();
+  const ux = (e.clientX - rect.left) / rect.width;
+  const uy = (e.clientY - rect.top) / rect.height;
+  // Convert UI coords to display normalized coords for the grid preview
+  const dx = gridUiToDisplayX(ux);
+  const dy = gridUiToDisplayY(uy);
+  // Convert display -> source normalized using grid-specific mapping
+  const src = gridDisplayToSourceNorm([dx, dy]);
+  gridPoints.push(src);
+  drawGridPointsGrid();
+  const status = document.getElementById('grid-wizard-status');
+  status.textContent = `Marked ${gridPoints.length} / ${gridTargets.length}`;
+  wizardIndex = gridPoints.length;
+  drawWizardGuide();
+  if (gridPoints.length >= gridTargets.length) {
+    gridWizardActive = false;
+    status.textContent = 'Grid capture complete — uploading...';
+    submitGridPoints();
   }
 });
 
@@ -597,17 +777,20 @@ container.addEventListener('pointercancel', () => {
 
 function drawCorners() {
   const rendered = getRenderedCorners();
-  // Remove old dots
-  container.querySelectorAll('.dot').forEach(d => d.remove());
+  // Remove old corner dots but keep any grid/target dots
+  container.querySelectorAll('.dot:not(.grid-dot):not(.target-dot)').forEach(d => d.remove());
   const labels = ['TL', 'TR', 'BR', 'BL'];
-  rendered.forEach((c, i) => {
-    const dot = document.createElement('div');
-    dot.className = 'dot';
-    dot.style.left = (displayToUiX(c[0]) * 100) + '%';
-    dot.style.top = (displayToUiY(c[1]) * 100) + '%';
-    dot.title = labels[i];
-    container.appendChild(dot);
-  });
+  // If the grid wizard is active, hide corner DOM markers so they don't interfere
+  if (!gridWizardActive) {
+    rendered.forEach((c, i) => {
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+      dot.style.left = (displayToUiX(c[0]) * 100) + '%';
+      dot.style.top = (displayToUiY(c[1]) * 100) + '%';
+      dot.title = labels[i];
+      container.appendChild(dot);
+    });
+  }
   // Draw lines on canvas
   const ctx = overlay.getContext('2d');
   overlay.width = containerWidthPx();
@@ -623,7 +806,8 @@ function drawCorners() {
   ctx.lineWidth = 1.5;
   ctx.strokeRect(bx, by, bw, bh);
 
-  if (rendered.length > 1) {
+  // Don't draw the corner polygon while the wizard is active so it doesn't obscure targets
+  if (!gridWizardActive && rendered.length > 1) {
     ctx.strokeStyle = '#e94560';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -653,6 +837,214 @@ function updateCornerList() {
   }
 }
 
+function drawGridPoints() {
+  // Remove old dots (keep corner dots possible)
+  container.querySelectorAll('.grid-dot').forEach(d => d.remove());
+  container.querySelectorAll('.target-dot').forEach(d => d.remove());
+  // Draw grid points
+  gridPoints.forEach((p, i) => {
+    const disp = sourceToDisplayNorm(p);
+    const dot = document.createElement('div');
+    dot.className = 'dot grid-dot';
+    dot.style.left = (displayToUiX(disp[0]) * 100) + '%';
+    dot.style.top = (displayToUiY(disp[1]) * 100) + '%';
+    dot.title = `G${i}`;
+    container.appendChild(dot);
+  });
+
+  // Draw grid lines on canvas if we know dimensions
+  const ctx = overlay.getContext('2d');
+  overlay.width = containerWidthPx();
+  overlay.height = containerHeightPx();
+  // leave previous drawings (corners) — redraw lines over them
+  if (gridPoints.length >= 2 && grid_nx > 1 && grid_ny > 1) {
+    ctx.strokeStyle = 'rgba(47,142,251,0.45)';
+    ctx.lineWidth = 1;
+    // helper to get display px
+    const pointAt = (ix, iy) => {
+      const idx = iy * grid_nx + ix;
+      if (idx < 0 || idx >= gridPoints.length) return null;
+      const d = sourceToDisplayNorm(gridPoints[idx]);
+      return [displayToUiX(d[0]) * overlay.width, displayToUiY(d[1]) * overlay.height];
+    };
+    // horizontal lines
+    for (let iy = 0; iy < grid_ny; iy++) {
+      ctx.beginPath();
+      for (let ix = 0; ix < grid_nx; ix++) {
+        const p = pointAt(ix, iy);
+        if (!p) continue;
+        if (ix === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+    }
+    // vertical lines
+    for (let ix = 0; ix < grid_nx; ix++) {
+      ctx.beginPath();
+      for (let iy = 0; iy < grid_ny; iy++) {
+        const p = pointAt(ix, iy);
+        if (!p) continue;
+        if (iy === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+    }
+  }
+}
+
+// Draw grid points into the dedicated grid preview overlay and container
+function drawGridPointsGrid() {
+  // Remove old dots in grid container
+  gridContainer.querySelectorAll('.grid-dot').forEach(d => d.remove());
+  gridContainer.querySelectorAll('.target-dot').forEach(d => d.remove());
+  // Draw points
+  gridPoints.forEach((p, i) => {
+    const disp = gridSourceToDisplayNorm(p);
+    const dot = document.createElement('div');
+    dot.className = 'dot grid-dot';
+    // Map display normalized (0..1) to grid container UI coords
+    const left = gridDisplayToUiX(disp[0]);
+    const top = gridDisplayToUiY(disp[1]);
+    dot.style.left = (left * 100) + '%';
+    dot.style.top = (top * 100) + '%';
+    dot.title = `G${i}`;
+    gridContainer.appendChild(dot);
+  });
+
+  const ctx = gridOverlay.getContext('2d');
+  gridOverlay.width = gridContainerWidthPx();
+  gridOverlay.height = gridContainerHeightPx();
+  ctx.clearRect(0, 0, gridOverlay.width, gridOverlay.height);
+
+  if (gridPoints.length >= 2 && grid_nx > 1 && grid_ny > 1) {
+    ctx.strokeStyle = 'rgba(47,142,251,0.45)';
+    ctx.lineWidth = 1;
+      const pointAt = (ix, iy) => {
+      const idx = iy * grid_nx + ix;
+      if (idx < 0 || idx >= gridPoints.length) return null;
+      const d = gridSourceToDisplayNorm(gridPoints[idx]);
+      return [gridDisplayToUiX(d[0]) * gridOverlay.width, gridDisplayToUiY(d[1]) * gridOverlay.height];
+    };
+    for (let iy = 0; iy < grid_ny; iy++) {
+      ctx.beginPath();
+      for (let ix = 0; ix < grid_nx; ix++) {
+        const p = pointAt(ix, iy);
+        if (!p) continue;
+        if (ix === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+    }
+    for (let ix = 0; ix < grid_nx; ix++) {
+      ctx.beginPath();
+      for (let iy = 0; iy < grid_ny; iy++) {
+        const p = pointAt(ix, iy);
+        if (!p) continue;
+        if (iy === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+    }
+  }
+}
+
+function startGridWizard() {
+  const projW = parseFloat(document.getElementById('proj_w').value);
+  const projH = parseFloat(document.getElementById('proj_h').value);
+  const dx = parseFloat(document.getElementById('grid_dx').value);
+  const dy = parseFloat(document.getElementById('grid_dy').value);
+  if (!isFinite(projW) || !isFinite(projH) || !isFinite(dx) || !isFinite(dy) || projW <= 0 || projH <= 0 || dx <= 0 || dy <= 0) {
+    alert('Invalid grid parameters'); return;
+  }
+  gridTargets = [];
+  gridPoints = [];
+  // Generate grid in row-major (Y then X). Include all points inside extents.
+  grid_nx = Math.round(projW / dx) + 1;
+  grid_ny = Math.round(projH / dy) + 1;
+  for (let iy = 0; iy < grid_ny; iy++) {
+    const gy = iy * dy; // min assumed 0
+    for (let ix = 0; ix < grid_nx; ix++) {
+      const gx = ix * dx;
+      const dst_norm_x = (grid_nx > 1) ? (ix / (grid_nx - 1)) : 0;
+      const dst_norm_y = (grid_ny > 1) ? (iy / (grid_ny - 1)) : 0;
+      gridTargets.push({x: gx, y: gy, disp: [dst_norm_x, dst_norm_y]});
+    }
+  }
+  // Remove corners from targets (optional) — skip if target equals corners
+  // Start wizard
+  gridWizardActive = true;
+  wizardIndex = 0;
+  const status = document.getElementById('grid-wizard-status');
+  status.textContent = `Grid wizard started — click ${gridTargets.length} points on image. First: X=${gridTargets[0].x}, Y=${gridTargets[0].y}`;
+  // Show grid-specific snapshot and hide main preview so corners cannot interfere
+  container.style.display = 'none';
+  gridContainer.style.display = 'block';
+  // refresh grid image and draw guide when loaded
+  gridImg.src = '/snapshot?t=' + Date.now();
+  gridImg.onload = () => {
+    // Ensure container matches image size so UI mapping is 1:1.
+    try {
+      gridContainer.style.width = gridImg.clientWidth + 'px';
+      gridContainer.style.height = gridImg.clientHeight + 'px';
+    } catch (e) {}
+    drawGridPointsGrid();
+    drawWizardGuide();
+  };
+}
+
+function submitGridPoints() {
+  const projW = parseFloat(document.getElementById('proj_w').value);
+  const projH = parseFloat(document.getElementById('proj_h').value);
+  const dx = parseFloat(document.getElementById('grid_dx').value);
+  const dy = parseFloat(document.getElementById('grid_dy').value);
+  const nx = grid_nx;
+  const ny = grid_ny;
+  const pts = gridPoints.slice(0, gridTargets.length).map(p => [p[0], p[1]]);
+  const body = { proj_w: projW, proj_h: projH, dx, dy, nx, ny, points: pts };
+  fetch('/grid_calib', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    .then(r => r.json()).then(j => {
+      document.getElementById('grid-wizard-status').textContent = j.message || 'Grid saved.';
+      // update local grid dims
+      grid_nx = body.nx; grid_ny = body.ny;
+      // hide grid preview and show main preview again
+      gridContainer.style.display = 'none';
+      container.style.display = 'block';
+      drawGridPoints();
+      setTimeout(() => { document.getElementById('grid-wizard-status').textContent = ''; }, 4000);
+    }).catch(e => {
+      document.getElementById('grid-wizard-status').textContent = 'Save failed: ' + e;
+    });
+}
+
+function clearGrid() {
+  gridWizardActive = false;
+  gridTargets = [];
+  gridPoints = [];
+  document.getElementById('grid-wizard-status').textContent = 'Grid cleared';
+  drawGridPoints();
+  // restore main preview
+  gridContainer.style.display = 'none';
+  container.style.display = 'block';
+  // Also clear on server
+  fetch('/grid_calib', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({clear:true}) })
+    .then(() => {}).catch(() => {});
+}
+
+function drawWizardGuide() {
+  // show next target marker and instruction
+  container.querySelectorAll('.target-dot').forEach(d => d.remove());
+  gridContainer.querySelectorAll('.target-dot').forEach(d => d.remove());
+  if (!gridWizardActive || wizardIndex >= gridTargets.length) return;
+  const t = gridTargets[wizardIndex];
+  // display normalized target (processed view)
+  const dx = t.disp[0];
+  const dy = t.disp[1];
+  const dot = document.createElement('div');
+  dot.className = 'target-dot';
+  dot.style.left = (gridDisplayToUiX(dx) * 100) + '%';
+  dot.style.top = (gridDisplayToUiY(dy) * 100) + '%';
+  // place guide marker into grid preview so corners don't mask it
+  gridContainer.appendChild(dot);
+  const status = document.getElementById('grid-wizard-status');
+  status.textContent = `Point ${wizardIndex+1}/${gridTargets.length}: place tape at X=${t.x}, Y=${t.y} then click image`;
+}
+
 async function loadConfig() {
   try {
     const r = await fetch('/config');
@@ -671,6 +1063,9 @@ async function loadConfig() {
     document.getElementById('agc').checked = c.agc_enable;
     document.getElementById('aec_val').value = c.aec_value;
     document.getElementById('agc_gain').value = c.agc_gain;
+    // Project surface dims
+    if (typeof c.surface_width !== 'undefined') document.getElementById('proj_w').value = c.surface_width;
+    if (typeof c.surface_height !== 'undefined') document.getElementById('proj_h').value = c.surface_height;
     if (c.cal_src) {
       if (Array.isArray(c.homography) && c.homography.length === 9) {
         currentHomography = c.homography;
@@ -678,6 +1073,22 @@ async function loadConfig() {
       setCornersFromSource(c.cal_src);
       drawCorners();
       updateCornerList();
+    }
+    // Grid calibration load
+    if (typeof c.grid_calibrated !== 'undefined' && c.grid_calibrated) {
+      // Project size
+      if (typeof c.surface_width !== 'undefined') document.getElementById('proj_w').value = c.surface_width;
+      if (typeof c.surface_height !== 'undefined') document.getElementById('proj_h').value = c.surface_height;
+      document.getElementById('grid_dx').value = c.grid_dx || 0;
+      document.getElementById('grid_dy').value = c.grid_dy || 0;
+      gridPoints = [];
+      if (Array.isArray(c.grid_points)) {
+        c.grid_points.forEach(p => { if (Array.isArray(p) && p.length === 2) gridPoints.push([p[0], p[1]]); });
+        if (typeof c.grid_nx !== 'undefined') grid_nx = c.grid_nx;
+        if (typeof c.grid_ny !== 'undefined') grid_ny = c.grid_ny;
+        drawGridPoints();
+        document.getElementById('grid-wizard-status').textContent = 'Loaded saved grid';
+      }
     }
     document.getElementById('status').textContent = 'Config loaded.';
   } catch(e) {
@@ -702,6 +1113,8 @@ async function saveConfig() {
     aec_value: parseInt(document.getElementById('aec_val').value),
     agc_gain: parseInt(document.getElementById('agc_gain').value),
     cal_src: srcCorners,
+    surface_width: parseFloat(document.getElementById('proj_w').value),
+    surface_height: parseFloat(document.getElementById('proj_h').value),
   };
   try {
     const r = await fetch('/config', {
@@ -782,41 +1195,57 @@ static void handle_get_config() {
     cam_settings_t *s = s_settings;
 
     // Build JSON manually (no ArduinoJson dependency).
-    char json[1024];
+    char json[2048];
     int n = snprintf(json, sizeof(json),
-        "{"
-        "\"resolution\":%d,"
-        "\"jpeg_quality\":%d,"
-        "\"diff_threshold\":%d,"
-        "\"tiles_x\":%d,"
-        "\"tiles_y\":%d,"
-        "\"keyframe_interval\":%d,"
-        "\"send_interval_ms\":%d,"
-        "\"brightness\":%d,"
-        "\"contrast\":%d,"
-        "\"aec_enable\":%s,"
-        "\"agc_enable\":%s,"
-        "\"aec_value\":%d,"
-        "\"agc_gain\":%d,"
-        "\"calibrated\":%s,"
-        "\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
-        "\"cal_src\":[[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f]]"
-        "}",
-        s->resolution, s->jpeg_quality, s->diff_threshold,
-        s->tiles_x, s->tiles_y, s->keyframe_interval, s->send_interval_ms,
-        s->brightness, s->contrast,
-        s->aec_enable ? "true" : "false",
-        s->agc_enable ? "true" : "false",
-        s->aec_value, s->agc_gain,
-        s->calibrated ? "true" : "false",
-        s->homography[0], s->homography[1], s->homography[2],
-        s->homography[3], s->homography[4], s->homography[5],
-        s->homography[6], s->homography[7], s->homography[8],
-        s->cal_src[0][0], s->cal_src[0][1],
-        s->cal_src[1][0], s->cal_src[1][1],
-        s->cal_src[2][0], s->cal_src[2][1],
-        s->cal_src[3][0], s->cal_src[3][1]);
+      "{"
+      "\"resolution\":%d,"
+      "\"jpeg_quality\":%d,"
+      "\"diff_threshold\":%d,"
+      "\"tiles_x\":%d,"
+      "\"tiles_y\":%d,"
+      "\"keyframe_interval\":%d,"
+      "\"send_interval_ms\":%d,"
+      "\"brightness\":%d,"
+      "\"contrast\":%d,"
+      "\"aec_enable\":%s,"
+      "\"agc_enable\":%s,"
+      "\"aec_value\":%d,"
+      "\"agc_gain\":%d,"
+      "\"calibrated\":%s,"
+      "\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
+      "\"cal_src\":[[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f]],"
+      "\"grid_calibrated\":%s,"
+      "\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
+      s->resolution, s->jpeg_quality, s->diff_threshold,
+      s->tiles_x, s->tiles_y, s->keyframe_interval, s->send_interval_ms,
+      s->brightness, s->contrast,
+      s->aec_enable ? "true" : "false",
+      s->agc_enable ? "true" : "false",
+      s->aec_value, s->agc_gain,
+      s->calibrated ? "true" : "false",
+      s->homography[0], s->homography[1], s->homography[2],
+      s->homography[3], s->homography[4], s->homography[5],
+      s->homography[6], s->homography[7], s->homography[8],
+      s->cal_src[0][0], s->cal_src[0][1],
+      s->cal_src[1][0], s->cal_src[1][1],
+      s->cal_src[2][0], s->cal_src[2][1],
+      s->cal_src[3][0], s->cal_src[3][1],
+      s->grid_calibrated ? "true" : "false",
+      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny,
+      s->surface_width, s->surface_height);
     (void)n;
+    size_t off = strlen(json);
+    for (uint16_t i = 0; i < s->grid_points_count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
+        int r = snprintf(json + off, sizeof(json) - off, "%s[%.6f,%.6f]",
+                         (i==0)?"":",", s->grid_points[i][0], s->grid_points[i][1]);
+        if (r <= 0) break;
+        off += r;
+    }
+    if (off < sizeof(json) - 4) {
+      snprintf(json + off, sizeof(json) - off, "]}" );
+    } else {
+      strncat(json, "]}", sizeof(json) - strlen(json) - 1);
+    }
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->send(200, "application/json", json);
 }
@@ -882,6 +1311,8 @@ static void handle_post_config() {
     s->agc_enable        = json_bool(body, "agc_enable", s->agc_enable);
     s->aec_value         = (int16_t)json_int(body, "aec_value", s->aec_value);
     s->agc_gain          = (uint8_t)json_int(body, "agc_gain", s->agc_gain);
+    s->surface_width     = json_float(body, "surface_width", s->surface_width);
+    s->surface_height    = json_float(body, "surface_height", s->surface_height);
 
     float parsed_cal_src[4][2];
     if (parse_cal_src(body, parsed_cal_src)) {
@@ -924,6 +1355,67 @@ static void handle_post_config() {
       cam_capture_get_resolution(&w, &h);
       cam_settings_compute_homography(s_settings, w, h);
       ESP_LOGI(TAG, "preview_calib: updated runtime homography from 4 corners");
+
+      // If surface dimensions are set, auto-generate a uniform 6x6 grid by
+      // mapping destination image points back to source (inverse homography).
+      const uint16_t NX = 6, NY = 6;
+      if (s_settings->surface_width > 0.0f && s_settings->surface_height > 0.0f) {
+        float H[9];
+        for (int i = 0; i < 9; i++) H[i] = s_settings->homography[i];
+        // Invert 3x3 matrix H -> Hinv
+        float A =  (H[4]*H[8] - H[5]*H[7]);
+        float B = -(H[3]*H[8] - H[5]*H[6]);
+        float C =  (H[3]*H[7] - H[4]*H[6]);
+        float D = -(H[1]*H[8] - H[2]*H[7]);
+        float E =  (H[0]*H[8] - H[2]*H[6]);
+        float F = -(H[0]*H[7] - H[1]*H[6]);
+        float G =  (H[1]*H[5] - H[2]*H[4]);
+        float K = -(H[0]*H[5] - H[2]*H[3]);
+        float L =  (H[0]*H[4] - H[1]*H[3]);
+        float det = H[0]*A + H[1]*B + H[2]*C;
+        if (fabs(det) > 1e-12f) {
+          float invDet = 1.0f / det;
+          float Hinv[9];
+          Hinv[0] = A * invDet; Hinv[1] = D * invDet; Hinv[2] = G * invDet;
+          Hinv[3] = B * invDet; Hinv[4] = E * invDet; Hinv[5] = K * invDet;
+          Hinv[6] = C * invDet; Hinv[7] = F * invDet; Hinv[8] = L * invDet;
+
+          // Build grid
+          uint16_t count = 0;
+          for (uint16_t iy = 0; iy < NY && count < CAM_SETTINGS_MAX_GRID_POINTS; iy++) {
+            for (uint16_t ix = 0; ix < NX && count < CAM_SETTINGS_MAX_GRID_POINTS; ix++) {
+              float dst_x = (float)ix * (float)(w - 1) / (float)(NX - 1);
+              float dst_y = (float)iy * (float)(h - 1) / (float)(NY - 1);
+              float den = Hinv[6]*dst_x + Hinv[7]*dst_y + Hinv[8];
+              if (fabs(den) < 1e-9f) continue;
+              float src_x = (Hinv[0]*dst_x + Hinv[1]*dst_y + Hinv[2]) / den;
+              float src_y = (Hinv[3]*dst_x + Hinv[4]*dst_y + Hinv[5]) / den;
+              float sxnorm = src_x / (float)(w - 1);
+              float synorm = src_y / (float)(h - 1);
+              // clamp
+              if (sxnorm < 0.0f) sxnorm = 0.0f; if (sxnorm > 1.0f) sxnorm = 1.0f;
+              if (synorm < 0.0f) synorm = 0.0f; if (synorm > 1.0f) synorm = 1.0f;
+              s_settings->grid_points[count][0] = sxnorm;
+              s_settings->grid_points[count][1] = synorm;
+              count++;
+            }
+          }
+          s_settings->grid_points_count = count;
+          s_settings->grid_calibrated = (count > 0);
+          s_settings->grid_minx = 0.0f;
+          s_settings->grid_miny = 0.0f;
+          s_settings->grid_maxx = s_settings->surface_width;
+          s_settings->grid_maxy = s_settings->surface_height;
+          s_settings->grid_dx = (NX > 1) ? (s_settings->surface_width / (float)(NX - 1)) : 0.0f;
+          s_settings->grid_dy = (NY > 1) ? (s_settings->surface_height / (float)(NY - 1)) : 0.0f;
+          s_settings->grid_nx = NX;
+          s_settings->grid_ny = NY;
+          cam_settings_save(s_settings);
+          ESP_LOGI(TAG, "preview_calib: auto-generated %u grid points (6x6)", (unsigned)count);
+        } else {
+          ESP_LOGW(TAG, "preview_calib: homography singular, skipping grid generation");
+        }
+      }
     } else if (clear_requested) {
       s_settings->calibrated = false;
       s_settings->homography[0] = 1.0f; s_settings->homography[1] = 0.0f; s_settings->homography[2] = 0.0f;
@@ -958,6 +1450,119 @@ static void handle_reset() {
     server->send(200, "application/json", "{\"message\":\"Reset to defaults. Rebooting.\"}");
     delay(2000);
     ESP.restart();
+}
+
+// GET /grid_calib - return current grid calibration as JSON
+static void handle_get_grid() {
+    if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
+    cam_settings_t *s = s_settings;
+
+    // Build JSON conservatively
+    char json[2048];
+    int n = snprintf(json, sizeof(json),
+      "{\"grid_calibrated\":%s,\"proj_w\":%.4f,\"proj_h\":%.4f,\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
+      s->grid_calibrated ? "true" : "false",
+      s->surface_width, s->surface_height,
+      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny);
+    (void)n;
+    size_t off = strlen(json);
+    for (uint16_t i = 0; i < s->grid_points_count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
+        int r = snprintf(json + off, sizeof(json) - off, "%s[%.6f,%.6f]",
+                         (i==0)?"":",", s->grid_points[i][0], s->grid_points[i][1]);
+        if (r <= 0) break;
+        off += r;
+    }
+    if (off < sizeof(json) - 4) {
+      snprintf(json + off, sizeof(json) - off, "]}" );
+    } else {
+      // fallback
+      strncat(json, "]}", sizeof(json) - strlen(json) - 1);
+    }
+
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->send(200, "application/json", json);
+}
+
+// Minimal parser for grid POST body
+static bool parse_grid_points(const String &body,
+                float *out_proj_w, float *out_proj_h,
+                float *out_dx, float *out_dy,
+                uint16_t *out_nx, uint16_t *out_ny,
+                float out_points[][2], uint16_t *out_count,
+                bool *out_clear) {
+  *out_clear = false;
+  if (body.indexOf("\"clear\":true") >= 0) { *out_clear = true; return true; }
+  // keys: proj_w, proj_h, dx, dy, nx, ny, points
+  *out_proj_w = json_float(body, "proj_w", NAN);
+  *out_proj_h = json_float(body, "proj_h", NAN);
+  *out_dx     = json_float(body, "dx", NAN);
+  *out_dy     = json_float(body, "dy", NAN);
+  *out_nx     = (uint16_t)json_int(body, "nx", 0);
+  *out_ny     = (uint16_t)json_int(body, "ny", 0);
+
+    int pts_idx = body.indexOf("\"points\"");
+    if (pts_idx < 0) { *out_count = 0; return true; }
+    int arr = body.indexOf('[', pts_idx);
+    if (arr < 0) { *out_count = 0; return true; }
+    int pos = arr + 1;
+    uint16_t count = 0;
+    while (count < CAM_SETTINGS_MAX_GRID_POINTS) {
+      int open = body.indexOf('[', pos);
+      if (open < 0) break;
+      int comma = body.indexOf(',', open + 1);
+      int close = body.indexOf(']', comma + 1);
+      if (comma < 0 || close < 0) break;
+      float x = body.substring(open + 1, comma).toFloat();
+      float y = body.substring(comma + 1, close).toFloat();
+      out_points[count][0] = x;
+      out_points[count][1] = y;
+      count++;
+      pos = close + 1;
+      // find next comma or closing
+      if (body.indexOf(']', pos) == pos) break;
+    }
+    *out_count = count;
+    return true;
+}
+
+static void handle_post_grid() {
+    if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
+    String body = server->arg("plain");
+    float minx, maxx, miny, maxy, dx, dy;
+    uint16_t nx, ny;
+    float points[CAM_SETTINGS_MAX_GRID_POINTS][2];
+    uint16_t count = 0;
+    bool clear = false;
+    float proj_w, proj_h;
+    if (!parse_grid_points(body, &proj_w, &proj_h, &dx, &dy, &nx, &ny, points, &count, &clear)) {
+      server->send(400, "application/json", "{\"error\":true,\"message\":\"Invalid payload\"}");
+      return;
+    }
+    if (clear) {
+      s_settings->grid_calibrated = false;
+      s_settings->grid_points_count = 0;
+      cam_settings_save(s_settings);
+      server->sendHeader("Access-Control-Allow-Origin", "*");
+      server->send(200, "application/json", "{\"message\":\"Grid cleared\"}");
+      return;
+    }
+
+    s_settings->grid_calibrated = true;
+    // Min assumed 0
+    s_settings->grid_minx = 0.0f; s_settings->grid_maxx = proj_w;
+    s_settings->grid_miny = 0.0f; s_settings->grid_maxy = proj_h;
+    s_settings->grid_dx = dx; s_settings->grid_dy = dy;
+    s_settings->grid_nx = nx; s_settings->grid_ny = ny;
+    s_settings->grid_points_count = count;
+    for (uint16_t i = 0; i < count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
+      s_settings->grid_points[i][0] = points[i][0];
+      s_settings->grid_points[i][1] = points[i][1];
+    }
+    cam_settings_save(s_settings);
+
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->send(200, "application/json", "{\"message\":\"Grid saved\"}");
+    ESP_LOGI(TAG, "Grid calibration saved (%u points)", (unsigned)s_settings->grid_points_count);
 }
 
 static void handle_cors() {
@@ -1000,6 +1605,9 @@ void cam_webserver_start(cam_settings_t *settings) {
     server->on("/config",   HTTP_OPTIONS, handle_cors);
     server->on("/preview_calib", HTTP_POST, handle_post_preview_calib);
     server->on("/preview_calib", HTTP_OPTIONS, handle_cors);
+    server->on("/grid_calib", HTTP_GET, handle_get_grid);
+    server->on("/grid_calib", HTTP_POST, handle_post_grid);
+    server->on("/grid_calib", HTTP_OPTIONS, handle_cors);
     server->on("/reset",    HTTP_POST, handle_reset);
     server->begin();
     s_running = true;

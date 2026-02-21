@@ -51,6 +51,25 @@ bool cam_espnow_send_status(const uint8_t *peer_mac,
                             uint16_t frame_id,
                             uint8_t fps_x10);
 
+// Broadcast grid mapping. points: array of normalized (x,y) pairs, count = nx*ny
+// Returns false if payload too large or send failed.
+bool cam_espnow_send_grid(const uint8_t *peer_mac,
+                          float minx, float maxx, float miny, float maxy,
+                          float dx, float dy,
+                          uint16_t nx, uint16_t ny,
+                          const float *points_xy, uint16_t points_count);
+
+// Compact grid send: packs surface width/height and spacing as four float32
+// (w,h,dx,dy) followed by u16 nx, u16 ny, u16 points_count and then
+// points_count pairs of signed int8 offsets (x_off, y_off). Offsets are
+// normalized difference between actual normalized image coords and the
+// ideal uniform-grid normalized coords, scaled by 127 (range -127..127).
+// This reduces payload size to ~16 + 6 + 2*N bytes.
+bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
+                                  float w, float h, float dx, float dy,
+                                  uint16_t nx, uint16_t ny,
+                                  const int8_t *offsets_xy, uint16_t points_count);
+
 // Get our own MAC address.
 void cam_espnow_get_mac(uint8_t mac[6]);
 

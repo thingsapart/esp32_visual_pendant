@@ -43,6 +43,25 @@ typedef struct {
     float    cal_src[4][2];       // 4 corners: TL, TR, BR, BL
     bool     calibrated;          // True if user has set corners
 
+    // Grid calibration: mapping from a regular real-world grid to image points.
+    // grid_points_count = nx * ny (interior/exterior as provided). Each point
+    // is stored as normalized image coords (0..1). Max entries limited.
+    bool     grid_calibrated;
+    float    grid_minx; // real units
+    float    grid_maxx;
+    float    grid_miny;
+    float    grid_maxy;
+    float    grid_dx;
+    float    grid_dy;
+    uint16_t grid_nx;
+    uint16_t grid_ny;
+#define CAM_SETTINGS_MAX_GRID_POINTS 64
+    float    grid_points[CAM_SETTINGS_MAX_GRID_POINTS][2];
+    uint16_t grid_points_count;
+    // Project surface physical dimensions (real-world units, e.g., mm)
+    float    surface_width;
+    float    surface_height;
+
     // Network
     uint8_t  wifi_channel;
     char     ap_ssid[33];         // AP SSID for config mode (default: CamCompanion)

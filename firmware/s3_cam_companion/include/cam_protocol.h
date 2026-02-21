@@ -39,6 +39,7 @@ typedef enum {
     CAM_MSG_TILE_CHUNK   = 0x81,  // JPEG tile data chunk
     CAM_MSG_FRAME_END    = 0x82,  // Signals all tiles for this frame sent
     CAM_MSG_STATUS       = 0x83,  // Camera status / heartbeat
+    CAM_MSG_GRID_MAP     = 0x84,  // Camera -> Pendant: grid mapping broadcast
 
     // Pendant → Camera
     CAM_CMD_REQUEST_FRAME  = 0x90,  // Poll for next frame
