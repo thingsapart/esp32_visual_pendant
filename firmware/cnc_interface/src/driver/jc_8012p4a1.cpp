@@ -36,21 +36,6 @@ extern esp_lcd_panel_handle_t panel_handle;  // from jd9365_lcd.cpp
 extern esp_lcd_touch_handle_t tp;            // from gsl3680_touch.cpp
 
 static const char *TAG = "JC8012P4A1";
-
-static lv_color_t *s_lv_buf1 = NULL;
-static lv_color_t *s_lv_buf2 = NULL;
-
-static void jc8012p4a1_disp_flush(lv_display_t *drv, const lv_area_t *area, uint8_t *color_map)
-{
-  // Synchronously push the updated area to the panel, then notify LVGL.
-  esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, color_map);
-  lv_disp_flush_ready(drv);
-}
-
-void display_alloc() {
-  LOGI(TAG, "display_alloc: no-op for JC8012P4A1 (adapter handles buffers)");
-}
-
 void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   LOGI(TAG, "Initializing JC8012P4A1 hardware...");
   lcd.begin();
@@ -61,7 +46,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
     const lvgl_port_display_cfg_t disp_cfg = {
       .panel_handle = panel_handle,
       .buffer_size = TFT_WIDTH * TFT_HEIGHT * (LV_COLOR_DEPTH / 8),
-      .double_buffer = false, // JD9365 panel config provides only 1 framebuffer
+      .double_buffer = true,
       .hres = TFT_WIDTH,
       .vres = TFT_HEIGHT,
       .monochrome = false,
