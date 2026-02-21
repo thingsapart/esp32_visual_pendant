@@ -18,10 +18,28 @@
 
 // This is required to get the PPA wait function prototype
 #if LV_USE_GPU_ESP32_P4_PPA
-// The exact header might depend on your LVGL version/port, but this is a common
-// location. This function is essential for synchronizing the PPA hardware
-// renderer.
-// #include "lvgl/src/draw/espressif/lv_draw_ppa.h"
+/* Declare the PPA wait function. Prefer an explicit prototype instead of
+ * relying on a specific include path to avoid include path issues during
+ * cross-build. */
+#ifdef __cplusplus
+extern "C" void lv_draw_ppa_wait_for_finish(void);
+#else
+extern void lv_draw_ppa_wait_for_finish(void);
+#endif
+
+/* Provide a weak fallback implementation that calls the generic wait
+ * function when LVGL was not built with PPA support. If LVGL provides a
+ * strong definition, the linker will prefer it and this weak symbol will
+ * be ignored. */
+#if defined(__GNUC__)
+#ifdef __cplusplus
+extern "C" void lv_draw_ppa_wait_for_finish(void) __attribute__((weak));
+extern "C" void lv_draw_ppa_wait_for_finish(void) { lv_draw_wait_for_finish(); }
+#else
+void lv_draw_ppa_wait_for_finish(void) __attribute__((weak));
+void lv_draw_ppa_wait_for_finish(void) { lv_draw_wait_for_finish(); }
+#endif
+#endif
 #endif
 
 #ifndef CONFIG_LV_DRAW_BUF_ALIGN
@@ -205,12 +223,13 @@ static void lvgl_port_flush_callback(lv_display_t *drv, const lv_area_t *area,
 
   if (disp_ctx->flags.direct_mode || disp_ctx->flags.full_refresh) {
     if (lv_disp_flush_is_last(drv)) {
-#if LV_USE_GPU_ESP32_P4_PPA
-      // Wait for PPA to finish rendering before telling the display driver to
-      // swap buffers
-      // lv_draw_ppa_wait_for_finish();
-      lv_draw_wait_for_finish();
-#endif
+  #if LV_USE_GPU_ESP32_P4_PPA
+    /* Wait for PPA to finish rendering before telling the display driver
+     * to swap buffers. Use the PPA-specific wait where available. */
+    lv_draw_ppa_wait_for_finish();
+  #else
+    lv_draw_wait_for_finish();
+  #endif
       // Before starting a new transfer, wait for the previous one to complete.
       if (disp_ctx->trans_sem) {
         xSemaphoreTake(disp_ctx->trans_sem, portMAX_DELAY);
@@ -222,8 +241,9 @@ static void lvgl_port_flush_callback(lv_display_t *drv, const lv_area_t *area,
   } else {
     // This path is for non-direct-mode, partial refresh
 #if LV_USE_GPU_ESP32_P4_PPA
-    // lv_draw_ppa_wait_for_finish();
-    lv_draw_wait_for_finish();
+  lv_draw_ppa_wait_for_finish();
+#else
+  lv_draw_wait_for_finish();
 #endif
     // In partial mode, we assume the transfer is synchronous or handled by
     // lv_disp_flush_ready in the vsync callback. Waiting for a semaphore here

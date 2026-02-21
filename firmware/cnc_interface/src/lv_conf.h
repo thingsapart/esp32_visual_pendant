@@ -225,11 +225,13 @@
 
 /* Use PPA on ESP32-P4 for blending, filling, and image copying */
 #if defined(ESP32P4_HW)
-    //#define LV_USE_GPU_ESP32_P4_PPA 1
+    /* Enable ESP32-P4 PPA support in LVGL */
+    #define LV_USE_GPU_ESP32_P4_PPA 1
     #define CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE 64
     #define CONFIG_LV_DRAW_BUF_ALIGN 64
-    //#define LV_USE_PPA 1
-    //#define CONFIG_LV_USE_PPA 1
+    /* Optionally enable LVGL's PPA macros if needed by build system */
+    #define LV_USE_PPA 1
+    #define CONFIG_LV_USE_PPA 1
     #define ESP32_HW_USE_PPA
 #endif
 
