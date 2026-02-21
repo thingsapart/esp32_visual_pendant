@@ -5,7 +5,7 @@
 #include "driver/esp_lvgl/esp_lvgl_adapter.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "jc1060p470/lcd/jd9165_lcd.h"
-#include "jc1060p470/touch/gt911_touch.h"
+#include "gt911_touch/gt911_touch.h"
 #include "lvgl.h"
 
 #define UI_DEBUG_LOCAL_LEVEL D_VERBOSE

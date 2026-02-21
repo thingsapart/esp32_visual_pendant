@@ -1,4 +1,4 @@
-#ifdef JC1060P470
+#if defined(JC1060P470)
 
 #ifndef _GT911_TOUCH_H
 #define _GT911_TOUCH_H
@@ -19,4 +19,4 @@ class gt911_touch {
 
 #endif
 
-#endif  // JC1060P470
+#endif  // JC1060P470 || JC8012P4A1

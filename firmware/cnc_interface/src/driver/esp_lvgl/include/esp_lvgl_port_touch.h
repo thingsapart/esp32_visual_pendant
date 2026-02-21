@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "driver/jc1060p470/touch/esp_lcd_touch.h"  // Direct include for our project structure
+#include "drivers/touch/port/esp_lcd_touch.h"  // Use shared GT911 touch header (supports JC1060P470 and JC8012P4A1)
 #include "esp_err.h"
 #include "lvgl.h"
 

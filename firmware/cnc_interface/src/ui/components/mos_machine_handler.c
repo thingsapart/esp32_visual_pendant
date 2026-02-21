@@ -324,9 +324,6 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         // I: Max travel distance.
         // O: Overtravel allowance.
         // W: Work offset to store result (scratch WCS).
-        // Move from a safe backoff height above the surface to the probe start
-        // location so travel moves do not collide with the surface. Keep the
-        // actual probe-to depth unchanged (I / probing distance remains the same).
         snprintf(gcode_buf, sizeof(gcode_buf),
              "G6510.1 W{%d} J{%.3f} K{%.3f} L{%.3f} H{4} I{%.3f} O{%.3f}",
                  PROBE_SCRATCH_WCS_OFFSET,

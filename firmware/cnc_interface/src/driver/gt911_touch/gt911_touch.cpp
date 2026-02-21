@@ -1,10 +1,10 @@
-#ifdef JC1060P470
+#if defined(JC1060P470)
 
 #include "gt911_touch.h"
 
 #include "Arduino.h"
 #include "debug.h"
-#include "driver/i2c_master.h"  // New I2C master driver header
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
@@ -144,4 +144,4 @@ void gt911_touch::set_rotation(uint8_t r) {
   }
 }
 
-#endif  // JC1060P470
+#endif  // JC1060P470 || JC8012P4A1

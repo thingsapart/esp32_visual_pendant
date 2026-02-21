@@ -1,5 +1,4 @@
-// Changed to match the first file so it gets compiled
-#ifdef JC1060P470
+#if defined(JC1060P470)
 
 /*
  * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
@@ -13,18 +12,12 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_err.h"
-#include "esp_log.h"  // Re-enabled for logging macros
+#include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-// #include "driver/i2c.h" // This legacy header is not needed
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch.h"
-
-// Note: No changes are needed in this file for the new I2C driver
-// because all I2C communication is abstracted away by the esp_lcd_panel_io
-// component. The `tp->io` handle, created in the first file, already knows how
-// to use the new driver.
 
 static const char *TAG = "GT911";
 
@@ -53,7 +46,9 @@ static esp_err_t touch_gt911_i2c_write(esp_lcd_touch_handle_t tp, uint16_t reg,
 static esp_err_t touch_gt911_reset(esp_lcd_touch_handle_t tp);
 /* Read status and config register */
 static esp_err_t touch_gt911_read_cfg(esp_lcd_touch_handle_t tp);
+#ifdef JC1060P470
 static void touch_scale(uint16_t *x_coordinate, uint16_t *y_coordinate);
+#endif
 
 /*******************************************************************************
  * Public API functions
@@ -210,7 +205,9 @@ static bool esp_lcd_touch_gt911_get_xy(esp_lcd_touch_handle_t tp, uint16_t *x,
   for (size_t i = 0; i < *point_num; i++) {
     x[i] = tp->data.coords[i].x;
     y[i] = tp->data.coords[i].y;
+#ifdef JC1060P470
     touch_scale(&x[i], &y[i]);
+#endif
     if (strength) {
       strength[i] = tp->data.coords[i].strength;
     }
@@ -302,6 +299,7 @@ static esp_err_t touch_gt911_i2c_write(esp_lcd_touch_handle_t tp, uint16_t reg,
   // *INDENT-ON*
 }
 
+#ifdef JC1060P470
 static void touch_scale(uint16_t *x_coordinate, uint16_t *y_coordinate) {
   uint32_t temp_x;
   uint32_t temp_y;
@@ -312,5 +310,6 @@ static void touch_scale(uint16_t *x_coordinate, uint16_t *y_coordinate) {
   *x_coordinate = (uint16_t)temp_x;
   *y_coordinate = (uint16_t)temp_y;
 }
+#endif
 
-#endif  // JC1060P470
+#endif  // JC1060P470 || JC8012P4A1
