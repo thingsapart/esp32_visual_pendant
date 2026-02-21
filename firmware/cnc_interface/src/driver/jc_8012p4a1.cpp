@@ -36,6 +36,10 @@ extern esp_lcd_panel_handle_t panel_handle;  // from jd9365_lcd.cpp
 extern esp_lcd_touch_handle_t tp;            // from gsl3680_touch.cpp
 
 static const char *TAG = "JC8012P4A1";
+
+void display_alloc() {
+  LOGI(TAG, "display_alloc: no-op for JC8012P4A1 (adapter handles buffers)");
+}
 void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   LOGI(TAG, "Initializing JC8012P4A1 hardware...");
   lcd.begin();
