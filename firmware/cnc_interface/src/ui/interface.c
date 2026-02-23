@@ -476,6 +476,10 @@ void interface_tick(interface_t *interface) {
     data_binding_notify_state_changed(
         "motion.homed.z", (binding_value_t){.type = BINDING_TYPE_BOOL,
                                             .as.b_val = machine->axes_homed[2]});
+
+    data_binding_notify_state_changed(
+        "motion.homed.all", (binding_value_t){.type = BINDING_TYPE_BOOL,
+                                            .as.b_val = machine->axes_homed[0] && machine->axes_homed[1] && machine->axes_homed[2]});                                        
   }
 
   if (flags_to_process & UI_DIRTY_WCS) {

@@ -67,6 +67,8 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #include "machine/machine_rrf.h"
 #include "machine/multi_machine_interface.h"
 #include "ui/interface.h"
+#include "ui/touch_calib/touch_calib.h"
+#include "touch_calib_app.h"
 #ifdef UPDATE_JOG_DIAL
 #include "ui/tab_jog.h"
 #endif
@@ -318,6 +320,16 @@ void init_lvgl() {
   
   LOGI(TAG, "Creating Interface...\n");
   // Temporarily initialize with machine == NULL.
+  // If no touch calibration is stored, run the calibration wizard UI now
+  // instead of loading the main interface. The wizard will save and
+  // reboot on successful Save.
+  if (!touch_calib_has()) {
+    ESP_LOGI(TAG, "No touch calibration found — launching calibration wizard");
+    // blocking call that displays its own LVGL screen and will reboot on save
+    extern bool touch_calib_run_wizard_blocking(void);
+    touch_calib_run_wizard_blocking();
+    // If the wizard returns (failed or canceled) continue to load the UI.
+  }
   interface_init(&interface, &machine.base);
   LOGI(TAG, "Interface loaded...\n");
 }
@@ -354,7 +366,7 @@ void setup() {
   BaseType_t create_res = xTaskCreateWithCaps(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 12,    // Reduced stack size for runtime loop
+      1024 * 13,    // Reduced stack size for runtime loop
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
@@ -364,7 +376,7 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 12,    // Reduced stack size for runtime loop
+      1024 * 13,    // Reduced stack size for runtime loop
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the

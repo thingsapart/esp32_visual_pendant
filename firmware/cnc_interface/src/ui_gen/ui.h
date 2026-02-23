@@ -3,6 +3,7 @@
 
 #include "lvgl.h"
 #include "ui/assets.h"
+#include "ui/components/ui_spec_helpers.h"
 
 #ifdef __cplusplus
 extern "C" {

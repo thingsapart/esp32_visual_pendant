@@ -1,13 +1,43 @@
 #!/usr/bin/env python3
 import sys
+import os
+import shutil
+import subprocess
+
+def find_real_esp_idf_size(self_path):
+    # Search PATH for an esp_idf_size executable that is not this wrapper
+    paths = os.environ.get('PATH', '').split(os.pathsep)
+    for p in paths:
+        candidate = os.path.join(p, 'esp_idf_size')
+        try:
+            if os.path.exists(candidate):
+                cand_real = os.path.realpath(candidate)
+                if cand_real != os.path.realpath(self_path) and os.access(candidate, os.X_OK):
+                    return candidate
+        except Exception:
+            continue
+    return None
 
 def main():
-    # Minimal wrapper to avoid incompatible esp_idf_size being called by PlatformIO.
-    # Accept any args and exit successfully. Print a short notice so logs show it's the wrapper.
+    # Accept and ignore legacy/unsupported args like --ng, but forward other args
+    argv = sys.argv[1:]
+    cleaned = [a for a in argv if a != '--ng']
+
+    self_path = os.path.realpath(__file__)
+    real = find_real_esp_idf_size(self_path)
+    if real:
+        try:
+            # Call the real esp_idf_size with cleaned args
+            rc = subprocess.call([real] + cleaned)
+            return rc
+        except Exception as e:
+            print("esp_idf_size wrapper: failed to run real tool:", e)
+            # fallthrough to wrapper behavior
+
+    # No real tool found or it failed — behave as a no-op wrapper
     try:
-        # Show which file would have been processed, if provided
-        if len(sys.argv) > 1:
-            print("esp_idf_size wrapper: skipping size check for", sys.argv[-1])
+        if cleaned:
+            print("esp_idf_size wrapper: skipping size check for", cleaned[-1])
         else:
             print("esp_idf_size wrapper: skipping size check")
     except Exception:

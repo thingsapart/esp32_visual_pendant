@@ -742,7 +742,7 @@
     #define LV_LABEL_WAIT_CHAR_COUNT 3  /**< The count of wait chart */
 #endif
 
-#define LV_USE_LED        0
+#define LV_USE_LED        1
 
 #define LV_USE_LINE       1
 
