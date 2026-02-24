@@ -952,7 +952,14 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
 
     default:
-      LOGW(TAG, "Unknown message type: %d", message_type);
+      // Camera protocol messages (0x80–0x8F) are handled by cam_transport_espnow
+      // directly via its own recv callback; silently ignore them here.
+      if (message_type >= 0x80 && message_type <= 0x8F) {
+        LOGD(TAG, "Ignoring cam-protocol msg type 0x%02X (handled by cam transport)",
+             message_type);
+      } else {
+        LOGW(TAG, "Unknown message type: %d", message_type);
+      }
       break;
   }
 }

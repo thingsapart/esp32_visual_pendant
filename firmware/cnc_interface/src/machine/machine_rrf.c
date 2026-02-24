@@ -1111,6 +1111,15 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
           pos_updated = true;
         }
       }
+      item = cJSON_GetObjectItemCaseSensitive(axis_item, "min");
+      if (item && cJSON_IsNumber(item)) {
+        self->base.axis_min[i] = (float)item->valuedouble;
+      }
+      item = cJSON_GetObjectItemCaseSensitive(axis_item, "max");
+      if (item && cJSON_IsNumber(item)) {
+        self->base.axis_max[i] = (float)item->valuedouble;
+      }
+
       item = cJSON_GetObjectItemCaseSensitive(axis_item, "homed");
       if (!item || cJSON_IsNull(item)) {
         LOGW(TAG, "axis[%d] 'homed' field missing from M409 response (RRF version mismatch?)", i);

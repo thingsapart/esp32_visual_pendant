@@ -329,9 +329,10 @@ bool cam_espnow_send_grid(const uint8_t *peer_mac,
 bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
                                   float w, float h, float dx, float dy,
                                   uint16_t nx, uint16_t ny,
+                                  uint16_t img_w, uint16_t img_h,
                                   const int8_t *offsets_xy, uint16_t points_count) {
-    // Layout: [type:1][w:4][h:4][dx:4][dy:4][nx:2][ny:2][count:2][offsets: count*2]
-    size_t header = 1 + 4 * sizeof(float) + 3 * sizeof(uint16_t);
+    // Layout: [type:1][w:4][h:4][dx:4][dy:4][nx:2][ny:2][count:2][img_w:2][img_h:2][offsets: count*2]
+    size_t header = 1 + 4 * sizeof(float) + 3 * sizeof(uint16_t) + 2 * sizeof(uint16_t);
     size_t payload = (size_t)points_count * 2 * sizeof(int8_t);
     size_t total = header + payload;
     if (total > CAM_ESPNOW_MAX_DATA) {
@@ -353,8 +354,10 @@ bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
 
     write_f(w); write_f(h); write_f(dx); write_f(dy);
     write_u16(nx); write_u16(ny); write_u16(points_count);
+    // Extended v2 fields: calibration image dimensions.
+    write_u16(img_w); write_u16(img_h);
 
-    // Offsets are int8 pairs: x,y
+    // Offsets are raw pixel differences: actual_px - ideal_px, clamped to int8.
     for (uint16_t i = 0; i < points_count; i++) {
         int8_t x = offsets_xy[i*2 + 0];
         int8_t y = offsets_xy[i*2 + 1];

@@ -1993,7 +1993,7 @@ void create_ui(lv_obj_t* parent) {
 
 
     // unnamed: obj_221 (obj)
-    lv_obj_t* obj_221 = lv_tileview_add_tile(tileview_43, 2, 0, LV_DIR_LEFT);
+    lv_obj_t* obj_221 = lv_tileview_add_tile(tileview_43, 2, 0, 3);
 
     lv_obj_add_style(obj_221, container_8, 0);
     // probing_wizard: probing_wizard_222 (obj)
@@ -2003,44 +2003,55 @@ void create_ui(lv_obj_t* parent) {
     lv_probing_wizard_set_mode(probing_wizard_222, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
 
 
+    // unnamed: obj_223 (obj)
+    lv_obj_t* obj_223 = lv_tileview_add_tile(tileview_43, 3, 0, LV_DIR_LEFT);
+
+    lv_obj_add_style(obj_223, container_8, 0);
+    // cam_positioning: cam_positioning_224 (obj)
+    lv_obj_t* cam_positioning_224 = lv_cam_positioning_create(obj_223);
+
+    obj_registry_add("cam_positioning", cam_positioning_224);
+    lv_cam_positioning_set_mode(cam_positioning_224, LV_CAM_POS_MODE_POINT);
 
 
-    // disconnected_overlay: disconnected_overlay_223 (obj)
-    lv_obj_t* disconnected_overlay_223 = lv_obj_create(parent);
-
-    obj_registry_add("disconnected_overlay", disconnected_overlay_223);
-    lv_obj_set_style_size(disconnected_overlay_223, lv_pct(100), lv_pct(100), 0);
-    lv_obj_set_style_bg_color(disconnected_overlay_223, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(disconnected_overlay_223, LV_OPA_70, 0);
-    lv_obj_add_flag(disconnected_overlay_223, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(disconnected_overlay_223, LV_OBJ_FLAG_HIDDEN);
-    data_binding_add_observer("machine.connection_status", disconnected_overlay_223, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, (const void*)&(bool){true});
-    // unnamed: label_224 (label)
-    lv_obj_t* label_224 = lv_label_create(disconnected_overlay_223);
-
-    lv_label_set_text(label_224, "Connecting...");
-    lv_obj_set_style_text_font(label_224, font_kode_34_1, 0);
-    lv_obj_center(label_224);
 
 
-    // jog_axis_selector: jog_axis_selector_225 (button)
-    lv_obj_t* jog_axis_selector_225 = lv_button_create(parent);
+    // disconnected_overlay: disconnected_overlay_225 (obj)
+    lv_obj_t* disconnected_overlay_225 = lv_obj_create(parent);
 
-    obj_registry_add("jog_axis_selector", jog_axis_selector_225);
-    lv_obj_set_style_size(jog_axis_selector_225, 55, 55, 0);
-    lv_obj_set_style_radius(jog_axis_selector_225, LV_RADIUS_CIRCLE, 0);
-    lv_obj_align(jog_axis_selector_225, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
-    lv_obj_set_style_shadow_width(jog_axis_selector_225, 10, 0);
-    lv_obj_set_style_shadow_opa(jog_axis_selector_225, 150, 0);
-    lv_obj_set_style_shadow_offset_y(jog_axis_selector_225, 4, 0);
-    data_binding_add_action(jog_axis_selector_225, "action.motion.jog.axis_cycle", 0, NULL, 0, NULL);
-    data_binding_add_observer("ui.active_tile_index", jog_axis_selector_225, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)0 }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)1 }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)2 }, .value = { .b_val = true } } }, 3, NULL);
+    obj_registry_add("disconnected_overlay", disconnected_overlay_225);
+    lv_obj_set_style_size(disconnected_overlay_225, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_style_bg_color(disconnected_overlay_225, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(disconnected_overlay_225, LV_OPA_70, 0);
+    lv_obj_add_flag(disconnected_overlay_225, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(disconnected_overlay_225, LV_OBJ_FLAG_HIDDEN);
+    data_binding_add_observer("machine.connection_status", disconnected_overlay_225, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, (const void*)&(bool){true});
     // unnamed: label_226 (label)
-    lv_obj_t* label_226 = lv_label_create(jog_axis_selector_225);
+    lv_obj_t* label_226 = lv_label_create(disconnected_overlay_225);
 
-    lv_obj_set_style_text_font(label_226, font_kode_24_3, 0);
+    lv_label_set_text(label_226, "Connecting...");
+    lv_obj_set_style_text_font(label_226, font_kode_34_1, 0);
     lv_obj_center(label_226);
-    data_binding_add_observer("motion.jog.axis_selected_str", label_226, 0, "%s", 0, NULL);
+
+
+    // jog_axis_selector: jog_axis_selector_227 (button)
+    lv_obj_t* jog_axis_selector_227 = lv_button_create(parent);
+
+    obj_registry_add("jog_axis_selector", jog_axis_selector_227);
+    lv_obj_set_style_size(jog_axis_selector_227, 55, 55, 0);
+    lv_obj_set_style_radius(jog_axis_selector_227, LV_RADIUS_CIRCLE, 0);
+    lv_obj_align(jog_axis_selector_227, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
+    lv_obj_set_style_shadow_width(jog_axis_selector_227, 10, 0);
+    lv_obj_set_style_shadow_opa(jog_axis_selector_227, 150, 0);
+    lv_obj_set_style_shadow_offset_y(jog_axis_selector_227, 4, 0);
+    data_binding_add_action(jog_axis_selector_227, "action.motion.jog.axis_cycle", 0, NULL, 0, NULL);
+    data_binding_add_observer("ui.active_tile_index", jog_axis_selector_227, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)0 }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)1 }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)2 }, .value = { .b_val = true } } }, 3, NULL);
+    // unnamed: label_228 (label)
+    lv_obj_t* label_228 = lv_label_create(jog_axis_selector_227);
+
+    lv_obj_set_style_text_font(label_228, font_kode_24_3, 0);
+    lv_obj_center(label_228);
+    data_binding_add_observer("motion.jog.axis_selected_str", label_228, 0, "%s", 0, NULL);
 
 
 }

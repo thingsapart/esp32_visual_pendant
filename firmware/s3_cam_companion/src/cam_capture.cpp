@@ -26,6 +26,11 @@ static camera_fb_t *s_last_fb     = NULL;
 static bool s_camera_ready         = false;
 static esp_err_t s_last_err        = ESP_OK;
 
+// AEC/AGC periodic re-lock state.
+static uint8_t  s_ae_lock_interval = 0;   // 0 = disabled
+static uint8_t  s_ae_frame_counter = 0;
+static bool     s_ae_locked        = false;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -160,6 +165,48 @@ void cam_capture_apply_sensor(const cam_settings_t *settings) {
     s->set_ae_level(s, 0);
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
+}
+
+// ---------------------------------------------------------------------------
+// AEC/AGC periodic re-lock
+// ---------------------------------------------------------------------------
+void cam_capture_set_ae_lock_interval(uint8_t interval) {
+    s_ae_lock_interval = interval;
+    s_ae_frame_counter = 0;
+    s_ae_locked        = false;  // start unlocked; first tick will lock
+    ESP_LOGI(TAG, "AE lock interval set to %u frames (0=disabled)", interval);
+}
+
+bool cam_capture_tick_ae(void) {
+    if (!s_camera_ready || s_ae_lock_interval == 0) return false;
+
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return false;
+
+    bool unlocked_this_frame = false;
+
+    if (!s_ae_locked) {
+        // Previous frame was taken with AEC/AGC running — re-lock now so the
+        // NEXT capture uses a stable, freshly-measured exposure value.
+        s->set_exposure_ctrl(s, 0);
+        s->set_gain_ctrl(s, 0);
+        s_ae_locked = true;
+        s_ae_frame_counter = 0;
+        ESP_LOGD(TAG, "AE re-locked after re-sample frame");
+        // Return true: the just-captured frame was taken mid-AEC-adjustment;
+        // caller should force a keyframe so the pendant sees a clean baseline.
+        unlocked_this_frame = true;
+    } else {
+        s_ae_frame_counter++;
+        if (s_ae_frame_counter >= s_ae_lock_interval) {
+            // Unlock for the NEXT capture so the sensor can re-sample.
+            s->set_exposure_ctrl(s, 1);
+            s->set_gain_ctrl(s, 1);
+            s_ae_locked = false;
+            ESP_LOGD(TAG, "AE unlocked for re-sample");
+        }
+    }
+    return unlocked_this_frame;
 }
 
 // ---------------------------------------------------------------------------

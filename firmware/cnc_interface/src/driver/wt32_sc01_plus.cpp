@@ -2,7 +2,7 @@
 
 static const char *TAG = "WT32_SC01_PLUS";
 
-#if defined(WT32_SC01_PLUS) && defined(ESP32_LVGL_ESP_DISP)
+#if defined(ESP32_LVGL_ESP_DISP)
 
 // ESP32_Display_Panel configuration to enable only necessary drivers
 #define ESP_PANEL_DRIVERS_BUS_USE_I80 (1)
@@ -27,6 +27,7 @@ static const char *TAG = "WT32_SC01_PLUS";
 #include "drivers/lcd/port/esp_lcd_st7796.h"
 
 #include "esp_display_panel.hpp"
+#include "ui/touch_calib/touch_calib.h"
 #include "esp_heap_caps.h"
 #include "debug.h"
 
@@ -68,8 +69,11 @@ static void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   // Read one point with 0 timeout
   if (touch->readPoints(&point, 1, 0) > 0) {
     data->state = LV_INDEV_STATE_PR;
-    data->point.x = point.x;
-    data->point.y = point.y;
+    float fx = (float)point.x;
+    float fy = (float)point.y;
+    touch_calib_apply_inplace(&fx, &fy);
+    data->point.x = (lv_coord_t)fx;
+    data->point.y = (lv_coord_t)fy;
 #if DEBUG_TOUCH != 0
     // This can be spammy
     // Serial.printf("Touch: x=%d, y=%d\n", point.x, point.y);
@@ -244,6 +248,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
 #include <LovyanGFX.hpp>
 
 #include "debug.h"
+#include "ui/touch_calib/touch_calib.h"
 
 // SETUP LGFX PARAMETERS FOR WT32-SC01-PLUS
 class LGFX_WT32SC01PLUS : public lgfx::LGFX_Device {
@@ -373,7 +378,7 @@ void lvgl_log(const char *buf) {
 #endif
 
 
-// #define DEBUG_TOUCH
+// #define DEBUG_TOUCH 1
 // #define USE_DMA
 #define USE_DOUBLE
 #define USE_PSRAM
@@ -429,19 +434,23 @@ void display_flush_dma(lv_display_t *disp, const lv_area_t *area, uint8_t *px_ma
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   uint16_t touchX, touchY;
   bool touched = tft.getTouch(&touchX, &touchY);
+
   if (!touched) {
     data->state = LV_INDEV_STATE_REL;
   } else {
     data->state = LV_INDEV_STATE_PR;
-    data->point.x = touchX;
-    data->point.y = touchY;
+    float fx = (float)touchX;
+    float fy = (float)touchY;
+    #if DEBUG_TOUCH != 0
+      LOGI(TAG, "TOUCHED RAW: %f, %f", fx, fy);
+    #endif
 
-#if DEBUG_TOUCH != 0
-    Serial.print("Data x ");
-    Serial.println(touchX);
-    Serial.print("Data y ");
-    Serial.println(touchY);
-#endif
+    touch_calib_apply_inplace(&fx, &fy);
+    data->point.x = (lv_coord_t)fx;
+    data->point.y = (lv_coord_t)fy;
+    #if DEBUG_TOUCH != 0
+      LOGI(TAG, "TOUCHED CALIB: %f, %f", fx, fy);
+    #endif
   }
 }
 

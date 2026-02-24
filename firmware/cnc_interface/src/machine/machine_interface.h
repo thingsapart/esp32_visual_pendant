@@ -138,6 +138,8 @@ typedef struct machine_interface_t {
   // --- Machine State ---
   machine_status_t machine_status;
   bool axes_homed[3];
+  float axis_min[3];   ///< Per-axis minimum travel limit (mm), from move.axes[].min
+  float axis_max[3];   ///< Per-axis maximum travel limit (mm), from move.axes[].max
   float position[3];
   float wcs_position[3];
   float target_position[3];

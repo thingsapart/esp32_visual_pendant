@@ -30,6 +30,13 @@ struct cam_diff_ctx {
     uint16_t *prev_frame;
     bool      has_prev;
 
+    // Swap R↔B in tile pixels before JPEG encoding (for BGR565 displays).
+    bool      swap_rb;
+    // Swap bytes of each 16-bit pixel before encoding (for LV_COLOR_16_SWAP)
+    bool      swap_bytes;
+    // Invert all pixel values (XOR 0xFFFF on each RGB565 word).
+    bool      invert_colors;
+
     // Temporary tile pixel buffer for JPEG encoding (internal RAM for speed).
     uint16_t *tile_buf;
 
@@ -94,64 +101,123 @@ void cam_diff_destroy(cam_diff_t ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Compare a single tile region for changes.
+// Block-averaged SAD for a tile region.
 //
-// RGB565 pixel: RRRRRGGG GGGBBBBB
-// We compare per-channel with a threshold.  If enough pixels differ,
-// the tile is marked as changed.
+// The tile is divided into DIFF_BLOCK_SIZE×DIFF_BLOCK_SIZE pixel blocks.
+// For each block the average R, G, B values are computed from the current
+// and previous frames separately.  The 8-bit-normalised max-channel delta
+// between block averages is noise-gated (excess above DIFF_NOISE_FLOOR
+// accumulated) and the total is divided by the number of blocks to give
+// the mean gated-block-SAD for the tile.
+//
+// Why this beats per-pixel approaches for camera noise:
+//   Per-pixel noise is zero-mean and statistically independent across pixels.
+//   Averaging N² pixels reduces σ by 1/N.  With BLOCK_SIZE=4 and OV3660
+//   per-pixel 5-bit noise σ ≈ 3–4 LSBs (= 24–32 on the 8-bit scale), the
+//   block-average noise σ drops to ~7 for a single frame.
+//
+//   The diff compares two independent frames, so the delta noise is:
+//     σ_delta = √2 × σ_block ≈ 10 on 8-bit scale (R/B channels).
+//   DIFF_NOISE_FLOOR must exceed this (≥ 2σ) to reject noise reliably.
+//
+//   Real scene changes are spatially coherent: a moving object shifts all
+//   pixels in the block in the same direction, so the block average shifts
+//   just as much as any individual pixel.
+//
+// BLOCK_SIZE must divide tw and th evenly (ensured by tile grid config).
 // ---------------------------------------------------------------------------
-static inline int abs_diff_r(uint16_t a, uint16_t b) {
-    return abs((int)((a >> 11) & 0x1F) - (int)((b >> 11) & 0x1F));
-}
-static inline int abs_diff_g(uint16_t a, uint16_t b) {
-    return abs((int)((a >> 5) & 0x3F) - (int)((b >> 5) & 0x3F));
-}
-static inline int abs_diff_b(uint16_t a, uint16_t b) {
-    return abs((int)(a & 0x1F) - (int)(b & 0x1F));
+static inline uint16_t swap_rb565(uint16_t px) {
+    // RGB565: [R4..R0 G5..G3] [G2..G0 B4..B0]
+    uint16_t r = (px >> 11) & 0x1F;
+    uint16_t g = (px >>  5) & 0x3F;
+    uint16_t b = (px      ) & 0x1F;
+    return (uint16_t)((b << 11) | (g << 5) | r);  // B in R slot, R in B slot
 }
 
-static bool tile_changed(const uint16_t *cur, const uint16_t *prev,
-                         uint16_t img_w,
-                         uint16_t tx, uint16_t ty,
-                         uint16_t tw, uint16_t th,
-                         uint8_t threshold) {
-    // 5-bit R/B threshold, 6-bit G threshold (scaled).
-    int thr_rb = threshold >> 3;  // Map 0–255 → 0–31
-    int thr_g  = threshold >> 2;  // Map 0–255 → 0–63
-    if (thr_rb < 1) thr_rb = 1;
-    if (thr_g  < 1) thr_g  = 1;
+static inline uint16_t bswap16(uint16_t v) {
+    return (uint16_t)(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
+}
 
-    // Count changed pixels.  If >5% differ, tile is changed.
-    int total   = (int)tw * th;
-    int changed = 0;
-    int max_unchanged = total - (total / 20);  // Early exit at 5%
+static uint32_t tile_mean_sad(const uint16_t *cur, const uint16_t *prev,
+                               uint16_t img_w,
+                               uint16_t tx, uint16_t ty,
+                               uint16_t tw, uint16_t th)
+{
+    const uint16_t bs     = DIFF_BLOCK_SIZE;
+    const uint32_t bsq    = (uint32_t)bs * bs;         // pixels per block
+    const uint32_t num_bx = tw / bs;                   // blocks in X
+    const uint32_t num_by = th / bs;                   // blocks in Y
+    const uint32_t num_b  = num_bx * num_by;           // total blocks in tile
 
-    for (uint16_t y = 0; y < th; y++) {
-        const uint16_t *cr = &cur[(ty + y) * img_w + tx];
-        const uint16_t *pr = &prev[(ty + y) * img_w + tx];
-        for (uint16_t x = 0; x < tw; x++) {
-            if (abs_diff_r(cr[x], pr[x]) > thr_rb ||
-                abs_diff_g(cr[x], pr[x]) > thr_g  ||
-                abs_diff_b(cr[x], pr[x]) > thr_rb) {
-                changed++;
-                if (changed > total - max_unchanged) return true;
+    uint32_t sad = 0;
+
+    for (uint32_t by = 0; by < num_by; by++) {
+        for (uint32_t bx = 0; bx < num_bx; bx++) {
+            // Top-left corner of this block in the full image.
+            const uint16_t ox = (uint16_t)(tx + bx * bs);
+            const uint16_t oy = (uint16_t)(ty + by * bs);
+
+            // Accumulate R, G, B sums (raw channel values) for cur and prev.
+            uint32_t sr_c=0, sg_c=0, sb_c=0;
+            uint32_t sr_p=0, sg_p=0, sb_p=0;
+
+            for (uint16_t y = 0; y < bs; y++) {
+                const uint16_t *cr = &cur [(oy + y) * img_w + ox];
+                const uint16_t *pr = &prev[(oy + y) * img_w + ox];
+                for (uint16_t x = 0; x < bs; x++) {
+                    uint16_t c = cr[x], p = pr[x];
+                    sr_c += (c >> 11) & 0x1F;   sg_c += (c >> 5) & 0x3F;   sb_c += c & 0x1F;
+                    sr_p += (p >> 11) & 0x1F;   sg_p += (p >> 5) & 0x3F;   sb_p += p & 0x1F;
+                }
+            }
+
+            // Block-average channel values (still in raw 5/6-bit domain).
+            const uint32_t avg_r_c = sr_c / bsq,  avg_r_p = sr_p / bsq;
+            const uint32_t avg_g_c = sg_c / bsq,  avg_g_p = sg_p / bsq;
+            const uint32_t avg_b_c = sb_c / bsq,  avg_b_p = sb_p / bsq;
+
+            // 8-bit normalise (R/B ×8, G ×4) and take max-channel delta.
+            uint32_t dr = (uint32_t)abs((int)avg_r_c - (int)avg_r_p) << 3;
+            uint32_t dg = (uint32_t)abs((int)avg_g_c - (int)avg_g_p) << 2;
+            uint32_t db = (uint32_t)abs((int)avg_b_c - (int)avg_b_p) << 3;
+            uint32_t dm = dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
+
+            // Noise gate: only accumulate excess above the floor.
+            if (dm > DIFF_NOISE_FLOOR) {
+                sad += (dm - DIFF_NOISE_FLOOR);
             }
         }
     }
-    return changed > (total / 20);
+
+    return sad / num_b;
 }
 
 // ---------------------------------------------------------------------------
 // Extract tile pixels into a contiguous buffer for JPEG encoding.
+// If swap_rb is true, swaps R↔B channels so the output is BGR565 (for LCDs
+// that expect BGR channel order, e.g. ST7796 on WT32-SC01-Plus).
+// If swap_bytes is true, each 16-bit RGB565 word is byte-swapped
+// (useful when the pendant uses LV_COLOR_16_SWAP).
 // ---------------------------------------------------------------------------
 static void extract_tile(const uint16_t *frame, uint16_t img_w,
                          uint16_t tx, uint16_t ty,
                          uint16_t tw, uint16_t th,
-                         uint16_t *out) {
+                         uint16_t *out, bool swap_rb, bool swap_bytes,
+                         bool invert_colors) {
     for (uint16_t y = 0; y < th; y++) {
-        memcpy(&out[y * tw],
-               &frame[(ty + y) * img_w + tx],
-               tw * sizeof(uint16_t));
+        const uint16_t *src = &frame[(ty + y) * img_w + tx];
+        uint16_t       *dst = &out[y * tw];
+        if (!swap_rb && !swap_bytes && !invert_colors) {
+            memcpy(dst, src, tw * sizeof(uint16_t));
+        } else {
+            for (uint16_t x = 0; x < tw; x++) {
+                uint16_t px = src[x];
+                if (swap_bytes)    px = bswap16(px);
+                if (swap_rb)       px = swap_rb565(px);
+                if (invert_colors) px ^= 0xFFFFu;
+                dst[x] = px;
+            }
+        }
     }
 }
 
@@ -180,24 +246,35 @@ void cam_diff_process(cam_diff_t ctx,
     r->is_keyframe = is_keyframe;
 
     // Determine which tiles changed.
+    // Track min/max mean-SAD across the grid so we can log a single
+    // representative diagnostic line rather than one per tile.
+    uint32_t min_sad = UINT32_MAX, max_sad = 0;
+
     for (uint8_t ty = 0; ty < ctx->tiles_y; ty++) {
         for (uint8_t tx = 0; tx < ctx->tiles_x; tx++) {
             uint8_t tile_idx = ty * ctx->tiles_x + tx;
             uint16_t px = tx * ctx->tile_w;
             uint16_t py = ty * ctx->tile_h;
 
-            bool changed = is_keyframe ||
-                           tile_changed(warped_frame, ctx->prev_frame,
-                                        img_w, px, py,
-                                        ctx->tile_w, ctx->tile_h,
-                                        diff_threshold);
+            bool changed;
+            if (is_keyframe) {
+                changed = true;
+            } else {
+                uint32_t sad = tile_mean_sad(warped_frame, ctx->prev_frame,
+                                             img_w, px, py,
+                                             ctx->tile_w, ctx->tile_h);
+                if (sad < min_sad) min_sad = sad;
+                if (sad > max_sad) max_sad = sad;
+                changed = sad > DIFF_TILE_MEAN_SAD_THRESH;
+            }
             if (changed) {
                 r->changed_bitmap[tile_idx / 8] |= (1 << (tile_idx % 8));
                 r->num_changed++;
 
-                // Extract tile pixels.
+                // Extract tile pixels (with optional R↔B swap for BGR displays).
                 extract_tile(warped_frame, img_w, px, py,
-                             ctx->tile_w, ctx->tile_h, ctx->tile_buf);
+                             ctx->tile_w, ctx->tile_h, ctx->tile_buf,
+                             ctx->swap_rb, ctx->swap_bytes, ctx->invert_colors);
 
                 // JPEG-encode the tile.
                 uint8_t *jpeg_out = NULL;
@@ -220,14 +297,23 @@ void cam_diff_process(cam_diff_t ctx,
         }
     }
 
-    // Save current frame as previous.
+    // Save the post-transform, pre-JPEG RGB565 frame as the previous reference.
+    // This ensures both the current and previous buffers are in the same
+    // colour space (raw sensor → perspective-warped RGB565) so the diff is
+    // not confused by JPEG codec rounding in the transmitted tiles.
     size_t frame_bytes = (size_t)img_w * img_h * sizeof(uint16_t);
     memcpy(ctx->prev_frame, warped_frame, frame_bytes);
     ctx->has_prev = true;
 
-    ESP_LOGD(TAG, "Diff: %s, %d/%d tiles changed",
-             is_keyframe ? "KEYFRAME" : "DIFF",
-             r->num_changed, ctx->tiles_x * ctx->tiles_y);
+    if (is_keyframe) {
+        ESP_LOGD(TAG, "Diff: KEYFRAME, %d/%d tiles",
+                 r->num_changed, ctx->tiles_x * ctx->tiles_y);
+    } else {
+        ESP_LOGD(TAG, "Diff: DIFF %d/%d tiles changed | gated-SAD min=%lu max=%lu floor=%d thresh=%d",
+                 r->num_changed, ctx->tiles_x * ctx->tiles_y,
+                 (unsigned long)min_sad, (unsigned long)max_sad,
+                 DIFF_NOISE_FLOOR, DIFF_TILE_MEAN_SAD_THRESH);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +321,21 @@ void cam_diff_process(cam_diff_t ctx,
 // ---------------------------------------------------------------------------
 const cam_diff_result_t *cam_diff_get_result(cam_diff_t ctx) {
     return ctx ? &ctx->result : NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime control
+// ---------------------------------------------------------------------------
+void cam_diff_set_swap_rb(cam_diff_t ctx, bool swap_rb) {
+    if (ctx) ctx->swap_rb = swap_rb;
+}
+
+void cam_diff_set_swap_bytes(cam_diff_t ctx, bool swap_bytes) {
+    if (ctx) ctx->swap_bytes = swap_bytes;
+}
+
+void cam_diff_set_invert_colors(cam_diff_t ctx, bool invert_colors) {
+    if (ctx) ctx->invert_colors = invert_colors;
 }
 
 // ---------------------------------------------------------------------------

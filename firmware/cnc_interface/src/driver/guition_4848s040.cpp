@@ -205,6 +205,7 @@ void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
 #endif
 
 #include "debug.h"
+#include "touch_calib.h"
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   uint16_t touchX, touchY;
@@ -213,8 +214,11 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     data->state = LV_INDEV_STATE_REL;
   } else {
     data->state = LV_INDEV_STATE_PR;
-    data->point.x = touchX;
-    data->point.y = touchY;
+    float fx = (float)touchX;
+    float fy = (float)touchY;
+    touch_calib_apply_inplace(&fx, &fy);
+    data->point.x = (lv_coord_t)fx;
+    data->point.y = (lv_coord_t)fy;
 
 #if DEBUG_TOUCH != 0
     Serial.print("Data x ");

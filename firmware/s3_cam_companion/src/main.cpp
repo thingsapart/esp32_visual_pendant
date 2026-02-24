@@ -74,6 +74,13 @@ static uint32_t g_last_frame_ms   = 0;
 static uint32_t g_frames_sent     = 0;
 static uint32_t g_fps_timer_ms    = 0;
 static uint8_t  g_fps_x10        = 0;
+
+// Streaming session state:
+//   g_streaming = true  → pendant has sent STREAM_START; accept REQUEST_FRAME
+//   g_streaming = false → idle; next REQUEST_FRAME or STREAM_START restarts a session
+static bool     g_streaming        = false;
+static uint32_t g_last_request_ms  = 0;  // millis() of last received frame request
+
 // BOOT button press flag (set from ISR)
 static volatile bool g_boot_pressed = false;
 static uint32_t g_last_boot_press_ms = 0;
@@ -91,8 +98,44 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
     uint8_t type = data[0];
 
     switch (type) {
-    case CAM_CMD_REQUEST_FRAME: {
+    case CAM_CMD_STREAM_START: {
+        // Pendant explicitly opens a streaming session.
+        cam_espnow_learn_peer(mac, g_settings.hub_mac);
+        if (!g_streaming) {
+            ESP_LOGI(TAG, "STREAM_START from " MACSTR " — session opened", MAC2STR(mac));
+        }
+        g_streaming       = true;
+        g_force_keyframe  = true;
         g_frame_requested = true;
+        g_last_request_ms = millis();
+        // Immediately acknowledge with a STATUS so the pendant confirms link.
+        if (g_espnow_ready) {
+            cam_espnow_send_status(g_settings.hub_mac,
+                                   CAM_STATUS_IDLE, g_frame_id, g_fps_x10);
+        }
+        break;
+    }
+    case CAM_CMD_STREAM_STOP: {
+        ESP_LOGI(TAG, "STREAM_STOP from " MACSTR " — session closed", MAC2STR(mac));
+        g_streaming       = false;
+        g_frame_requested = false;
+        // Force a keyframe when streaming resumes so the pendant gets a clean
+        // baseline (avoids displaying stale diff fragments from prior session).
+        g_force_keyframe  = true;
+        cam_led_set(CAM_LED_NO_PEER);
+        break;
+    }
+    case CAM_CMD_REQUEST_FRAME: {
+        uint32_t now = millis();
+        // If the camera was idle (not streaming), treat this as an implicit
+        // session start so old clients that don't send STREAM_START still work.
+        if (!g_streaming) {
+            g_streaming      = true;
+            g_force_keyframe = true;  // Re-establish with keyframe after idle gap
+            ESP_LOGI(TAG, "Implicit stream start from " MACSTR, MAC2STR(mac));
+        }
+        g_frame_requested = true;
+        g_last_request_ms = now;
         if (len >= (int)sizeof(cam_request_frame_cmd_t)) {
             const cam_request_frame_cmd_t *cmd = (const cam_request_frame_cmd_t *)data;
             if (cmd->flags & 0x01) g_force_keyframe = true;
@@ -105,6 +148,15 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         if (len >= (int)sizeof(cam_config_cmd_t)) {
             const cam_config_cmd_t *cfg = (const cam_config_cmd_t *)data;
             cam_settings_apply_config(&g_settings, cfg);
+            // Propagate swap_rb to the diff engine immediately.
+            if (g_diff) cam_diff_set_swap_rb(g_diff, g_settings.swap_rb);
+            // Propagate byte-swap preference as well.
+            if (g_diff) cam_diff_set_swap_bytes(g_diff, g_settings.swap_bytes);
+            // Propagate colour-inversion preference.
+            if (g_diff) cam_diff_set_invert_colors(g_diff, g_settings.invert_colors);
+            ESP_LOGI(TAG, "Config received: swap_rb=%d swap_bytes=%d invert=%d -> applied swap_rb=%d swap_bytes=%d invert=%d",
+                     cfg->swap_rb, cfg->swap_bytes, cfg->invert_colors,
+                     g_settings.swap_rb, g_settings.swap_bytes, g_settings.invert_colors);
         }
         break;
     }
@@ -143,6 +195,9 @@ static bool setup_pipeline(void) {
     ESP_LOGI(TAG, "Setting up pipeline: %ux%u, %dx%d tiles",
              w, h, g_settings.tiles_x, g_settings.tiles_y);
 
+    ESP_LOGI(TAG, "Pipeline settings: swap_rb=%d swap_bytes=%d jpeg_q=%d",
+             g_settings.swap_rb, g_settings.swap_bytes, g_settings.jpeg_quality);
+
     // Homography LUT.
     if (g_transform) cam_transform_destroy(g_transform);
     g_transform = cam_transform_create(w, h, w, h, g_settings.homography);
@@ -155,6 +210,11 @@ static bool setup_pipeline(void) {
 
     // Warped frame buffer.
     if (!allocate_buffers(w, h)) return false;
+
+    // Apply channel-swap preference (must happen after diff engine is created).
+    cam_diff_set_swap_rb(g_diff, g_settings.swap_rb);
+    cam_diff_set_swap_bytes(g_diff, g_settings.swap_bytes);
+    cam_diff_set_invert_colors(g_diff, g_settings.invert_colors);
 
     return true;
 }
@@ -179,10 +239,15 @@ static void process_frame(void) {
     cam_transform_apply(g_transform,
                         (const uint16_t *)raw_buf,
                         g_warped_buf);
+
+    // Tick the AEC re-lock cycle now that the frame has been consumed.
+    // If the frame was taken during a re-sample unlock we force a keyframe
+    // so the pendant gets a clean baseline at the new exposure level.
+    bool ae_resampled = cam_capture_tick_ae();
     cam_capture_release();
 
     // 3. Diff against previous frame.
-    bool keyframe = g_force_keyframe ||
+    bool keyframe = g_force_keyframe || ae_resampled ||
                     (g_settings.keyframe_interval > 0 &&
                      (g_frame_id % g_settings.keyframe_interval) == 0);
     g_force_keyframe = false;
@@ -202,6 +267,14 @@ static void process_frame(void) {
                               g_settings.hub_mac[2] | g_settings.hub_mac[3] |
                               g_settings.hub_mac[4] | g_settings.hub_mac[5])
                              ? g_settings.hub_mac : NULL;
+
+        ESP_LOGI(TAG, "Sending frame id=%u type=%s tiles=%u swap_rb=%d swap_bytes=%d jpeg_q=%d",
+                 g_frame_id,
+                 result->is_keyframe ? "KEY" : "DIFF",
+                 result->num_changed,
+                 g_settings.swap_rb,
+                 g_settings.swap_bytes,
+                 g_settings.jpeg_quality);
 
         cam_espnow_send_frame(dst, g_frame_id, result,
                               g_settings.send_interval_ms);
@@ -295,11 +368,30 @@ void setup() {
     }
     g_espnow_ready = true;
 
+    // Re-register the saved hub MAC as an ESP-NOW peer so heartbeats and
+    // frame replies can be sent immediately without waiting for the pendant
+    // to send a packet first.
+    bool hub_known = (g_settings.hub_mac[0] | g_settings.hub_mac[1] |
+                      g_settings.hub_mac[2] | g_settings.hub_mac[3] |
+                      g_settings.hub_mac[4] | g_settings.hub_mac[5]) != 0;
+    if (hub_known) {
+        cam_espnow_add_peer(g_settings.hub_mac);
+        ESP_LOGI(TAG, "Restored saved peer: " MACSTR, MAC2STR(g_settings.hub_mac));
+    }
+
     // Build pipeline (LUT + diff engine + buffers).
     if (!setup_pipeline()) {
         ESP_LOGE(TAG, "Pipeline setup failed!");
         cam_led_set(CAM_LED_ERROR);
         while (true) { cam_led_tick(); delay(20); }
+    }
+
+    // Lock AEC/AGC between frames; re-sample every 30 captures.
+    // This prevents the sensor's per-frame gain/shutter adjustment from
+    // producing a uniform brightness step that the diff mistakes for scene
+    // change.  Only engages when AEC/AGC are enabled in settings.
+    if (g_settings.aec_enable || g_settings.agc_enable) {
+        cam_capture_set_ae_lock_interval(30);
     }
 
     cam_led_set(CAM_LED_NO_PEER);
@@ -355,10 +447,31 @@ void loop() {
         delay(10);
         return;
     }
+    // Idle timeout: if no frame request has been received for 15 seconds while
+    // streaming is supposedly active, reset the streaming state.  This handles
+    // the case where the pendant reboots silently without sending STREAM_STOP.
+    if (g_streaming && g_last_request_ms != 0) {
+        uint32_t now_check = millis();
+        if (now_check - g_last_request_ms > 15000) {
+            ESP_LOGI(TAG, "Stream idle timeout — resetting streaming state");
+            g_streaming       = false;
+            g_frame_requested = false;
+            g_force_keyframe  = true;  // Next session starts with keyframe
+            cam_led_set(CAM_LED_NO_PEER);
+        }
+    }
+
     // Poll-driven: only capture and send when the pendant requests a frame.
     if (g_frame_requested) {
-        g_frame_requested = false;
-        process_frame();
+        uint32_t now = millis();
+        const uint32_t min_frame_interval = (CAM_TARGET_FPS > 0) ? (1000 / CAM_TARGET_FPS) : 0;
+        if (min_frame_interval == 0 || now - g_last_frame_ms >= min_frame_interval) {
+            g_frame_requested = false;
+            process_frame();
+        } else {
+            // Too soon to send next frame; skip this tick. Leave g_frame_requested
+            // set so we'll attempt again on the next loop iteration.
+        }
     }
 
     // Periodic status heartbeat (every ~2 seconds).
@@ -419,6 +532,7 @@ void loop() {
                                                  g_settings.surface_width, g_settings.surface_height,
                                                  g_settings.grid_dx, g_settings.grid_dy,
                                                  g_settings.grid_nx, g_settings.grid_ny,
+                                                 img_w, img_h,
                                                  offsets, pts);
                 }
             }

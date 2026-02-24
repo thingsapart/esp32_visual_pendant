@@ -307,6 +307,21 @@ typedef void (*remote_wrapper_send_cb_t)(const uint8_t *mac_addr, int status,
 
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data);
+
+// Maximum number of concurrent recv callbacks (machine_remote +
+// cam_transport + spares).
+#define REMOTE_WRAPPER_MAX_RECV_CBS 4
+
+/// Register an additional recv callback that will be called for every
+/// incoming ESP-NOW / bridge packet alongside any other registered callbacks.
+/// Returns true on success, false if the table is full or |recv_cb| is NULL.
+/// Registering the same function pointer twice is a no-op (returns true).
+bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb,
+                                void *user_data);
+
+/// Unregister a previously added recv callback.
+/// Safe to call even if the callback was never registered.
+void remote_wrapper_remove_recv_cb(remote_wrapper_recv_cb_t recv_cb);
 bool remote_wrapper_add_peer(const uint8_t *mac_addr);
 bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
                                           uint8_t *stored_mac_addr);

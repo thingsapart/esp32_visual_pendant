@@ -70,6 +70,15 @@ typedef struct {
 
     // Timing
     uint8_t  send_interval_ms;    // Delay between ESP-NOW chunk sends
+
+    // Color channel order for the pendant LCD.
+    bool     swap_rb;             // false = RGB565 (default), true = BGR565
+    // Whether the pendant's display expects 16-bit colour words with bytes
+    // swapped (LV_COLOR_16_SWAP).  If true the companion will byte-swap
+    // each RGB565 pixel before JPEG-encoding tiles.
+    bool     swap_bytes;
+    // Invert all pixel colours (XOR 0xFFFF on each RGB565 word).
+    bool     invert_colors;
 } cam_settings_t;
 
 // ---------------------------------------------------------------------------

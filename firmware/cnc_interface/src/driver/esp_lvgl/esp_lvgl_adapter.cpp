@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "touch_calib.h"
 
 #if (CONFIG_IDF_TARGET_ESP32P4 && \
      ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
@@ -290,8 +291,13 @@ static void lvgl_port_touchpad_read(lv_indev_t *indev_drv,
       touch_ctx->handle, touchpad_x, touchpad_y, NULL, &touchpad_cnt, 1);
 
   if (touchpad_pressed && touchpad_cnt > 0) {
-    data->point.x = touch_ctx->scale.x * touchpad_x[0];
-    data->point.y = touch_ctx->scale.y * touchpad_y[0];
+    /* Apply per-driver scale first */
+    float fx = touch_ctx->scale.x * (float)touchpad_x[0];
+    float fy = touch_ctx->scale.y * (float)touchpad_y[0];
+    /* Apply global calibration homography (no-op if none saved) */
+    touch_calib_apply_inplace(&fx, &fy);
+    data->point.x = (lv_coord_t)fx;
+    data->point.y = (lv_coord_t)fy;
     data->state = LV_INDEV_STATE_PRESSED;
   } else {
     data->state = LV_INDEV_STATE_RELEASED;

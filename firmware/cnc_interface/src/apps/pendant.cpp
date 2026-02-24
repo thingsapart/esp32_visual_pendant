@@ -67,8 +67,6 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #include "machine/machine_rrf.h"
 #include "machine/multi_machine_interface.h"
 #include "ui/interface.h"
-#include "ui/touch_calib/touch_calib.h"
-#include "touch_calib_app.h"
 #ifdef UPDATE_JOG_DIAL
 #include "ui/tab_jog.h"
 #endif
@@ -109,6 +107,33 @@ static lv_group_t *default_group = NULL;
 extern "C" void test_ui(lv_obj_t *screen);
 
 #include "driver/arduino_serial_wrapper.h"
+
+#ifdef ESP32_HW
+#include "driver/cam_transport_espnow.h"
+#include "driver/cam_receiver.h"
+#include "ui/components/lv_cam_stream.h"
+
+static cam_transport_t *s_cam_transport = NULL;
+static cam_receiver_t  *s_cam_receiver  = NULL;
+
+static void cam_init(void)
+{
+    static const uint8_t cam_mac[] = CAM_MAC_ADDR;
+    s_cam_transport = cam_transport_espnow_create(cam_mac);
+    if (!s_cam_transport) { LOGE(TAG, "cam_transport_espnow_create failed"); return; }
+
+    cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = 640, .max_height = 480 };
+    s_cam_receiver = cam_receiver_create(&cfg);
+    if (!s_cam_receiver) { LOGE(TAG, "cam_receiver_create failed"); return; }
+
+    lv_cam_stream_set_default_receiver(s_cam_receiver);
+    cam_receiver_start(s_cam_receiver);
+    LOGI(TAG, "Camera receiver started");
+}
+#endif
+
+#include "ui/touch_calib/ui_touch_calib.h"
+#include "ui/touch_calib/touch_calib.h"
 
 #ifndef DWC_MACHINE_MODE
 bool machine_remote_init() {
@@ -295,6 +320,28 @@ TaskHandle_t machine_dwc_task_handle = NULL;
 TaskHandle_t machine_send_task_handle = NULL;
 QueueHandle_t machine_send_queue = NULL;
 
+void init_touch_cal() {
+  LOGI(TAG, "LV_INIT TOUCHCAL");
+
+  lv_init();
+
+  LOGI(TAG, "LV_INIT DISPLAY");
+  display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
+  indev = lv_indev_create();
+
+  LOGI(TAG, "Display setup...");
+  display_setup(display1, indev);
+  LOGI(TAG, "Display setup... DONE");
+
+  LOGI(TAG, "No touch calibration found — running calibration wizard");
+  ui_run_touch_calib_blocking();
+
+  // Infinite loop.
+  while (true) {
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+}
+
 void init_lvgl() {
   LOGI(TAG, "LV_INIT");
 
@@ -319,17 +366,14 @@ void init_lvgl() {
   lv_group_set_default(default_group);
   
   LOGI(TAG, "Creating Interface...\n");
-  // Temporarily initialize with machine == NULL.
-  // If no touch calibration is stored, run the calibration wizard UI now
-  // instead of loading the main interface. The wizard will save and
-  // reboot on successful Save.
-  if (!touch_calib_has()) {
-    ESP_LOGI(TAG, "No touch calibration found — launching calibration wizard");
-    // blocking call that displays its own LVGL screen and will reboot on save
-    extern bool touch_calib_run_wizard_blocking(void);
-    touch_calib_run_wizard_blocking();
-    // If the wizard returns (failed or canceled) continue to load the UI.
+  // If no touch calibration is present, run the calibration wizard first.
+  while (!touch_calib_has()) {
+    LOGI(TAG, "No touch calibration found — running calibration wizard");
+    ui_run_touch_calib_blocking();
+    /* If the wizard finishes without saving, loop will run it again. */
   }
+
+  // Temporarily initialize with machine == NULL.
   interface_init(&interface, &machine.base);
   LOGI(TAG, "Interface loaded...\n");
 }
@@ -348,6 +392,20 @@ void setup() {
        uxTaskGetStackHighWaterMark(NULL));
 
   bool abort = false;
+
+  //touch_calib_clear(); // Uncomment to always bring up the touch calibration wizard for testing.
+  if (!touch_calib_has()) {
+    LOGI(TAG, "Touch calib not found... ");
+    init_touch_cal();
+  }
+
+  LOGI(TAG, "Loading touch calib... ");
+  touch_calib_load();
+
+#ifdef ESP32_HW
+  LOGI(TAG, "Initializing camera receiver...");
+  cam_init();
+#endif
 
   LOGI(TAG, "Creating Machine Interfaces... ");
   if (!abort && machine_init()) {

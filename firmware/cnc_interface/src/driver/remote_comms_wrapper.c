@@ -24,9 +24,46 @@ static void on_data_recv(const esp_now_recv_info_t *esp_now_info,
                          const uint8_t *data, int data_len);
 
 // Store callback functions
-static remote_wrapper_recv_cb_t g_recv_cb = NULL;
-static remote_wrapper_send_cb_t g_send_cb = NULL;
-static void *g_user_data = NULL;
+static remote_wrapper_send_cb_t g_send_cb   = NULL;
+static void                    *g_send_user_data = NULL;
+
+// Multi-receiver table
+typedef struct { remote_wrapper_recv_cb_t cb; void *user; } rcb_slot_t;
+static rcb_slot_t g_recv_cbs[REMOTE_WRAPPER_MAX_RECV_CBS];
+
+bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data)
+{
+    if (!recv_cb) return false;
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) return true;  // already registered
+        if (!g_recv_cbs[i].cb) {
+            g_recv_cbs[i].cb   = recv_cb;
+            g_recv_cbs[i].user = user_data;
+            return true;
+        }
+    }
+    LOGE(TAG, "remote_wrapper_add_recv_cb: table full");
+    return false;
+}
+
+void remote_wrapper_remove_recv_cb(remote_wrapper_recv_cb_t recv_cb)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) {
+            g_recv_cbs[i].cb   = NULL;
+            g_recv_cbs[i].user = NULL;
+            return;
+        }
+    }
+}
+
+static void dispatch_recv(const uint8_t *mac, const uint8_t *data, int len)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb)
+            g_recv_cbs[i].cb(mac, data, len, g_recv_cbs[i].user);
+    }
+}
 
 static void wifi_init() {
   ESP_ERROR_CHECK(esp_netif_init());
@@ -160,9 +197,9 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
   // Initialize ESP-NOW
   ESP_ERROR_CHECK(esp_now_init());
 
-  g_user_data = user_data;
-  g_recv_cb = recv_cb;
-  g_send_cb = send_cb;
+  g_send_cb        = send_cb;
+  g_send_user_data = user_data;
+  remote_wrapper_add_recv_cb(recv_cb, user_data);
 
   // Register callbacks
   ESP_ERROR_CHECK(esp_now_register_send_cb(on_data_sent));
@@ -302,17 +339,15 @@ void remote_wrapper_deinit() {
 static void on_data_sent(const uint8_t *mac_addr,
                          esp_now_send_status_t status) {
   if (g_send_cb) {
-    g_send_cb(mac_addr, status, g_user_data);
+    g_send_cb(mac_addr, status, g_send_user_data);
   }
 }
 
 // Static callback function for data received
 static void on_data_recv(const esp_now_recv_info_t *esp_now_info,
                          const uint8_t *data, int data_len) {
-  if (g_recv_cb) {
-    // Note: In ESP-IDF 5+, esp_now_info->src_addr is directly available.
-    g_recv_cb(esp_now_info->src_addr, data, data_len, g_user_data);
-  }
+  // Note: In ESP-IDF 5+, esp_now_info->src_addr is directly available.
+  dispatch_recv(esp_now_info->src_addr, data, data_len);
 }
 
 #elif defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_BRIDGE)
@@ -366,10 +401,47 @@ static const char *TAG = "remote_comms_wrapper";
 
 static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-static remote_wrapper_recv_cb_t g_recv_cb   = NULL;
-static remote_wrapper_send_cb_t g_send_cb   = NULL;
-static void                    *g_user_data = NULL;
-static TaskHandle_t             g_rx_task   = NULL;
+static remote_wrapper_send_cb_t g_send_cb        = NULL;
+static void                    *g_send_user_data  = NULL;
+static TaskHandle_t             g_rx_task         = NULL;
+
+// Multi-receiver table (shared declaration — defined in the first platform block)
+typedef struct { remote_wrapper_recv_cb_t cb; void *user; } rcb_slot_t;
+static rcb_slot_t g_recv_cbs[REMOTE_WRAPPER_MAX_RECV_CBS];
+
+bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data)
+{
+    if (!recv_cb) return false;
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) return true;
+        if (!g_recv_cbs[i].cb) {
+            g_recv_cbs[i].cb   = recv_cb;
+            g_recv_cbs[i].user = user_data;
+            return true;
+        }
+    }
+    LOGE(TAG, "remote_wrapper_add_recv_cb: table full");
+    return false;
+}
+
+void remote_wrapper_remove_recv_cb(remote_wrapper_recv_cb_t recv_cb)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) {
+            g_recv_cbs[i].cb   = NULL;
+            g_recv_cbs[i].user = NULL;
+            return;
+        }
+    }
+}
+
+static void dispatch_recv(const uint8_t *mac, const uint8_t *data, int len)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb)
+            g_recv_cbs[i].cb(mac, data, len, g_recv_cbs[i].user);
+    }
+}
 
 // ---- CRC8 (plain XOR over MAC + LEN + payload) ------------------------------
 static uint8_t bridge_crc8(const uint8_t *mac, uint16_t len,
@@ -509,9 +581,8 @@ static void c6_bridge_rx_task(void *arg)
             case RX_CRC: {
                 uint8_t expected = bridge_crc8(mac, payload_len, data_buf);
                 if (b == expected) {
-                    if (dir == BRIDGE_DIR_INCOMING && g_recv_cb) {
-                        g_recv_cb(mac, data_buf, (int)payload_len,
-                                  g_user_data);
+                    if (dir == BRIDGE_DIR_INCOMING) {
+                        dispatch_recv(mac, data_buf, (int)payload_len);
                     } else if (dir == BRIDGE_DIR_DEBUG) {
                         // Human-readable hello / info frame from C6.
                         // Log it and discard — do NOT call recv_cb.
@@ -539,9 +610,9 @@ static void c6_bridge_rx_task(void *arg)
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data)
 {
-    g_recv_cb   = recv_cb;
-    g_send_cb   = send_cb;
-    g_user_data = user_data;
+    g_send_cb        = send_cb;
+    g_send_user_data = user_data;
+    remote_wrapper_add_recv_cb(recv_cb, user_data);
 
     const uart_config_t cfg = {
         .baud_rate           = C6_BRIDGE_UART_BAUD,
@@ -721,7 +792,15 @@ void remote_wrapper_deinit()
 #else
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data) {
+  (void)send_cb; (void)user_data;
+  remote_wrapper_add_recv_cb(recv_cb, user_data);
   return true;
+}
+bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data) {
+  (void)recv_cb; (void)user_data; return true;
+}
+void remote_wrapper_remove_recv_cb(remote_wrapper_recv_cb_t recv_cb) {
+  (void)recv_cb;
 }
 bool remote_wrapper_add_peer(const uint8_t *mac_addr) { return true; }
 

@@ -32,6 +32,13 @@
 
 #define HUB_MAC_ADDR {0x24, 0xEC, 0x4A, 0x38, 0xF8, 0xE0}
 
+// Camera companion MAC address.
+// Set to the 6-byte MAC of the s3_cam_companion board.
+// All-zeros = auto-discover (lock onto the first cam-protocol ESP-NOW sender).
+#ifndef CAM_MAC_ADDR
+#define CAM_MAC_ADDR {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+#endif
+
 // Specific device only:
 // #define DISPLAY_MAC_ADDR { 0x8C, 0xBF, 0xEA, 0x0E, 0xCF, 0x7C }
 

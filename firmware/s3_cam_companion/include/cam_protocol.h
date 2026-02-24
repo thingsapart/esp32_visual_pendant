@@ -45,6 +45,8 @@ typedef enum {
     CAM_CMD_REQUEST_FRAME  = 0x90,  // Poll for next frame
     CAM_CMD_SET_CONFIG     = 0x91,  // Push configuration to camera
     CAM_CMD_FORCE_KEYFRAME = 0x92,  // Request a full keyframe now
+    CAM_CMD_STREAM_START   = 0x93,  // Begin streaming session; implies force-keyframe
+    CAM_CMD_STREAM_STOP    = 0x94,  // End streaming session gracefully
 } cam_msg_type_t;
 
 // ---------------------------------------------------------------------------
@@ -168,6 +170,17 @@ typedef struct __attribute__((packed)) {
     int16_t  aec_value;      // Manual exposure value (when AEC off)
     uint8_t  agc_gain;       // Manual gain ceiling  (when AGC off)
     float    homography[9];  // 3×3 row-major perspective matrix
+    // Color channel order.  Set 1 if the pendant LCD expects BGR565 instead
+    // of the camera's native RGB565 (e.g. WT32-SC01-Plus / ST7796).  The
+    // companion swaps R↔B before JPEG-encoding each tile so the pendant needs
+    // zero extra processing.
+    uint8_t  swap_rb;        // 0 = RGB565 (default), 1 = swap R↔B → BGR565
+    // Byte-swap 16-bit colour words.  Set 1 when the pendant is built with
+    // LV_COLOR_16_SWAP so the companion will swap the two bytes of each
+    // RGB565 pixel before JPEG-encoding tiles.
+    uint8_t  swap_bytes;     // 0 = no swap (default), 1 = swap bytes
+    // Invert all pixel values (bitwise NOT on each RGB565 word).
+    uint8_t  invert_colors;  // 0 = normal (default), 1 = invert colours
 } cam_config_cmd_t;
 
 // ---------------------------------------------------------------------------
@@ -178,17 +191,47 @@ typedef struct __attribute__((packed)) {
 } cam_force_keyframe_cmd_t;
 
 // ---------------------------------------------------------------------------
+// Pendant → Camera: begin streaming session
+// Implies a force-keyframe.  The camera learns the sender MAC as its peer
+// and immediately sends a STATUS heartbeat back so the pendant can confirm
+// the link is alive.
+// ---------------------------------------------------------------------------
+typedef struct __attribute__((packed)) {
+    uint8_t  type;    // CAM_CMD_STREAM_START
+    uint8_t  flags;   // bit 0: request keyframe immediately (always set)
+} cam_stream_start_cmd_t;
+
+// ---------------------------------------------------------------------------
+// Pendant → Camera: end streaming session
+// Camera stops accepting REQUEST_FRAME until the next STREAM_START.  It
+// continues sending STATUS heartbeats so the pendant can detect it is still
+// alive.
+// ---------------------------------------------------------------------------
+typedef struct __attribute__((packed)) {
+    uint8_t  type;    // CAM_CMD_STREAM_STOP
+} cam_stream_stop_cmd_t;
+
+// ---------------------------------------------------------------------------
 // Default configuration values
 // ---------------------------------------------------------------------------
 #define CAM_DEFAULT_RESOLUTION       CAM_RES_VGA
 #define CAM_DEFAULT_JPEG_QUALITY     12
-#define CAM_DEFAULT_TILES_X          4
-#define CAM_DEFAULT_TILES_Y          4
+#define CAM_DEFAULT_TILES_X          8
+#define CAM_DEFAULT_TILES_Y          6
 #define CAM_DEFAULT_DIFF_THRESHOLD   15
 #define CAM_DEFAULT_KEYFRAME_INTERVAL 30  // Every 30 frames
 #define CAM_DEFAULT_SEND_INTERVAL_MS  8   // ms between ESP-NOW chunk sends
 #define CAM_DEFAULT_FRAME_TIMEOUT_MS  3000 // ms before pendant drops incomplete frame
 
+// ---------------------------------------------------------------------------
+// Target send rate (compile-time default)
+// ---------------------------------------------------------------------------
+// Desired frames-per-second the camera companion should aim to send. The
+// companion will throttle outgoing frames so that it does not send more
+// frequently than this value. Set to 0 to disable throttling.
+#ifndef CAM_TARGET_FPS
+#define CAM_TARGET_FPS 3
+#endif
 // ---------------------------------------------------------------------------
 // Tile geometry helpers
 // ---------------------------------------------------------------------------

@@ -28,6 +28,9 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->aec_value         = 300;
     s->agc_gain          = 0;
     s->send_interval_ms  = CAM_DEFAULT_SEND_INTERVAL_MS;
+    s->swap_rb           = false;
+    s->swap_bytes        = false;
+    s->invert_colors     = false;
     s->wifi_channel      = CAM_WIFI_CHANNEL;
     s->calibrated        = false;
 
@@ -74,12 +77,25 @@ void cam_settings_init(cam_settings_t *s) {
     uint8_t ver = prefs.getUChar(NVS_VER_KEY, 0);
     if (ver == NVS_VERSION) {
         size_t len = prefs.getBytesLength(NVS_KEY);
-        if (len == sizeof(cam_settings_t)) {
+        if (len > 0 && len <= sizeof(cam_settings_t)) {
+            // Partial-load: handles struct growth across firmware updates.
+            // Zero-fill (already done by cam_settings_defaults above) then
+            // overwrite only the bytes that exist in the stored blob.
+            // New fields appended to the struct will retain their defaults.
+            prefs.getBytes(NVS_KEY, s, len);
+            if (len < sizeof(cam_settings_t)) {
+                ESP_LOGW(TAG, "NVS blob smaller than struct (%zu < %zu), "
+                         "new fields left at defaults", len, sizeof(cam_settings_t));
+            } else {
+                ESP_LOGI(TAG, "Settings loaded from NVS (ver %d)", ver);
+            }
+        } else if (len > sizeof(cam_settings_t)) {
+            // Stored blob is larger — load only what we understand.
             prefs.getBytes(NVS_KEY, s, sizeof(*s));
-            ESP_LOGI(TAG, "Settings loaded from NVS (ver %d)", ver);
-        } else {
-            ESP_LOGW(TAG, "NVS blob size mismatch (%zu vs %zu), using defaults",
+            ESP_LOGW(TAG, "NVS blob larger than struct (%zu > %zu), truncated",
                      len, sizeof(cam_settings_t));
+        } else {
+            ESP_LOGW(TAG, "Empty NVS blob, using defaults");
         }
     } else {
         ESP_LOGI(TAG, "No saved settings (ver %d), using defaults", ver);
@@ -111,6 +127,9 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     s->agc_enable        = cfg->agc_enable;
     s->aec_value         = cfg->aec_value;
     s->agc_gain          = cfg->agc_gain;
+    s->swap_rb           = cfg->swap_rb ? true : false;
+    s->swap_bytes        = cfg->swap_bytes ? true : false;
+    s->invert_colors     = cfg->invert_colors ? true : false;
 
     // Copy homography if non-zero
     bool all_zero = true;

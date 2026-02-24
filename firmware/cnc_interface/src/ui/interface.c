@@ -10,6 +10,7 @@
 #include "ui/ui_action_handler.h"
 #include "ui/ui_setup_dwc.h"
 #include "ui/components/mos_machine_handler.h"
+#include "ui/components/lv_cam_positioning.h"
 #include "machine/machine_interface.h"
 
 static const char *TAG = "UI_INTERFACE";
@@ -339,6 +340,13 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   lv_obj_t* disconnected_overlay = obj_registry_get("disconnected_overlay");
   if (disconnected_overlay) {
       lv_obj_add_event_cb(disconnected_overlay, disconnected_overlay_event_handler, LV_EVENT_LONG_PRESSED, NULL);
+  }
+
+  // Wire the machine's axis limits into the cam_positioning overlay so the
+  // physical coordinate grid can be drawn.
+  lv_obj_t* cam_pos = obj_registry_get("cam_positioning");
+  if (cam_pos) {
+      lv_cam_positioning_set_machine(cam_pos, machine);
   }
 
   // Set initial overlay text (will be overwritten by data bindings as state arrives)
