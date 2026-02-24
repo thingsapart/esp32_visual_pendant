@@ -1,0 +1,1 @@
+../../s3_cam_companion/include/cam_protocol.h

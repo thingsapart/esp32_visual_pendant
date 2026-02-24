@@ -1,0 +1,12 @@
+{
+  "name": "tjpgd_cam",
+  "version": "0.3.0",
+  "description": "TJpgDec R0.03 — private copy for cam_receiver (JD_FORMAT=1 RGB565, no LVGL dependency)",
+  "keywords": ["jpeg", "decoder"],
+  "authors": [{ "name": "ChaN" }],
+  "license": "BSD-1-Clause",
+  "build": {
+    "srcFilter": ["+<*.c>"],
+    "flags": ["-I."]
+  }
+}
