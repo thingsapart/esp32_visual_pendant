@@ -182,6 +182,10 @@ static bool image_to_screen_coords(lv_cam_pos_priv_t *priv,
 
     int32_t obj_w = lv_area_get_width(&img_area);
     int32_t obj_h = lv_area_get_height(&img_area);
+    // Skip drawing when the image object hasn't been laid out yet (size = 0).
+    // Without this guard, all points map to the same pixel which can produce
+    // degenerate areas that trigger LVGL assertions inside lv_draw_rect.
+    if (obj_w <= 0 || obj_h <= 0) return false;
 
     *out_scr_x = img_area.x1 + (int32_t)img_x * obj_w / img_w;
     *out_scr_y = img_area.y1 + (int32_t)img_y * obj_h / img_h;
@@ -241,11 +245,14 @@ static lv_cam_pos_point_t make_point(lv_cam_pos_priv_t *priv,
     if (priv->receiver) {
         uint16_t iw = 0, ih = 0;
         lv_cam_stream_get_image_size(priv->stream, &iw, &ih);
+        // Lock grid so g->points can't be freed while grid_interpolate reads it.
+        cam_receiver_lock_grid(priv->receiver);
         const cam_grid_info_t *g = cam_receiver_get_grid(priv->receiver);
         if (g && iw && ih) {
             pt.has_physical = grid_interpolate(g, iw, ih, px_x, px_y,
                                                 &pt.phys_x, &pt.phys_y);
         }
+        cam_receiver_unlock_grid(priv->receiver);
     }
     return pt;
 }
@@ -345,12 +352,46 @@ static void draw_circle(lv_layer_t *layer, lv_cam_pos_priv_t *priv,
 static void draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
     if (!priv->receiver) return;
+
+    // --- Step 1: snapshot scalar metadata under the mutex, then release. ---
+    // LVGL's draw functions (lv_draw_line, lv_draw_rect, etc.) allocate from
+    // LVGL's internal pool.  Calling them while holding grid_mutex would invert
+    // the lock order vs. handle_grid_map, which calls CAM_ALLOC_LARGE (system
+    // heap) before taking grid_mutex.  Follow the same snapshot pattern used by
+    // draw_axis_grid: lock → copy scalars → unlock → do all allocations.
+    cam_receiver_lock_grid(priv->receiver);
     const cam_grid_info_t *g = cam_receiver_get_grid(priv->receiver);
-    if (!g || !g->px_points || g->nx < 1 || g->ny < 1 || g->point_count == 0) return;
+    if (!g || !g->px_points || g->nx < 1 || g->ny < 1 || g->point_count == 0) {
+        cam_receiver_unlock_grid(priv->receiver);
+        return;
+    }
+    uint16_t nx          = g->nx;
+    uint16_t ny          = g->ny;
+    uint16_t point_count = g->point_count;
+    cam_receiver_unlock_grid(priv->receiver);
 
     uint16_t img_w = 0, img_h = 0;
     lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
     if (img_w == 0 || img_h == 0) return;
+
+    // --- Step 2: allocate px_points copy OUTSIDE the mutex. ---
+    // Then re-acquire briefly to memcpy (re-validate in case the grid changed
+    // while we were calling lv_malloc).
+    size_t copy_sz = (size_t)point_count * 2 * sizeof(float);
+    float *px_copy = (float *)lv_malloc(copy_sz);
+    if (!px_copy) return;
+
+    cam_receiver_lock_grid(priv->receiver);
+    g = cam_receiver_get_grid(priv->receiver);
+    if (!g || !g->px_points ||
+        g->nx != nx || g->ny != ny || g->point_count != point_count) {
+        cam_receiver_unlock_grid(priv->receiver);
+        lv_free(px_copy);
+        return;
+    }
+    lv_memcpy(px_copy, g->px_points, copy_sz);
+    cam_receiver_unlock_grid(priv->receiver);
+    // mutex released — safe to call LVGL drawing functions from here on.
 
     lv_draw_line_dsc_t ldsc;
     lv_draw_line_dsc_init(&ldsc);
@@ -364,46 +405,80 @@ static void draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
     ddsc.bg_opa   = CALIB_GRID_DOT_OPA;
     ddsc.radius   = LV_RADIUS_CIRCLE;
 
-    // --- Horizontal lines (connect points across each row) ---
-    for (uint16_t j = 0; j < g->ny; j++) {
-        for (uint16_t i = 0; i + 1 < g->nx; i++) {
-            uint16_t i0 = j * g->nx + i;
-            uint16_t i1 = j * g->nx + i + 1;
-            int16_t px0 = (int16_t)(g->px_points[i0 * 2 + 0] * (float)img_w);
-            int16_t py0 = (int16_t)(g->px_points[i0 * 2 + 1] * (float)img_h);
-            int16_t px1 = (int16_t)(g->px_points[i1 * 2 + 0] * (float)img_w);
-            int16_t py1 = (int16_t)(g->px_points[i1 * 2 + 1] * (float)img_h);
-            int32_t sx0, sy0, sx1, sy1;
-            if (!image_to_screen_coords(priv, px0, py0, &sx0, &sy0)) continue;
-            if (!image_to_screen_coords(priv, px1, py1, &sx1, &sy1)) continue;
-            ldsc.p1.x = (lv_value_precise_t)sx0;  ldsc.p1.y = (lv_value_precise_t)sy0;
-            ldsc.p2.x = (lv_value_precise_t)sx1;  ldsc.p2.y = (lv_value_precise_t)sy1;
+    // --- Step 3: draw using polyline mode. ---
+    // One lv_draw_line call per row / column instead of one per segment.
+    // This reduces LVGL draw-task allocations from O(nx × ny) to O(nx + ny),
+    // preventing pool exhaustion (LV_ASSERT_MALLOC crash) for large grids.
+    // LV_DRAW_LINE_POINT_NONE marks points that could not be mapped to screen
+    // so the renderer creates a gap instead of connecting through them.
+#define CALIB_POLY_MAX 64u
+    lv_point_precise_t pts[CALIB_POLY_MAX];
+
+    // --- Horizontal polylines (one per row) ---
+    uint16_t cols = (nx < CALIB_POLY_MAX) ? nx : (uint16_t)CALIB_POLY_MAX;
+    for (uint16_t j = 0; j < ny; j++) {
+        uint16_t cnt = 0;
+        for (uint16_t i = 0; i < cols; i++) {
+            uint16_t idx = j * nx + i;
+            if (idx >= point_count) {
+                pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
+                pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
+            } else {
+                int16_t px = (int16_t)(px_copy[idx * 2 + 0] * (float)img_w);
+                int16_t py = (int16_t)(px_copy[idx * 2 + 1] * (float)img_h);
+                int32_t sx, sy;
+                if (!image_to_screen_coords(priv, px, py, &sx, &sy)) {
+                    pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
+                    pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
+                } else {
+                    pts[cnt].x = (lv_value_precise_t)sx;
+                    pts[cnt].y = (lv_value_precise_t)sy;
+                }
+            }
+            cnt++;
+        }
+        if (cnt >= 2) {
+            ldsc.points    = pts;
+            ldsc.point_cnt = cnt;
             lv_draw_line(layer, &ldsc);
         }
     }
 
-    // --- Vertical lines (connect points down each column) ---
-    for (uint16_t i = 0; i < g->nx; i++) {
-        for (uint16_t j = 0; j + 1 < g->ny; j++) {
-            uint16_t i0 = j       * g->nx + i;
-            uint16_t i1 = (j + 1) * g->nx + i;
-            int16_t px0 = (int16_t)(g->px_points[i0 * 2 + 0] * (float)img_w);
-            int16_t py0 = (int16_t)(g->px_points[i0 * 2 + 1] * (float)img_h);
-            int16_t px1 = (int16_t)(g->px_points[i1 * 2 + 0] * (float)img_w);
-            int16_t py1 = (int16_t)(g->px_points[i1 * 2 + 1] * (float)img_h);
-            int32_t sx0, sy0, sx1, sy1;
-            if (!image_to_screen_coords(priv, px0, py0, &sx0, &sy0)) continue;
-            if (!image_to_screen_coords(priv, px1, py1, &sx1, &sy1)) continue;
-            ldsc.p1.x = (lv_value_precise_t)sx0;  ldsc.p1.y = (lv_value_precise_t)sy0;
-            ldsc.p2.x = (lv_value_precise_t)sx1;  ldsc.p2.y = (lv_value_precise_t)sy1;
+    // --- Vertical polylines (one per column) ---
+    uint16_t rows = (ny < CALIB_POLY_MAX) ? ny : (uint16_t)CALIB_POLY_MAX;
+    for (uint16_t i = 0; i < nx; i++) {
+        uint16_t cnt = 0;
+        for (uint16_t j = 0; j < rows; j++) {
+            uint16_t idx = j * nx + i;
+            if (idx >= point_count) {
+                pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
+                pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
+            } else {
+                int16_t px = (int16_t)(px_copy[idx * 2 + 0] * (float)img_w);
+                int16_t py = (int16_t)(px_copy[idx * 2 + 1] * (float)img_h);
+                int32_t sx, sy;
+                if (!image_to_screen_coords(priv, px, py, &sx, &sy)) {
+                    pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
+                    pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
+                } else {
+                    pts[cnt].x = (lv_value_precise_t)sx;
+                    pts[cnt].y = (lv_value_precise_t)sy;
+                }
+            }
+            cnt++;
+        }
+        if (cnt >= 2) {
+            ldsc.points    = pts;
+            ldsc.point_cnt = cnt;
             lv_draw_line(layer, &ldsc);
         }
     }
+#undef CALIB_POLY_MAX
 
     // --- Dots at each calibration point ---
-    for (uint16_t k = 0; k < g->point_count; k++) {
-        int16_t px = (int16_t)(g->px_points[k * 2 + 0] * (float)img_w);
-        int16_t py = (int16_t)(g->px_points[k * 2 + 1] * (float)img_h);
+    for (uint16_t k = 0; k < point_count; k++) {
+        int16_t px = (int16_t)(px_copy[k * 2 + 0] * (float)img_w);
+        int16_t py = (int16_t)(px_copy[k * 2 + 1] * (float)img_h);
         int32_t sx, sy;
         if (!image_to_screen_coords(priv, px, py, &sx, &sy)) continue;
         lv_area_t dot = {
@@ -412,6 +487,8 @@ static void draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
         };
         lv_draw_rect(layer, &ddsc, &dot);
     }
+
+    lv_free(px_copy);
 }
 
 // ---------------------------------------------------------------------------
@@ -459,8 +536,17 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
     if (!priv->machine || !priv->receiver) return;
 
+    // Snapshot the grid scalar bounds under the grid lock so we can't race
+    // with a concurrent handle_grid_map that may update them.
+    cam_receiver_lock_grid(priv->receiver);
     const cam_grid_info_t *g = cam_receiver_get_grid(priv->receiver);
-    if (!g) return;  // No calibration grid — physical bounds unknown
+    if (!g) {
+        cam_receiver_unlock_grid(priv->receiver);
+        return;  // No calibration grid — physical bounds unknown
+    }
+    float cam_min_x = g->min_x, cam_max_x = g->max_x;
+    float cam_min_y = g->min_y, cam_max_y = g->max_y;
+    cam_receiver_unlock_grid(priv->receiver);
 
     uint16_t img_w = 0, img_h = 0;
     lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
@@ -473,9 +559,7 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 
     float step = cam_pos_choose_grid_step(range_x, range_y);
 
-    // Camera physical view bounds
-    float cam_min_x = g->min_x, cam_max_x = g->max_x;
-    float cam_min_y = g->min_y, cam_max_y = g->max_y;
+    // Camera physical view bounds (from snapshot above)
     float phys_w = cam_max_x - cam_min_x;
     float phys_h = cam_max_y - cam_min_y;
     if (phys_w <= 0.0f || phys_h <= 0.0f) return;
@@ -755,6 +839,16 @@ static void on_delete(lv_event_t *e)
     // Deregister grid callback so the receiver won't call into freed memory.
     if (priv->receiver) {
         cam_receiver_remove_grid_cb(priv->receiver, on_grid_update);
+    }
+
+    // Remove all callbacks from the overlay that hold `priv` as raw user_data.
+    // LVGL fires LV_EVENT_DELETE on the root before deleting children; if any
+    // queued draw or input event fires on the overlay after we free `priv` it
+    // would dereference freed memory.  Removing the callbacks here prevents that.
+    if (priv->overlay && lv_obj_is_valid(priv->overlay)) {
+        lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_draw_cb,  priv);
+        lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_click_cb, priv);
+        lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_press_cb, priv);
     }
 
     free(priv);

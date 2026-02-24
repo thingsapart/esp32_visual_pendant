@@ -8,6 +8,9 @@
 // The frame buffer is protected by a lightweight mutex; callers that need to
 // read pixel data directly should bracket the access with
 //   cam_receiver_lock_display() / cam_receiver_unlock_display().
+// The calibration grid (px_points and points arrays) is protected by a
+// separate grid mutex; callers that iterate grid data should bracket with
+//   cam_receiver_lock_grid() / cam_receiver_unlock_grid().
 
 #ifndef CAM_RECEIVER_H
 #define CAM_RECEIVER_H
@@ -167,6 +170,18 @@ void cam_receiver_lock_display(cam_receiver_t *self);
 
 /// Release the display frame buffer lock.
 void cam_receiver_unlock_display(cam_receiver_t *self);
+
+// ---------------------------------------------------------------------------
+// Calibration grid locking
+// ---------------------------------------------------------------------------
+
+/// Acquire the grid data mutex before iterating px_points or points arrays.
+/// Must be paired with cam_receiver_unlock_grid().  Do not call LVGL
+/// functions that may allocate memory while holding this lock.
+void cam_receiver_lock_grid(cam_receiver_t *self);
+
+/// Release the grid data mutex.
+void cam_receiver_unlock_grid(cam_receiver_t *self);
 
 // ---------------------------------------------------------------------------
 // Commands to the camera

@@ -148,6 +148,7 @@ struct cam_receiver {
     uint16_t            max_width;
     uint16_t            max_height;
     CAM_MUTEX_T         display_mutex;
+    CAM_MUTEX_T         grid_mutex;    ///< Protects grid heap pointers (px_points, points)
 
     // --- Frame assembly ---
     bool                assembling;
@@ -397,6 +398,7 @@ cam_receiver_t *cam_receiver_create(const cam_receiver_config_t *cfg)
 #endif
 
     r->display_mutex = CAM_MUTEX_CREATE();
+    r->grid_mutex    = CAM_MUTEX_CREATE();
     r->waiting_for_keyframe = true;  // Must receive a key frame before diffs work
 
     // Pre-populate stored_cfg with defaults so that the very first STATUS
@@ -456,6 +458,7 @@ void cam_receiver_destroy(cam_receiver_t *self)
     if (self->grid.px_points) CAM_FREE(self->grid.px_points);
 
     CAM_MUTEX_DESTROY(self->display_mutex);
+    CAM_MUTEX_DESTROY(self->grid_mutex);
     free(self);
 }
 
@@ -531,6 +534,12 @@ void cam_receiver_lock_display(cam_receiver_t *s)
 
 void cam_receiver_unlock_display(cam_receiver_t *s)
 { if (s) CAM_MUTEX_UNLOCK(s->display_mutex); }
+
+void cam_receiver_lock_grid(cam_receiver_t *s)
+{ if (s) CAM_MUTEX_LOCK(s->grid_mutex); }
+
+void cam_receiver_unlock_grid(cam_receiver_t *s)
+{ if (s) CAM_MUTEX_UNLOCK(s->grid_mutex); }
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -1199,6 +1208,7 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         if (!pts) { LOGE(TAG, "Grid alloc fail"); return; }
         memcpy(pts, p + 30, pts_bytes);
 
+        CAM_MUTEX_LOCK(r->grid_mutex);
         if (r->grid.points)    CAM_FREE(r->grid.points);
         if (r->grid.px_points) CAM_FREE(r->grid.px_points);
         r->grid.min_x = minx;  r->grid.max_x = maxx;
@@ -1211,6 +1221,7 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         r->grid.src_img_w  = 0;
         r->grid.src_img_h  = 0;
         r->has_grid = true;
+        CAM_MUTEX_UNLOCK(r->grid_mutex);
 
         LOGI(TAG, "Grid (standard) %ux%u, bounds [%.1f..%.1f, %.1f..%.1f]",
              nx, ny, minx, maxx, miny, maxy);
@@ -1242,6 +1253,15 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         if (len < (size_t)(1 + offset_data + count * 2)) {
             LOGW(TAG, "GRID_MAP compact too short for %u points (len=%u)",
                  count, (unsigned)len);
+            return;
+        }
+
+        // Validate that the sender's point count matches the grid dimensions.
+        // The drawing code iterates nx × ny times; if count < nx * ny the
+        // allocated buffers below would be too small (heap overflow).
+        if (count != (uint16_t)((uint32_t)nx * ny)) {
+            LOGW(TAG, "GRID_MAP compact: count %u != nx*ny %u*%u — discarding",
+                 count, nx, ny);
             return;
         }
 
@@ -1308,6 +1328,7 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
             }
         }
 
+        CAM_MUTEX_LOCK(r->grid_mutex);
         if (r->grid.points)    CAM_FREE(r->grid.points);
         if (r->grid.px_points) CAM_FREE(r->grid.px_points);
         r->grid.min_x = 0;        r->grid.max_x = w;
@@ -1320,6 +1341,7 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         r->grid.src_img_w = calib_img_w;
         r->grid.src_img_h = calib_img_h;
         r->has_grid = true;
+        CAM_MUTEX_UNLOCK(r->grid_mutex);
 
         LOGI(TAG, "Grid (compact%s) %ux%u, size %.1f×%.1f",
              has_img_dims ? "+px" : "", nx, ny, w, h);
