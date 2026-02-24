@@ -67,6 +67,7 @@ typedef struct {
     // grid_points_count = nx * ny (interior/exterior as provided). Each point
     // is stored as normalized image coords (0..1). Max entries limited.
     bool     grid_calibrated;
+    bool     grid_auto_generated;  // true = auto from dimensions, false = wizard
     float    grid_minx; // real units
     float    grid_maxx;
     float    grid_miny;
@@ -75,7 +76,13 @@ typedef struct {
     float    grid_dy;
     uint16_t grid_nx;
     uint16_t grid_ny;
-#define CAM_SETTINGS_MAX_GRID_POINTS 64
+    // Grid insets in output/screen pixels — offset from edges of the image
+    // where the grid mapping begins/ends.  Allows framing/margin.
+    uint16_t grid_inset_left;
+    uint16_t grid_inset_top;
+    uint16_t grid_inset_right;
+    uint16_t grid_inset_bottom;
+#define CAM_SETTINGS_MAX_GRID_POINTS 256
     float    grid_points[CAM_SETTINGS_MAX_GRID_POINTS][2];
     uint16_t grid_points_count;
     // Project surface physical dimensions (real-world units, e.g., mm)

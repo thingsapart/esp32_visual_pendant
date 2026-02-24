@@ -349,8 +349,8 @@ cam_receiver_t *cam_receiver_create(const cam_receiver_config_t *cfg)
     if (!r) return NULL;
 
     r->transport  = cfg->transport;
-    r->max_width  = cfg->max_width  ? cfg->max_width  : 640;
-    r->max_height = cfg->max_height ? cfg->max_height : 480;
+    r->max_width  = cfg->max_width  ? cfg->max_width  : 480;
+    r->max_height = cfg->max_height ? cfg->max_height : 384;
     r->desired_width  = cfg->desired_width;
     r->desired_height = cfg->desired_height;
 
@@ -575,6 +575,9 @@ int cam_receiver_request_frame(cam_receiver_t *self)
     // in order on the remote side.
     if (self->has_stored_cfg && self->cfg_warmup_sends < 8) {
         self->cfg_warmup_sends++;
+        // Update last_cfg_send_ms so the STATUS handler's 10-second throttle
+        // accounts for these warmup sends and doesn't fire prematurely.
+        self->last_cfg_send_ms = cam_millis();
         cam_transport_send(self->transport,
                            (const uint8_t *)&self->stored_cfg,
                            sizeof(self->stored_cfg));
@@ -1241,7 +1244,12 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         memcpy(&ny,   p + 26, 2);
         memcpy(&count,p + 28, 2);
         size_t expected_standard = 31 + (size_t)count * 8;
-        if (len >= expected_standard && count == (uint16_t)nx * ny) {
+        // Guard: count, nx, ny must all be positive and within sane limits.
+        // Without these checks a compact-v3 packet with zero insets can be
+        // misidentified as standard (count=0 == 0*nx → true, alloc(0)→NULL).
+        if (len >= expected_standard && count > 0 && nx > 0 && ny > 0
+            && nx <= 256 && ny <= 256
+            && count == (uint16_t)((uint32_t)nx * ny)) {
             is_standard = true;
         }
     }
@@ -1273,6 +1281,10 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         r->grid.px_points  = NULL;  // standard format does not carry pixel positions
         r->grid.src_img_w  = 0;
         r->grid.src_img_h  = 0;
+        r->grid.inset_left = 0;
+        r->grid.inset_top  = 0;
+        r->grid.inset_right = 0;
+        r->grid.inset_bottom = 0;
         r->has_grid = true;
         CAM_MUTEX_UNLOCK(r->grid_mutex);
 
@@ -1291,16 +1303,27 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         memcpy(&nx,   p + 16, 2); memcpy(&ny,   p + 18, 2);
         memcpy(&count,p + 20, 2);
 
-        // Detect extended format (v2) which carries img_w and img_h.
+        // Detect extended format (v2) which carries img_w and img_h,
+        // and v3 which additionally carries grid insets.
         // v1: header ends at p[22], total min len = 1+22+count*2
         // v2: header ends at p[26], total min len = 1+26+count*2
+        // v3: header ends at p[34], total min len = 1+34+count*2
         uint16_t calib_img_w = 0, calib_img_h = 0;
+        uint16_t inset_l = 0, inset_t = 0, inset_r = 0, inset_b = 0;
         size_t offset_data = 22;
         bool has_img_dims = (len >= (size_t)(1 + 26 + count * 2));
+        bool has_insets   = (len >= (size_t)(1 + 34 + count * 2));
         if (has_img_dims) {
             memcpy(&calib_img_w, p + 22, 2);
             memcpy(&calib_img_h, p + 24, 2);
             offset_data = 26;
+        }
+        if (has_insets) {
+            memcpy(&inset_l, p + 26, 2);
+            memcpy(&inset_t, p + 28, 2);
+            memcpy(&inset_r, p + 30, 2);
+            memcpy(&inset_b, p + 32, 2);
+            offset_data = 34;
         }
 
         if (len < (size_t)(1 + offset_data + count * 2)) {
@@ -1309,38 +1332,45 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
             return;
         }
 
-        // Validate that the sender's point count matches the grid dimensions.
-        // The drawing code iterates nx × ny times; if count < nx * ny the
-        // allocated buffers below would be too small (heap overflow).
-        if (count != (uint16_t)((uint32_t)nx * ny)) {
-            LOGW(TAG, "GRID_MAP compact: count %u != nx*ny %u*%u — discarding",
-                 count, nx, ny);
+        // Validate that the sender's point count is consistent with the grid
+        // dimensions.  count may be < nx*ny when the grid was truncated to
+        // fit inside the ESP-NOW MTU — the excess points get zero offsets.
+        uint32_t total_grid = (uint32_t)nx * ny;
+        if (count > total_grid || total_grid == 0 || total_grid > 65535u) {
+            LOGW(TAG, "GRID_MAP compact: count %u vs nx*ny %u*%u=%u — discarding",
+                 count, nx, ny, (unsigned)total_grid);
             return;
         }
 
-        size_t pts_bytes = (size_t)count * 2 * sizeof(float);
+        size_t pts_bytes = (size_t)total_grid * 2 * sizeof(float);
         float *pts = CAM_ALLOC_LARGE(pts_bytes);
-        if (!pts) { LOGE(TAG, "Grid alloc fail"); return; }
+        if (!pts) { LOGE(TAG, "Grid alloc fail (need %u bytes)", (unsigned)pts_bytes); return; }
 
         // Reconstruct physical positions from offsets.
         // off_x/off_y are RAW PIXEL DIFFERENCES (actual_px - ideal_px).
-        // For the physical coordinate reconstruction used by grid_interpolate
-        // we scale the pixel difference by the physical pixel spacing:
-        //   physical_spacing_per_px = dx / (img_w / (nx-1))
-        // When img dimensions are unknown we fall back to the approximate
-        // 1/127 * dx heuristic used by the previous implementation.
-        float px_per_cell_x = (has_img_dims && calib_img_w > 0 && nx > 1)
-                              ? ((float)calib_img_w / (float)(nx - 1)) : 0.0f;
-        float px_per_cell_y = (has_img_dims && calib_img_h > 0 && ny > 1)
-                              ? ((float)calib_img_h / (float)(ny - 1)) : 0.0f;
+        // With insets, ideal_px = inset_l + i/(nx-1) * active_w
+        // where active_w = calib_img_w - inset_l - inset_r.
+        float px_per_cell_x = 0.0f, px_per_cell_y = 0.0f;
+        float active_w_px = 0.0f, active_h_px = 0.0f;
+        if (has_img_dims && calib_img_w > 0 && calib_img_h > 0 && nx > 1 && ny > 1) {
+            active_w_px = (float)(calib_img_w - inset_l - inset_r);
+            active_h_px = (float)(calib_img_h - inset_t - inset_b);
+            if (active_w_px < 1.0f) active_w_px = 1.0f;
+            if (active_h_px < 1.0f) active_h_px = 1.0f;
+            px_per_cell_x = active_w_px / (float)(nx - 1);
+            px_per_cell_y = active_h_px / (float)(ny - 1);
+        }
 
         for (uint16_t j = 0; j < ny; j++) {
             for (uint16_t i = 0; i < nx; i++) {
                 uint16_t idx = j * nx + i;
                 float ideal_x = (nx > 1) ? (i * w / (float)(nx - 1)) : 0.0f;
                 float ideal_y = (ny > 1) ? (j * h / (float)(ny - 1)) : 0.0f;
-                int8_t off_x = (int8_t)p[offset_data + idx * 2 + 0];
-                int8_t off_y = (int8_t)p[offset_data + idx * 2 + 1];
+                int8_t off_x = 0, off_y = 0;
+                if (idx < count) {
+                    off_x = (int8_t)p[offset_data + idx * 2 + 0];
+                    off_y = (int8_t)p[offset_data + idx * 2 + 1];
+                }
                 float phys_off_x, phys_off_y;
                 if (px_per_cell_x > 0.0f) {
                     // Convert pixel offset → physical offset using known pixel scale.
@@ -1357,21 +1387,26 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         }
 
         // Reconstruct normalised pixel positions when img dimensions are known.
-        // ideal_px = i / (nx-1) * calib_img_w  (assumes grid starts at image origin)
-        // actual_px = ideal_px + off_x  (off_x is a direct pixel offset)
+        // With insets: ideal_px = inset_l + i/(nx-1) * active_w
+        // actual_px = ideal_px + off_x
         float *px_pts = NULL;
-        if (has_img_dims && calib_img_w > 0 && calib_img_h > 0 && count > 0) {
-            px_pts = CAM_ALLOC_LARGE((size_t)count * 2 * sizeof(float));
+        if (has_img_dims && calib_img_w > 0 && calib_img_h > 0 && total_grid > 0) {
+            px_pts = CAM_ALLOC_LARGE((size_t)total_grid * 2 * sizeof(float));
             if (px_pts) {
                 float iw_f = (float)calib_img_w;
                 float ih_f = (float)calib_img_h;
+                float aw = active_w_px > 0.0f ? active_w_px : iw_f;
+                float ah = active_h_px > 0.0f ? active_h_px : ih_f;
                 for (uint16_t j = 0; j < ny; j++) {
                     for (uint16_t i = 0; i < nx; i++) {
                         uint16_t idx = j * nx + i;
-                        float ideal_px = (nx > 1) ? ((float)i / (float)(nx - 1) * iw_f) : 0.0f;
-                        float ideal_py = (ny > 1) ? ((float)j / (float)(ny - 1) * ih_f) : 0.0f;
-                        int8_t off_x = (int8_t)p[offset_data + idx * 2 + 0];
-                        int8_t off_y = (int8_t)p[offset_data + idx * 2 + 1];
+                        float ideal_px = (float)inset_l + ((nx > 1) ? ((float)i / (float)(nx - 1) * aw) : 0.0f);
+                        float ideal_py = (float)inset_t + ((ny > 1) ? ((float)j / (float)(ny - 1) * ah) : 0.0f);
+                        int8_t off_x = 0, off_y = 0;
+                        if (idx < count) {
+                            off_x = (int8_t)p[offset_data + idx * 2 + 0];
+                            off_y = (int8_t)p[offset_data + idx * 2 + 1];
+                        }
                         px_pts[idx * 2 + 0] = (ideal_px + (float)off_x) / iw_f;
                         px_pts[idx * 2 + 1] = (ideal_py + (float)off_y) / ih_f;
                     }
@@ -1393,11 +1428,15 @@ static void handle_grid_map(cam_receiver_t *r, const uint8_t *data, size_t len)
         r->grid.px_points = px_pts;
         r->grid.src_img_w = calib_img_w;
         r->grid.src_img_h = calib_img_h;
+        r->grid.inset_left   = inset_l;
+        r->grid.inset_top    = inset_t;
+        r->grid.inset_right  = inset_r;
+        r->grid.inset_bottom = inset_b;
         r->has_grid = true;
         CAM_MUTEX_UNLOCK(r->grid_mutex);
 
-        LOGI(TAG, "Grid (compact%s) %ux%u, size %.1f×%.1f",
-             has_img_dims ? "+px" : "", nx, ny, w, h);
+        LOGI(TAG, "Grid (compact%s) %ux%u (%u/%u offsets), size %.1f×%.1f",
+             has_img_dims ? "+px" : "", nx, ny, count, (unsigned)total_grid, w, h);
     }
 
     NOTIFY_CBS(r->grid_cbs, cam_grid_update_cb_t, &r->grid);

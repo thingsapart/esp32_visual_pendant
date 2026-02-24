@@ -55,10 +55,15 @@ void cam_settings_defaults(cam_settings_t *s) {
 
     // Grid defaults
     s->grid_calibrated = false;
+    s->grid_auto_generated = false;
     s->grid_minx = s->grid_miny = 0.0f;
     s->grid_maxx = s->grid_maxy = 0.0f;
     s->grid_dx = s->grid_dy = 0.0f;
     s->grid_nx = s->grid_ny = 0;
+    s->grid_inset_left = 0;
+    s->grid_inset_top = 0;
+    s->grid_inset_right = 0;
+    s->grid_inset_bottom = 0;
     s->grid_points_count = 0;
     for (int i = 0; i < CAM_SETTINGS_MAX_GRID_POINTS; i++) { s->grid_points[i][0] = 0.0f; s->grid_points[i][1] = 0.0f; }
     s->surface_width = 100.0f;
@@ -90,7 +95,8 @@ void cam_settings_defaults(cam_settings_t *s) {
 // Bump whenever the cam_settings_t struct layout changes (field insertion,
 // reorder, type change).  A version mismatch forces a full reset to defaults
 // so stale NVS blobs don't corrupt field values.
-#define NVS_VERSION 2
+// v5: forces re-load of defaults so CAM_DEFAULT_JPEG_QUALITY (now 20) takes effect.
+#define NVS_VERSION 5
 
 void cam_settings_init(cam_settings_t *s) {
     cam_settings_defaults(s);
@@ -137,7 +143,13 @@ void cam_settings_save(const cam_settings_t *s) {
 // Apply incoming config command
 // ---------------------------------------------------------------------------
 void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
-    s->resolution        = cfg->resolution;
+    // NOTE: resolution, output_width, output_height are companion-local
+    // settings configured exclusively via the web UI.  The pendant's config
+    // command must NOT overwrite them — they control capture hardware and the
+    // output transform pipeline, which the companion manages locally.
+    // s->resolution is left untouched.
+    // s->output_width / output_height are left untouched.
+
     s->jpeg_quality      = cfg->jpeg_quality;
     s->tiles_x           = cfg->tiles_x;
     s->tiles_y           = cfg->tiles_y;

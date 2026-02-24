@@ -33,6 +33,8 @@ static cam_transform_t s_preview_transform = nullptr;
 static uint16_t *s_preview_buf = nullptr;
 static uint16_t s_preview_w = 0;
 static uint16_t s_preview_h = 0;
+static uint16_t s_preview_cap_w = 0;   // capture dimensions the transform was built for
+static uint16_t s_preview_cap_h = 0;
 static float s_preview_homography[9] = {0};
 static bool s_preview_homography_valid = false;
 
@@ -54,10 +56,19 @@ static bool ensure_preview_pipeline() {
     cam_settings_compute_homography(s_settings, w, h);
   }
 
+  // Determine desired output dimensions for cache comparison.
+  uint16_t want_w = w, want_h = h;
+  if (s_settings->output_width > 0 && s_settings->output_height > 0) {
+    want_w = s_settings->output_width;
+    want_h = s_settings->output_height;
+  }
+
   bool homography_diff = !s_preview_homography_valid ||
                          homography_changed(s_preview_homography, s_settings->homography);
 
-  if (s_preview_transform && s_preview_buf && s_preview_w == w && s_preview_h == h && !homography_diff) {
+  if (s_preview_transform && s_preview_buf
+      && s_preview_cap_w == w && s_preview_cap_h == h
+      && s_preview_w == want_w && s_preview_h == want_h && !homography_diff) {
     return true;
   }
 
@@ -74,13 +85,21 @@ static bool ensure_preview_pipeline() {
     s_preview_buf = nullptr;
   }
 
-  s_preview_transform = cam_transform_create(w, h, w, h, s_settings->homography);
+  // Determine output dimensions — match the normal-mode pipeline behaviour.
+  // Priority: output_width/output_height > capture resolution.
+  uint16_t out_w = w, out_h = h;
+  if (s_settings->output_width > 0 && s_settings->output_height > 0) {
+    out_w = s_settings->output_width;
+    out_h = s_settings->output_height;
+  }
+
+  s_preview_transform = cam_transform_create(w, h, out_w, out_h, s_settings->homography);
   if (!s_preview_transform) {
-    ESP_LOGE(TAG, "preview: failed to create transform (%ux%u)", w, h);
+    ESP_LOGE(TAG, "preview: failed to create transform (%ux%u → %ux%u)", w, h, out_w, out_h);
     return false;
   }
 
-  size_t bytes = (size_t)w * h * sizeof(uint16_t);
+  size_t bytes = (size_t)out_w * out_h * sizeof(uint16_t);
   s_preview_buf = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
   if (!s_preview_buf) {
     ESP_LOGE(TAG, "preview: failed to alloc warped buffer (%u bytes)", (unsigned)bytes);
@@ -89,8 +108,10 @@ static bool ensure_preview_pipeline() {
     return false;
   }
 
-  s_preview_w = w;
-  s_preview_h = h;
+  s_preview_w = out_w;
+  s_preview_h = out_h;
+  s_preview_cap_w = w;
+  s_preview_cap_h = h;
   memcpy(s_preview_homography, s_settings->homography, sizeof(s_preview_homography));
   s_preview_homography_valid = true;
   ESP_LOGI(TAG, "preview: pipeline ready (%ux%u)", s_preview_w, s_preview_h);
@@ -124,8 +145,11 @@ static bool capture_processed_jpeg(uint8_t **jpeg_buf, size_t *jpeg_len) {
     return false;
   }
 
-  if (fw != s_preview_w || fh != s_preview_h) {
-    ESP_LOGW(TAG, "preview: size changed %ux%u -> %ux%u, rebuilding", s_preview_w, s_preview_h, fw, fh);
+  if (fw != s_preview_cap_w || fh != s_preview_cap_h) {
+    ESP_LOGW(TAG, "preview: capture size changed %ux%u -> %ux%u, rebuilding",
+             s_preview_cap_w, s_preview_cap_h, fw, fh);
+    s_preview_cap_w = 0;
+    s_preview_cap_h = 0;
     s_preview_w = 0;
     s_preview_h = 0;
     if (!ensure_preview_pipeline()) {
@@ -188,12 +212,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
   .btn-danger  { background: #e94560; color: #fff; }
   .btn-success { background: #2ecc71; color: #fff; }
   #snap-container { position: relative; display: inline-block; cursor: crosshair;
-                    max-width: 100%; padding: 20px; border: 2px solid #ffffff;
+                    max-width: 100%; padding: 0; border: 2px solid #ffffff;
                     border-radius: 6px; background: #0f3460; }
   #snap-container img { max-width: 100%; display: block; border-radius: 4px;
                         touch-action: none; }
   #snap-container canvas { position: absolute; top:0; left:0;
-                           width: 100%; height: 100%; pointer-events: none; }
+                           pointer-events: none; }
   #grid-snap-container { position: relative; display: inline-block; cursor: crosshair;
                          max-width: 100%; padding: 0; border: 2px solid #ffffff;
                          border-radius: 6px; background: #0f3460; }
@@ -262,8 +286,25 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
       <label>Project Height (real units) <input type="number" id="proj_h" step="0.1" value="100"></label>
     </div>
   </div>
+  <div class="row" style="margin-top:8px;">
+    <div>
+      <label>Inset Left (px) <input type="number" id="grid_inset_left" min="0" value="0"></label>
+    </div>
+    <div>
+      <label>Inset Top (px) <input type="number" id="grid_inset_top" min="0" value="0"></label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Inset Right (px) <input type="number" id="grid_inset_right" min="0" value="0"></label>
+    </div>
+    <div>
+      <label>Inset Bottom (px) <input type="number" id="grid_inset_bottom" min="0" value="0"></label>
+    </div>
+  </div>
   <div style="margin-top:8px;">
-    <button class="btn-primary" onclick="startGridWizard()">Start Grid Wizard</button>
+    <button class="btn-primary" onclick="generateDefaultGrid()">Generate Default Grid</button>
+    <button class="btn-primary" onclick="startGridWizard()" style="margin-left:8px;">Start Grid Wizard</button>
     <button class="btn-danger" onclick="clearGrid()" style="margin-left:8px;">Clear Grid</button>
   </div>
   <!-- Separate grid preview used only for the grid wizard so corners don't interfere -->
@@ -280,7 +321,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
   <label>Capture Resolution
     <select id="resolution">
       <option value="0">QVGA (320×240)</option>
-      <option value="1" selected>VGA (640×480)</option>
+      <option value="1">VGA (640×480)</option>
       <option value="2">SVGA (800×600)</option>
       <option value="3">XGA (1024×768)</option>
       <option value="4">SXGA (1280×1024)</option>
@@ -318,40 +359,41 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
 <!-- Sensor Settings -->
 <div class="card">
   <h2>Sensor / Lighting</h2>
+  <p style="font-size:0.85em;color:#aaa;margin-top:0">Changes apply live — hover &#9432; for details</p>
   <div class="row">
     <div>
-      <label>Brightness (-2..+2) <input type="number" id="brightness" min="-2" max="2" value="0"></label>
+      <label title="Overall image brightness bias. Adjusts the target luminance level the sensor aims for.">Brightness (-2..+2) &#9432; <input type="number" id="brightness" min="-2" max="2" value="0" class="sensor-ctrl"></label>
     </div>
     <div>
-      <label>Contrast (-2..+2) <input type="number" id="contrast" min="-2" max="2" value="0"></label>
+      <label title="Image contrast. Higher values increase the difference between light and dark areas.">Contrast (-2..+2) &#9432; <input type="number" id="contrast" min="-2" max="2" value="0" class="sensor-ctrl"></label>
     </div>
   </div>
   <div class="row">
     <div>
-      <label><input type="checkbox" id="aec" checked> Auto Exposure</label>
+      <label title="Auto Exposure Control. When enabled, the sensor automatically adjusts exposure time. Disable to set a fixed exposure value manually."><input type="checkbox" id="aec" checked class="sensor-ctrl"> Auto Exposure &#9432;</label>
     </div>
     <div>
-      <label><input type="checkbox" id="agc" checked> Auto Gain</label>
-    </div>
-  </div>
-  <div class="row">
-    <div>
-      <label>Exposure Value <input type="number" id="aec_val" min="0" max="1200" value="300"></label>
-    </div>
-    <div>
-      <label>Gain Ceiling <input type="number" id="agc_gain" min="0" max="30" value="0"></label>
+      <label title="Auto Gain Control. When enabled, the sensor automatically adjusts analog gain. Disable to use a fixed gain value. Higher gain amplifies the signal but also noise."><input type="checkbox" id="agc" checked class="sensor-ctrl"> Auto Gain &#9432;</label>
     </div>
   </div>
   <div class="row">
     <div>
-      <label>AE Level (-2..+2) <input type="number" id="ae_level" min="-2" max="2" value="0"></label>
+      <label title="Manual exposure value (0–1200). Only used when Auto Exposure is OFF. Higher values = longer exposure = brighter image but more motion blur.">Exposure Value &#9432; <input type="number" id="aec_val" min="0" max="1200" value="300" class="sensor-ctrl"></label>
     </div>
     <div>
-      <label>Gain Ceiling Mode (0-6)
-        <select id="gainceiling">
+      <label title="Manual gain value (0–30). Only used when Auto Gain is OFF. Higher values amplify the signal more, making the image brighter but noisier.">Gain Ceiling &#9432; <input type="number" id="agc_gain" min="0" max="30" value="0" class="sensor-ctrl"></label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label title="AE Level: brightness bias for auto-exposure (-2..+2). Positive values make auto-exposure target a brighter image; negative values darker.">AE Level (-2..+2) &#9432; <input type="number" id="ae_level" min="-2" max="2" value="0" class="sensor-ctrl"></label>
+    </div>
+    <div>
+      <label title="Maximum analog gain the AEC/AGC algorithm may use. Higher ceiling allows brighter images in low light but increases noise. 2x=minimal gain, 128x=maximum.">Gain Ceiling Mode &#9432;
+        <select id="gainceiling" class="sensor-ctrl">
           <option value="0">2x</option>
           <option value="1">4x</option>
-          <option value="2" selected>8x</option>
+          <option value="2">8x</option>
           <option value="3">16x</option>
           <option value="4">32x</option>
           <option value="5">64x</option>
@@ -362,20 +404,20 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
   </div>
   <div class="row">
     <div>
-      <label>Saturation (-2..+2) <input type="number" id="saturation" min="-2" max="2" value="0"></label>
+      <label title="Colour saturation (-2..+2). Higher values produce more vivid colours; lower values move towards greyscale.">Saturation (-2..+2) &#9432; <input type="number" id="saturation" min="-2" max="2" value="0" class="sensor-ctrl"></label>
     </div>
     <div>
-      <label>Sharpness (-2..+2) <input type="number" id="sharpness" min="-2" max="2" value="0"></label>
+      <label title="Edge sharpness (-2..+2). Increases perceived detail but may amplify noise at high values.">Sharpness (-2..+2) &#9432; <input type="number" id="sharpness" min="-2" max="2" value="0" class="sensor-ctrl"></label>
     </div>
   </div>
   <div class="row">
     <div>
-      <label>Denoise (0..10) <input type="number" id="denoise" min="0" max="10" value="0"></label>
+      <label title="Spatial denoise level (0–10). 0=auto (sensor decides), higher values reduce noise but soften details.">Denoise (0..10) &#9432; <input type="number" id="denoise" min="0" max="10" value="0" class="sensor-ctrl"></label>
     </div>
     <div>
-      <label>White Balance Mode
-        <select id="wb_mode">
-          <option value="0" selected>Auto</option>
+      <label title="White balance mode. Auto lets the sensor adjust colour temperature automatically. Fixed presets: Sunny≈5500K, Cloudy≈6500K, Office≈4000K fluorescent, Home≈2800K tungsten.">White Balance &#9432;
+        <select id="wb_mode" class="sensor-ctrl">
+          <option value="0">Auto</option>
           <option value="1">Sunny</option>
           <option value="2">Cloudy</option>
           <option value="3">Office</option>
@@ -386,34 +428,34 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
   </div>
   <div class="row">
     <div>
-      <label><input type="checkbox" id="aec2" checked> Anti-banding (AEC2)</label>
+      <label title="Anti-banding / night mode. Reduces flicker from artificial lighting (50/60 Hz). Recommended ON under indoor lighting."><input type="checkbox" id="aec2" checked class="sensor-ctrl"> Anti-banding (AEC2) &#9432;</label>
     </div>
     <div>
-      <label><input type="checkbox" id="bpc" checked> Black Pixel Correction</label>
-    </div>
-  </div>
-  <div class="row">
-    <div>
-      <label><input type="checkbox" id="wpc" checked> White Pixel Correction</label>
-    </div>
-    <div>
-      <label><input type="checkbox" id="raw_gma" checked> Gamma Correction</label>
+      <label title="Black pixel correction. Compensates for hot/stuck dark pixels on the sensor. Usually best left ON."><input type="checkbox" id="bpc" checked class="sensor-ctrl"> Black Pixel Corr. &#9432;</label>
     </div>
   </div>
   <div class="row">
     <div>
-      <label><input type="checkbox" id="lenc" checked> Lens Correction</label>
+      <label title="White pixel correction. Compensates for bright stuck pixels. Usually best left ON."><input type="checkbox" id="wpc" checked class="sensor-ctrl"> White Pixel Corr. &#9432;</label>
     </div>
     <div>
-      <label><input type="checkbox" id="dcw" checked> Downsize Enable</label>
+      <label title="Gamma correction. Applies a standard gamma curve to make the image look more natural. Disable for linear (raw) output."><input type="checkbox" id="raw_gma" checked class="sensor-ctrl"> Gamma Correction &#9432;</label>
     </div>
   </div>
   <div class="row">
     <div>
-      <label><input type="checkbox" id="hmirror"> Horizontal Mirror</label>
+      <label title="Lens shading/vignetting correction. Compensates for light falloff at image edges caused by the lens. Usually best left ON."><input type="checkbox" id="lenc" checked class="sensor-ctrl"> Lens Correction &#9432;</label>
     </div>
     <div>
-      <label><input type="checkbox" id="vflip"> Vertical Flip</label>
+      <label title="Downsize enable. Allows the sensor to use its internal scaler for lower resolutions. Should be ON for resolutions below the sensor's native resolution."><input type="checkbox" id="dcw" checked class="sensor-ctrl"> Downsize Enable &#9432;</label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label title="Mirror the image horizontally. Useful if the camera is mounted facing the opposite direction."><input type="checkbox" id="hmirror" class="sensor-ctrl"> Horizontal Mirror &#9432;</label>
+    </div>
+    <div>
+      <label title="Flip the image vertically. Useful if the camera is mounted upside down."><input type="checkbox" id="vflip" class="sensor-ctrl"> Vertical Flip &#9432;</label>
     </div>
   </div>
 </div>
@@ -431,6 +473,7 @@ let gridWizardActive = false;
 let gridTargets = []; // array of {x:real, y:real, display:[nx,ny]}
 let gridPoints = [];  // array of source-space normalized [x,y] matches
 let grid_nx = 0, grid_ny = 0;
+let gridAutoGenerated = false;
 let wizardIndex = 0;
 const img = document.getElementById('snap');
 const overlay = document.getElementById('overlay');
@@ -1029,29 +1072,135 @@ function drawGridPointsGrid() {
   }
 }
 
+function invertHomography(H) {
+  const A =  (H[4]*H[8] - H[5]*H[7]);
+  const B = -(H[3]*H[8] - H[5]*H[6]);
+  const C =  (H[3]*H[7] - H[4]*H[6]);
+  const D = -(H[1]*H[8] - H[2]*H[7]);
+  const E =  (H[0]*H[8] - H[2]*H[6]);
+  const F = -(H[0]*H[7] - H[1]*H[6]);
+  const G =  (H[1]*H[5] - H[2]*H[4]);
+  const K = -(H[0]*H[5] - H[2]*H[3]);
+  const L =  (H[0]*H[4] - H[1]*H[3]);
+  const det = H[0]*A + H[1]*B + H[2]*C;
+  if (Math.abs(det) < 1e-12) return null;
+  const inv = 1.0 / det;
+  return [A*inv, D*inv, G*inv, B*inv, E*inv, K*inv, C*inv, F*inv, L*inv];
+}
+
+function getInsets() {
+  return {
+    left:   parseInt(document.getElementById('grid_inset_left').value) || 0,
+    top:    parseInt(document.getElementById('grid_inset_top').value) || 0,
+    right:  parseInt(document.getElementById('grid_inset_right').value) || 0,
+    bottom: parseInt(document.getElementById('grid_inset_bottom').value) || 0
+  };
+}
+
+function generateDefaultGrid() {
+  const projW = parseFloat(document.getElementById('proj_w').value);
+  const projH = parseFloat(document.getElementById('proj_h').value);
+  const dx = parseFloat(document.getElementById('grid_dx').value);
+  const dy = parseFloat(document.getElementById('grid_dy').value);
+  const ins = getInsets();
+  if (!isFinite(projW) || !isFinite(projH) || !isFinite(dx) || !isFinite(dy) ||
+      projW <= 0 || projH <= 0 || dx <= 0 || dy <= 0) {
+    alert('Invalid grid parameters'); return;
+  }
+  const nx = Math.round(projW / dx) + 1;
+  const ny = Math.round(projH / dy) + 1;
+  // Use the snapshot natural dimensions as the destination image size
+  const imgW = img.naturalWidth || 640;
+  const imgH = img.naturalHeight || 480;
+  const activeW = imgW - ins.left - ins.right;
+  const activeH = imgH - ins.top - ins.bottom;
+  if (activeW <= 0 || activeH <= 0) { alert('Insets are too large for image'); return; }
+
+  const Hinv = invertHomography(currentHomography);
+  if (!Hinv) { alert('Homography is singular — set calibration corners first'); return; }
+
+  gridPoints = [];
+  grid_nx = nx;
+  grid_ny = ny;
+  for (let iy = 0; iy < ny; iy++) {
+    for (let ix = 0; ix < nx; ix++) {
+      const dst_x = (nx > 1) ? (ins.left + ix * (activeW - 1) / (nx - 1)) : (ins.left + activeW * 0.5);
+      const dst_y = (ny > 1) ? (ins.top + iy * (activeH - 1) / (ny - 1)) : (ins.top + activeH * 0.5);
+      const den = Hinv[6]*dst_x + Hinv[7]*dst_y + Hinv[8];
+      if (Math.abs(den) < 1e-9) continue;
+      const src_x = (Hinv[0]*dst_x + Hinv[1]*dst_y + Hinv[2]) / den;
+      const src_y = (Hinv[3]*dst_x + Hinv[4]*dst_y + Hinv[5]) / den;
+      const sxn = Math.max(0, Math.min(1, src_x / (imgW > 1 ? imgW - 1 : 1)));
+      const syn = Math.max(0, Math.min(1, src_y / (imgH > 1 ? imgH - 1 : 1)));
+      gridPoints.push([sxn, syn]);
+    }
+  }
+
+  gridAutoGenerated = true;
+  drawCorners();
+  drawGridPoints();
+
+  // Submit to server
+  const body = {
+    proj_w: projW, proj_h: projH, dx, dy, nx, ny,
+    auto_generated: true,
+    inset_left: ins.left, inset_top: ins.top,
+    inset_right: ins.right, inset_bottom: ins.bottom,
+    points: gridPoints.map(p => [p[0], p[1]])
+  };
+  fetch('/grid_calib', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    .then(r => r.json()).then(j => {
+      document.getElementById('grid-wizard-status').textContent = j.message || 'Default grid generated.';
+      setTimeout(() => { document.getElementById('grid-wizard-status').textContent = ''; }, 4000);
+    }).catch(e => {
+      document.getElementById('grid-wizard-status').textContent = 'Grid generation failed: ' + e;
+    });
+}
+
+let autoRegenTimer = null;
+function setupAutoRegenListeners() {
+  const ids = ['proj_w', 'proj_h', 'grid_dx', 'grid_dy',
+               'grid_inset_left', 'grid_inset_top', 'grid_inset_right', 'grid_inset_bottom'];
+  ids.forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      if (!gridAutoGenerated) return;
+      if (autoRegenTimer) clearTimeout(autoRegenTimer);
+      autoRegenTimer = setTimeout(() => { generateDefaultGrid(); }, 500);
+    });
+  });
+}
+
 function startGridWizard() {
   const projW = parseFloat(document.getElementById('proj_w').value);
   const projH = parseFloat(document.getElementById('proj_h').value);
   const dx = parseFloat(document.getElementById('grid_dx').value);
   const dy = parseFloat(document.getElementById('grid_dy').value);
+  const ins = getInsets();
   if (!isFinite(projW) || !isFinite(projH) || !isFinite(dx) || !isFinite(dy) || projW <= 0 || projH <= 0 || dx <= 0 || dy <= 0) {
     alert('Invalid grid parameters'); return;
   }
   gridTargets = [];
   gridPoints = [];
+  gridAutoGenerated = false;
   // Generate grid in row-major (Y then X). Include all points inside extents.
   grid_nx = Math.round(projW / dx) + 1;
   grid_ny = Math.round(projH / dy) + 1;
+  // Compute display normalized positions accounting for insets
+  const imgW = gridImg.naturalWidth || img.naturalWidth || 640;
+  const imgH = gridImg.naturalHeight || img.naturalHeight || 480;
+  const activeW = Math.max(1, imgW - ins.left - ins.right);
+  const activeH = Math.max(1, imgH - ins.top - ins.bottom);
   for (let iy = 0; iy < grid_ny; iy++) {
     const gy = iy * dy; // min assumed 0
     for (let ix = 0; ix < grid_nx; ix++) {
       const gx = ix * dx;
-      const dst_norm_x = (grid_nx > 1) ? (ix / (grid_nx - 1)) : 0;
-      const dst_norm_y = (grid_ny > 1) ? (iy / (grid_ny - 1)) : 0;
+      const dst_px_x = (grid_nx > 1) ? (ins.left + ix * (activeW - 1) / (grid_nx - 1)) : (ins.left + activeW * 0.5);
+      const dst_px_y = (grid_ny > 1) ? (ins.top + iy * (activeH - 1) / (grid_ny - 1)) : (ins.top + activeH * 0.5);
+      const dst_norm_x = dst_px_x / (imgW > 1 ? imgW - 1 : 1);
+      const dst_norm_y = dst_px_y / (imgH > 1 ? imgH - 1 : 1);
       gridTargets.push({x: gx, y: gy, disp: [dst_norm_x, dst_norm_y]});
     }
   }
-  // Remove corners from targets (optional) — skip if target equals corners
   // Start wizard
   gridWizardActive = true;
   wizardIndex = 0;
@@ -1078,10 +1227,15 @@ function submitGridPoints() {
   const projH = parseFloat(document.getElementById('proj_h').value);
   const dx = parseFloat(document.getElementById('grid_dx').value);
   const dy = parseFloat(document.getElementById('grid_dy').value);
+  const ins = getInsets();
   const nx = grid_nx;
   const ny = grid_ny;
   const pts = gridPoints.slice(0, gridTargets.length).map(p => [p[0], p[1]]);
-  const body = { proj_w: projW, proj_h: projH, dx, dy, nx, ny, points: pts };
+  const body = { proj_w: projW, proj_h: projH, dx, dy, nx, ny,
+                 auto_generated: false,
+                 inset_left: ins.left, inset_top: ins.top,
+                 inset_right: ins.right, inset_bottom: ins.bottom,
+                 points: pts };
   fetch('/grid_calib', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
     .then(r => r.json()).then(j => {
       document.getElementById('grid-wizard-status').textContent = j.message || 'Grid saved.';
@@ -1099,6 +1253,7 @@ function submitGridPoints() {
 
 function clearGrid() {
   gridWizardActive = false;
+  gridAutoGenerated = false;
   gridTargets = [];
   gridPoints = [];
   document.getElementById('grid-wizard-status').textContent = 'Grid cleared';
@@ -1176,6 +1331,11 @@ async function loadConfig() {
       drawCorners();
       updateCornerList();
     }
+    // Grid insets
+    if (typeof c.grid_inset_left !== 'undefined')   document.getElementById('grid_inset_left').value = c.grid_inset_left;
+    if (typeof c.grid_inset_top !== 'undefined')    document.getElementById('grid_inset_top').value = c.grid_inset_top;
+    if (typeof c.grid_inset_right !== 'undefined')  document.getElementById('grid_inset_right').value = c.grid_inset_right;
+    if (typeof c.grid_inset_bottom !== 'undefined') document.getElementById('grid_inset_bottom').value = c.grid_inset_bottom;
     // Grid calibration load
     if (typeof c.grid_calibrated !== 'undefined' && c.grid_calibrated) {
       // Project size
@@ -1191,7 +1351,9 @@ async function loadConfig() {
         drawGridPoints();
         document.getElementById('grid-wizard-status').textContent = 'Loaded saved grid';
       }
+      if (typeof c.grid_auto_generated !== 'undefined') gridAutoGenerated = c.grid_auto_generated;
     }
+    setupAutoRegenListeners();
     document.getElementById('status').textContent = 'Config loaded.';
   } catch(e) {
     document.getElementById('status').textContent = 'Failed to load config: ' + e;
@@ -1233,6 +1395,10 @@ async function saveConfig() {
     cal_src: srcCorners,
     surface_width: parseFloat(document.getElementById('proj_w').value),
     surface_height: parseFloat(document.getElementById('proj_h').value),
+    grid_inset_left: parseInt(document.getElementById('grid_inset_left').value) || 0,
+    grid_inset_top: parseInt(document.getElementById('grid_inset_top').value) || 0,
+    grid_inset_right: parseInt(document.getElementById('grid_inset_right').value) || 0,
+    grid_inset_bottom: parseInt(document.getElementById('grid_inset_bottom').value) || 0,
   };
   try {
     const r = await fetch('/config', {
@@ -1260,6 +1426,47 @@ async function resetConfig() {
     document.getElementById('status').textContent = 'Reset failed: ' + e;
   }
 }
+
+// ---------- Live sensor update ----------
+// Debounce: collect changes for 300ms then POST to /apply_sensor.
+let sensorTimer = null;
+function applySensorLive() {
+  if (sensorTimer) clearTimeout(sensorTimer);
+  sensorTimer = setTimeout(() => {
+    const body = {
+      brightness: parseInt(document.getElementById('brightness').value),
+      contrast: parseInt(document.getElementById('contrast').value),
+      aec_enable: document.getElementById('aec').checked,
+      agc_enable: document.getElementById('agc').checked,
+      aec_value: parseInt(document.getElementById('aec_val').value),
+      agc_gain: parseInt(document.getElementById('agc_gain').value),
+      ae_level: parseInt(document.getElementById('ae_level').value),
+      gainceiling: parseInt(document.getElementById('gainceiling').value),
+      saturation: parseInt(document.getElementById('saturation').value),
+      sharpness: parseInt(document.getElementById('sharpness').value),
+      denoise: parseInt(document.getElementById('denoise').value),
+      wb_mode: parseInt(document.getElementById('wb_mode').value),
+      aec2: document.getElementById('aec2').checked,
+      bpc: document.getElementById('bpc').checked,
+      wpc: document.getElementById('wpc').checked,
+      raw_gma: document.getElementById('raw_gma').checked,
+      lenc: document.getElementById('lenc').checked,
+      dcw: document.getElementById('dcw').checked,
+      hmirror: document.getElementById('hmirror').checked,
+      vflip: document.getElementById('vflip').checked,
+    };
+    fetch('/apply_sensor', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  }, 300);
+}
+// Attach listeners to all sensor controls
+document.querySelectorAll('.sensor-ctrl').forEach(el => {
+  el.addEventListener('input', applySensorLive);
+  el.addEventListener('change', applySensorLive);
+});
 
 // Load config on page load
 window.addEventListener('load', loadConfig);
@@ -1313,8 +1520,12 @@ static void handle_get_config() {
     cam_settings_t *s = s_settings;
 
     // Build JSON manually (no ArduinoJson dependency).
-    char json[3072];
-    int n = snprintf(json, sizeof(json),
+    // With up to 256 grid points (~22 chars each ≈ 5.6 KB) + ~1 KB header,
+    // heap-allocate to avoid stack overflow.
+    const size_t JSON_SZ = 8192;
+    char *json = (char *)malloc(JSON_SZ);
+    if (!json) { server->send(500, "text/plain", "alloc fail"); return; }
+    int n = snprintf(json, JSON_SZ,
       "{"
       "\"resolution\":%d,"
       "\"output_width\":%u,"
@@ -1349,7 +1560,8 @@ static void handle_get_config() {
       "\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
       "\"cal_src\":[[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f]],"
       "\"surface_width\":%.4f,\"surface_height\":%.4f,"
-      "\"grid_calibrated\":%s,"
+      "\"grid_calibrated\":%s,\"grid_auto_generated\":%s,"
+      "\"grid_inset_left\":%u,\"grid_inset_top\":%u,\"grid_inset_right\":%u,\"grid_inset_bottom\":%u,"
       "\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
       s->resolution, (unsigned)s->output_width, (unsigned)s->output_height,
       s->jpeg_quality, s->diff_threshold,
@@ -1379,22 +1591,26 @@ static void handle_get_config() {
       s->cal_src[3][0], s->cal_src[3][1],
       s->surface_width, s->surface_height,
       s->grid_calibrated ? "true" : "false",
+      s->grid_auto_generated ? "true" : "false",
+      (unsigned)s->grid_inset_left, (unsigned)s->grid_inset_top,
+      (unsigned)s->grid_inset_right, (unsigned)s->grid_inset_bottom,
       s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny);
     (void)n;
     size_t off = strlen(json);
     for (uint16_t i = 0; i < s->grid_points_count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
-        int r = snprintf(json + off, sizeof(json) - off, "%s[%.6f,%.6f]",
+        int r = snprintf(json + off, JSON_SZ - off, "%s[%.6f,%.6f]",
                          (i==0)?"":",", s->grid_points[i][0], s->grid_points[i][1]);
         if (r <= 0) break;
         off += r;
     }
-    if (off < sizeof(json) - 4) {
-      snprintf(json + off, sizeof(json) - off, "]}" );
+    if (off < JSON_SZ - 4) {
+      snprintf(json + off, JSON_SZ - off, "]}" );
     } else {
-      strncat(json, "]}", sizeof(json) - strlen(json) - 1);
+      strncat(json, "]}", JSON_SZ - strlen(json) - 1);
     }
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->send(200, "application/json", json);
+    free(json);
 }
 
 // Minimal JSON number parser.
@@ -1477,6 +1693,10 @@ static void handle_post_config() {
     s->vflip             = json_bool(body, "vflip", s->vflip) ? 1 : 0;
     s->surface_width     = json_float(body, "surface_width", s->surface_width);
     s->surface_height    = json_float(body, "surface_height", s->surface_height);
+    s->grid_inset_left   = (uint16_t)json_int(body, "grid_inset_left", s->grid_inset_left);
+    s->grid_inset_top    = (uint16_t)json_int(body, "grid_inset_top", s->grid_inset_top);
+    s->grid_inset_right  = (uint16_t)json_int(body, "grid_inset_right", s->grid_inset_right);
+    s->grid_inset_bottom = (uint16_t)json_int(body, "grid_inset_bottom", s->grid_inset_bottom);
 
     float parsed_cal_src[4][2];
     if (parse_cal_src(body, parsed_cal_src)) {
@@ -1553,12 +1773,20 @@ static void handle_post_config() {
           Hinv[3] = B * invDet; Hinv[4] = E * invDet; Hinv[5] = K * invDet;
           Hinv[6] = C * invDet; Hinv[7] = F * invDet; Hinv[8] = L * invDet;
 
-          // Build grid
+          // Build grid — account for insets
+          uint16_t inL = s_settings->grid_inset_left;
+          uint16_t inT = s_settings->grid_inset_top;
+          uint16_t inR = s_settings->grid_inset_right;
+          uint16_t inB = s_settings->grid_inset_bottom;
+          float activeW = (float)((int)w - (int)inL - (int)inR);
+          float activeH = (float)((int)h - (int)inT - (int)inB);
+          if (activeW < 1.0f) activeW = (float)(w - 1);
+          if (activeH < 1.0f) activeH = (float)(h - 1);
           uint16_t count = 0;
           for (uint16_t iy = 0; iy < NY && count < CAM_SETTINGS_MAX_GRID_POINTS; iy++) {
             for (uint16_t ix = 0; ix < NX && count < CAM_SETTINGS_MAX_GRID_POINTS; ix++) {
-              float dst_x = (float)ix * (float)(w - 1) / (float)(NX - 1);
-              float dst_y = (float)iy * (float)(h - 1) / (float)(NY - 1);
+              float dst_x = (float)inL + (float)ix * (activeW - 1.0f) / (float)(NX - 1);
+              float dst_y = (float)inT + (float)iy * (activeH - 1.0f) / (float)(NY - 1);
               float den = Hinv[6]*dst_x + Hinv[7]*dst_y + Hinv[8];
               if (fabs(den) < 1e-9f) continue;
               float src_x = (Hinv[0]*dst_x + Hinv[1]*dst_y + Hinv[2]) / den;
@@ -1575,6 +1803,7 @@ static void handle_post_config() {
           }
           s_settings->grid_points_count = count;
           s_settings->grid_calibrated = (count > 0);
+          s_settings->grid_auto_generated = true;
           s_settings->grid_minx = 0.0f;
           s_settings->grid_miny = 0.0f;
           s_settings->grid_maxx = s_settings->surface_width;
@@ -1614,6 +1843,40 @@ static void handle_post_config() {
     server->send(200, "application/json", out);
   }
 
+// POST /apply_sensor — apply sensor controls live without save/reboot
+static void handle_apply_sensor() {
+    if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
+    String body = server->arg("plain");
+    cam_settings_t *s = s_settings;
+
+    // Update only sensor-related fields in the live settings struct.
+    s->brightness   = (int8_t)json_int(body, "brightness", s->brightness);
+    s->contrast     = (int8_t)json_int(body, "contrast", s->contrast);
+    s->aec_enable   = json_bool(body, "aec_enable", s->aec_enable);
+    s->agc_enable   = json_bool(body, "agc_enable", s->agc_enable);
+    s->aec_value    = (int16_t)json_int(body, "aec_value", s->aec_value);
+    s->agc_gain     = (uint8_t)json_int(body, "agc_gain", s->agc_gain);
+    s->ae_level     = (int8_t)json_int(body, "ae_level", s->ae_level);
+    s->gainceiling  = (uint8_t)json_int(body, "gainceiling", s->gainceiling);
+    s->saturation   = (int8_t)json_int(body, "saturation", s->saturation);
+    s->sharpness    = (int8_t)json_int(body, "sharpness", s->sharpness);
+    s->denoise      = (int8_t)json_int(body, "denoise", s->denoise);
+    s->wb_mode      = (uint8_t)json_int(body, "wb_mode", s->wb_mode);
+    s->aec2         = json_bool(body, "aec2", s->aec2) ? 1 : 0;
+    s->bpc          = json_bool(body, "bpc", s->bpc) ? 1 : 0;
+    s->wpc          = json_bool(body, "wpc", s->wpc) ? 1 : 0;
+    s->raw_gma      = json_bool(body, "raw_gma", s->raw_gma) ? 1 : 0;
+    s->lenc         = json_bool(body, "lenc", s->lenc) ? 1 : 0;
+    s->dcw          = json_bool(body, "dcw", s->dcw) ? 1 : 0;
+    s->hmirror      = json_bool(body, "hmirror", s->hmirror) ? 1 : 0;
+    s->vflip        = json_bool(body, "vflip", s->vflip) ? 1 : 0;
+
+    cam_capture_apply_sensor(s);
+
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->send(200, "application/json", "{\"ok\":true}");
+}
+
 static void handle_reset() {
     if (s_settings) {
         cam_settings_defaults(s_settings);
@@ -1630,30 +1893,39 @@ static void handle_get_grid() {
     if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
     cam_settings_t *s = s_settings;
 
-    // Build JSON conservatively
-    char json[2048];
-    int n = snprintf(json, sizeof(json),
-      "{\"grid_calibrated\":%s,\"proj_w\":%.4f,\"proj_h\":%.4f,\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
+    // Build JSON — heap-allocate for large grids (up to 256 points).
+    const size_t GJSON_SZ = 8192;
+    char *json = (char *)malloc(GJSON_SZ);
+    if (!json) { server->send(500, "text/plain", "alloc fail"); return; }
+    int n = snprintf(json, GJSON_SZ,
+      "{\"grid_calibrated\":%s,\"grid_auto_generated\":%s,"
+      "\"proj_w\":%.4f,\"proj_h\":%.4f,"
+      "\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,"
+      "\"grid_inset_left\":%u,\"grid_inset_top\":%u,\"grid_inset_right\":%u,\"grid_inset_bottom\":%u,"
+      "\"grid_points\":[",
       s->grid_calibrated ? "true" : "false",
+      s->grid_auto_generated ? "true" : "false",
       s->surface_width, s->surface_height,
-      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny);
+      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny,
+      (unsigned)s->grid_inset_left, (unsigned)s->grid_inset_top,
+      (unsigned)s->grid_inset_right, (unsigned)s->grid_inset_bottom);
     (void)n;
     size_t off = strlen(json);
     for (uint16_t i = 0; i < s->grid_points_count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
-        int r = snprintf(json + off, sizeof(json) - off, "%s[%.6f,%.6f]",
+        int r = snprintf(json + off, GJSON_SZ - off, "%s[%.6f,%.6f]",
                          (i==0)?"":",", s->grid_points[i][0], s->grid_points[i][1]);
         if (r <= 0) break;
         off += r;
     }
-    if (off < sizeof(json) - 4) {
-      snprintf(json + off, sizeof(json) - off, "]}" );
+    if (off < GJSON_SZ - 4) {
+      snprintf(json + off, GJSON_SZ - off, "]}" );
     } else {
-      // fallback
-      strncat(json, "]}", sizeof(json) - strlen(json) - 1);
+      strncat(json, "]}", GJSON_SZ - strlen(json) - 1);
     }
 
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->send(200, "application/json", json);
+    free(json);
 }
 
 // Minimal parser for grid POST body
@@ -1721,11 +1993,16 @@ static void handle_post_grid() {
     }
 
     s_settings->grid_calibrated = true;
+    s_settings->grid_auto_generated = json_bool(body, "auto_generated", false);
     // Min assumed 0
     s_settings->grid_minx = 0.0f; s_settings->grid_maxx = proj_w;
     s_settings->grid_miny = 0.0f; s_settings->grid_maxy = proj_h;
     s_settings->grid_dx = dx; s_settings->grid_dy = dy;
     s_settings->grid_nx = nx; s_settings->grid_ny = ny;
+    s_settings->grid_inset_left   = (uint16_t)json_int(body, "inset_left", s_settings->grid_inset_left);
+    s_settings->grid_inset_top    = (uint16_t)json_int(body, "inset_top", s_settings->grid_inset_top);
+    s_settings->grid_inset_right  = (uint16_t)json_int(body, "inset_right", s_settings->grid_inset_right);
+    s_settings->grid_inset_bottom = (uint16_t)json_int(body, "inset_bottom", s_settings->grid_inset_bottom);
     s_settings->grid_points_count = count;
     for (uint16_t i = 0; i < count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
       s_settings->grid_points[i][0] = points[i][0];
@@ -1759,8 +2036,12 @@ void cam_webserver_start(cam_settings_t *settings) {
     IPAddress ip = WiFi.softAPIP();
     ESP_LOGI(TAG, "AP started: SSID=%s  IP=%s", settings->ap_ssid, ip.toString().c_str());
 
-    // Camera init for snapshots/streaming.
-    if (!cam_capture_init(settings)) {
+    // Reuse existing camera if already running (normal mode → webserver toggle).
+    // Only (re)init when the camera isn't ready (e.g. initial config boot).
+    if (cam_capture_is_ready()) {
+      ESP_LOGI(TAG, "Camera already running — reusing for AP mode");
+      ensure_preview_pipeline();
+    } else if (!cam_capture_init(settings)) {
       ESP_LOGE(TAG, "Camera init in AP mode failed: %s (0x%x)",
            cam_capture_last_error_name(), (unsigned)cam_capture_last_error());
     } else {
@@ -1776,6 +2057,8 @@ void cam_webserver_start(cam_settings_t *settings) {
     server->on("/config",   HTTP_GET,  handle_get_config);
     server->on("/config",   HTTP_POST, handle_post_config);
     server->on("/config",   HTTP_OPTIONS, handle_cors);
+    server->on("/apply_sensor", HTTP_POST, handle_apply_sensor);
+    server->on("/apply_sensor", HTTP_OPTIONS, handle_cors);
     server->on("/preview_calib", HTTP_POST, handle_post_preview_calib);
     server->on("/preview_calib", HTTP_OPTIONS, handle_cors);
     server->on("/grid_calib", HTTP_GET, handle_get_grid);
@@ -1805,6 +2088,8 @@ void cam_webserver_stop(void) {
     }
     s_preview_w = 0;
     s_preview_h = 0;
+    s_preview_cap_w = 0;
+    s_preview_cap_h = 0;
     s_preview_homography_valid = false;
     s_running = false;
 }

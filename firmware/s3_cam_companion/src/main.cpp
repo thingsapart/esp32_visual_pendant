@@ -81,6 +81,9 @@ static bool      g_temporal_valid = false;
 static uint16_t g_output_w = 0;
 static uint16_t g_output_h = 0;
 
+// Set to true when g_output_w/h changes so the pipeline is rebuilt from loop().
+static volatile bool g_pipeline_dirty = false;
+
 static uint16_t g_frame_id   = 0;
 static bool     g_frame_requested = false;
 static bool     g_force_keyframe  = false;
@@ -130,17 +133,29 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
             uint16_t dw = cmd->desired_width;
             uint16_t dh = cmd->desired_height;
             if (dw != 0 && dh != 0) {
-                g_output_w = dw;
-                g_output_h = dh;
+                // Client requests a specific resolution — override default.
+                if (dw != g_output_w || dh != g_output_h) {
+                    g_output_w = dw;
+                    g_output_h = dh;
+                    g_pipeline_dirty = true;
+                }
             } else {
-                g_output_w = CAM_DEFAULT_OUTPUT_WIDTH;
-                g_output_h = CAM_DEFAULT_OUTPUT_HEIGHT;
+                // Client says "don't care" — clear override so setup_pipeline
+                // falls through to the webui default (output_width/height).
+                if (g_output_w != 0 || g_output_h != 0) {
+                    g_output_w = 0;
+                    g_output_h = 0;
+                    g_pipeline_dirty = true;
+                }
             }
-            ESP_LOGI(TAG, "Client requested output %ux%u", g_output_w, g_output_h);
+            ESP_LOGI(TAG, "Client requested output %ux%u (0=don't-care)", dw, dh);
         } else {
             // Legacy client without output resolution fields
-            g_output_w = CAM_DEFAULT_OUTPUT_WIDTH;
-            g_output_h = CAM_DEFAULT_OUTPUT_HEIGHT;
+            if (g_output_w != 0 || g_output_h != 0) {
+                g_output_w = 0;
+                g_output_h = 0;
+                g_pipeline_dirty = true;
+            }
         }
 
         // Immediately acknowledge with a STATUS so the pendant confirms link.
@@ -303,16 +318,16 @@ static bool setup_pipeline(void) {
     cam_capture_get_resolution(&cap_w, &cap_h);
 
     // Determine output dimensions.  Priority:
-    //  1. Settings from webui (output_width/output_height > 0)
-    //  2. Pendant request (g_output_w/g_output_h > 0)
+    //  1. Last client handshake with a non-"don't-care" resolution
+    //  2. WebUI default (output_width/output_height > 0)
     //  3. Fall back to capture resolution
     uint16_t out_w, out_h;
-    if (g_settings.output_width > 0 && g_settings.output_height > 0) {
-        out_w = g_settings.output_width;
-        out_h = g_settings.output_height;
-    } else if (g_output_w > 0 && g_output_h > 0) {
+    if (g_output_w > 0 && g_output_h > 0) {
         out_w = g_output_w;
         out_h = g_output_h;
+    } else if (g_settings.output_width > 0 && g_settings.output_height > 0) {
+        out_w = g_settings.output_width;
+        out_h = g_settings.output_height;
     } else {
         out_w = cap_w;
         out_h = cap_h;
@@ -420,25 +435,35 @@ static void process_frame(void) {
     const cam_diff_result_t *result = cam_diff_get_result(g_diff);
 
     // 4. Send via ESP-NOW.
-    if (result && result->num_changed > 0) {
-        cam_led_set(CAM_LED_SENDING);
-
+    // Always send a frame message to the pendant, even when 0 tiles changed.
+    // Sending FRAME_START(num_tiles=0)+FRAME_END releases the pendant's
+    // frame_in_flight backpressure flag so it keeps sending REQUEST_FRAME.
+    // Without this, a static scene (0/N tiles changed) causes the pendant to
+    // stall waiting for a reply that never arrives, and the camera eventually
+    // hits its 15-second idle timeout and drops the streaming session.
+    if (result) {
         const uint8_t *dst = (g_settings.hub_mac[0] | g_settings.hub_mac[1] |
                               g_settings.hub_mac[2] | g_settings.hub_mac[3] |
                               g_settings.hub_mac[4] | g_settings.hub_mac[5])
                              ? g_settings.hub_mac : NULL;
 
-        ESP_LOGI(TAG, "Sending frame id=%u type=%s tiles=%u swap_rb=%d swap_bytes=%d jpeg_q=%d",
-                 g_frame_id,
-                 result->is_keyframe ? "KEY" : "DIFF",
-                 result->num_changed,
-                 g_settings.swap_rb,
-                 g_settings.swap_bytes,
-                 g_settings.jpeg_quality);
-
-        cam_espnow_send_frame(dst, g_frame_id, result,
-                              g_settings.send_interval_ms);
-        g_frames_sent++;
+        if (result->num_changed > 0) {
+            cam_led_set(CAM_LED_SENDING);
+            ESP_LOGI(TAG, "Sending frame id=%u type=%s tiles=%u swap_rb=%d swap_bytes=%d jpeg_q=%d",
+                     g_frame_id,
+                     result->is_keyframe ? "KEY" : "DIFF",
+                     result->num_changed,
+                     g_settings.swap_rb,
+                     g_settings.swap_bytes,
+                     g_settings.jpeg_quality);
+            cam_espnow_send_frame(dst, g_frame_id, result,
+                                  g_settings.send_interval_ms);
+            g_frames_sent++;
+        } else {
+            // No tiles changed — send a lightweight empty FRAME_START+FRAME_END
+            // (no tile chunks) so the pendant's backpressure is released.
+            cam_espnow_send_frame(dst, g_frame_id, result, 0);
+        }
     }
 
     cam_diff_free_tiles(g_diff);
@@ -546,13 +571,10 @@ void setup() {
     }
 
     // Pipeline was already built inside init_camera_with_fallback().
-    // Lock AEC/AGC between frames; re-sample every 30 captures.
-    // This prevents the sensor's per-frame gain/shutter adjustment from
-    // producing a uniform brightness step that the diff mistakes for scene
-    // change.  Only engages when AEC/AGC are enabled in settings.
-    if (g_settings.aec_enable || g_settings.agc_enable) {
-        cam_capture_set_ae_lock_interval(30);
-    }
+    // AEC/AGC periodic re-lock is disabled — leaving auto-exposure running
+    // continuously avoids brightness step artefacts in the diff and is more
+    // practical for typical workshop lighting conditions.
+    // cam_capture_set_ae_lock_interval(30);
 
     cam_led_set(CAM_LED_NO_PEER);
     g_fps_timer_ms = millis();
@@ -621,6 +643,20 @@ void loop() {
         }
     }
 
+    // If the output resolution changed (e.g. a new STREAM_START with different
+    // desired dimensions), rebuild the transform LUT, diff engine, and PSRAM
+    // buffers before the next frame is captured.  This must run on the main
+    // task (not the WiFi callback) because it does heap allocations.
+    if (g_pipeline_dirty && cam_capture_is_ready()) {
+        g_pipeline_dirty = false;
+        ESP_LOGI(TAG, "Output resolution changed — rebuilding pipeline");
+        if (setup_pipeline()) {
+            g_force_keyframe = true;
+        } else {
+            ESP_LOGE(TAG, "Pipeline rebuild failed after resolution change");
+        }
+    }
+
     // Poll-driven: only capture and send when the pendant requests a frame
     // and the camera pipeline is operational.
     if (g_frame_requested && cam_capture_is_ready() && g_diff) {
@@ -671,13 +707,24 @@ void loop() {
                     if (img_w == 0 || img_h == 0 || g_settings.surface_width <= 0.0f || g_settings.surface_height <= 0.0f) {
                         for (uint16_t i = 0; i < pts; i++) { offsets[i*2] = 0; offsets[i*2+1] = 0; }
                     } else {
+                        // Active area after insets
+                        uint16_t il = g_settings.grid_inset_left;
+                        uint16_t it = g_settings.grid_inset_top;
+                        uint16_t ir = g_settings.grid_inset_right;
+                        uint16_t ib = g_settings.grid_inset_bottom;
+                        float active_w = (float)(img_w - il - ir);
+                        float active_h = (float)(img_h - it - ib);
+                        if (active_w < 1.0f) active_w = 1.0f;
+                        if (active_h < 1.0f) active_h = 1.0f;
+
                         for (uint16_t i = 0; i < pts; i++) {
-                            uint16_t ix = i % nx;
-                            uint16_t iy = i / nx;
-                            float real_x = g_settings.grid_minx + (float)ix * g_settings.grid_dx;
-                            float real_y = g_settings.grid_miny + (float)iy * g_settings.grid_dy;
-                            float ideal_px = (real_x / g_settings.surface_width) * (float)img_w;
-                            float ideal_py = (real_y / g_settings.surface_height) * (float)img_h;
+                            uint16_t ixx = i % nx;
+                            uint16_t iyy = i / nx;
+                            // Ideal pixel position within the inset area
+                            float frac_x = (nx > 1) ? ((float)ixx / (float)(nx - 1)) : 0.0f;
+                            float frac_y = (ny > 1) ? ((float)iyy / (float)(ny - 1)) : 0.0f;
+                            float ideal_px = (float)il + frac_x * active_w;
+                            float ideal_py = (float)it + frac_y * active_h;
                             float actual_px = g_settings.grid_points[i][0] * (float)img_w;
                             float actual_py = g_settings.grid_points[i][1] * (float)img_h;
                             int dx_px = (int)lroundf(actual_px - ideal_px);
@@ -694,6 +741,8 @@ void loop() {
                                                  g_settings.grid_dx, g_settings.grid_dy,
                                                  g_settings.grid_nx, g_settings.grid_ny,
                                                  img_w, img_h,
+                                                 g_settings.grid_inset_left, g_settings.grid_inset_top,
+                                                 g_settings.grid_inset_right, g_settings.grid_inset_bottom,
                                                  offsets, pts);
                 }
             }

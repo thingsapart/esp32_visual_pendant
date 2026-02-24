@@ -57,6 +57,12 @@ typedef struct {
     float      *px_points;
     uint16_t    src_img_w;        ///< Calibration image width used (0 = unknown)
     uint16_t    src_img_h;        ///< Calibration image height used (0 = unknown)
+    /// Grid insets in output pixels — the grid mapping starts/ends inset
+    /// from the image edges, defining a margin around the work area.
+    uint16_t    inset_left;
+    uint16_t    inset_top;
+    uint16_t    inset_right;
+    uint16_t    inset_bottom;
 } cam_grid_info_t;
 
 /// Camera device status (from CAM_MSG_STATUS heartbeats).

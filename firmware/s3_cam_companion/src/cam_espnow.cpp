@@ -330,15 +330,26 @@ bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
                                   float w, float h, float dx, float dy,
                                   uint16_t nx, uint16_t ny,
                                   uint16_t img_w, uint16_t img_h,
+                                  uint16_t inset_l, uint16_t inset_t,
+                                  uint16_t inset_r, uint16_t inset_b,
                                   const int8_t *offsets_xy, uint16_t points_count) {
-    // Layout: [type:1][w:4][h:4][dx:4][dy:4][nx:2][ny:2][count:2][img_w:2][img_h:2][offsets: count*2]
-    size_t header = 1 + 4 * sizeof(float) + 3 * sizeof(uint16_t) + 2 * sizeof(uint16_t);
+    // Layout v3: [type:1][w:4][h:4][dx:4][dy:4][nx:2][ny:2][count:2][img_w:2][img_h:2]
+    //            [inset_l:2][inset_t:2][inset_r:2][inset_b:2][offsets: count*2]
+    size_t header = 1 + 4 * sizeof(float) + 3 * sizeof(uint16_t)
+                    + 2 * sizeof(uint16_t)   // img_w, img_h
+                    + 4 * sizeof(uint16_t);  // insets
     size_t payload = (size_t)points_count * 2 * sizeof(int8_t);
     size_t total = header + payload;
     if (total > CAM_ESPNOW_MAX_DATA) {
-        ESP_LOGW(TAG, "grid send (compact): payload %zu > %d bytes, skipping",
-                 total, CAM_ESPNOW_MAX_DATA);
-        return false;
+        // Truncate offset data to fit within the ESP-NOW MTU.
+        // The receiver will zero-fill offsets for the remaining points.
+        size_t max_payload = CAM_ESPNOW_MAX_DATA - header;
+        uint16_t max_pts = (uint16_t)(max_payload / 2);
+        ESP_LOGW(TAG, "grid send (compact): truncated %u→%u of %u*%u points (MTU %d)",
+                 points_count, max_pts, nx, ny, CAM_ESPNOW_MAX_DATA);
+        points_count = max_pts;
+        payload = (size_t)points_count * 2;
+        total = header + payload;
     }
 
     uint8_t buf[CAM_ESPNOW_MAX_DATA];
@@ -356,6 +367,8 @@ bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
     write_u16(nx); write_u16(ny); write_u16(points_count);
     // Extended v2 fields: calibration image dimensions.
     write_u16(img_w); write_u16(img_h);
+    // Extended v3 fields: grid insets (pixels).
+    write_u16(inset_l); write_u16(inset_t); write_u16(inset_r); write_u16(inset_b);
 
     // Offsets are raw pixel differences: actual_px - ideal_px, clamped to int8.
     for (uint16_t i = 0; i < points_count; i++) {

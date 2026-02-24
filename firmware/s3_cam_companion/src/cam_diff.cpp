@@ -286,6 +286,16 @@ void cam_diff_process(cam_diff_t ctx,
                                   jpeg_quality,
                                   &jpeg_out, &jpeg_len);
                 if (ok && jpeg_out) {
+                    // Move the JPEG buffer from internal RAM to PSRAM to avoid
+                    // exhausting the limited ~120 KB internal heap when all 48
+                    // tiles are encoded in a keyframe.
+                    uint8_t *psram_buf = (uint8_t *)heap_caps_malloc(
+                        jpeg_len, MALLOC_CAP_SPIRAM);
+                    if (psram_buf) {
+                        memcpy(psram_buf, jpeg_out, jpeg_len);
+                        free(jpeg_out);
+                        jpeg_out = psram_buf;
+                    }
                     r->tiles[tile_idx].jpeg_buf = jpeg_out;
                     r->tiles[tile_idx].jpeg_len = jpeg_len;
                 } else {
@@ -345,7 +355,7 @@ void cam_diff_free_tiles(cam_diff_t ctx) {
     if (!ctx) return;
     for (int i = 0; i < CAM_MAX_TILES; i++) {
         if (ctx->result.tiles[i].jpeg_buf) {
-            free(ctx->result.tiles[i].jpeg_buf);
+            heap_caps_free(ctx->result.tiles[i].jpeg_buf);
             ctx->result.tiles[i].jpeg_buf = NULL;
             ctx->result.tiles[i].jpeg_len = 0;
         }

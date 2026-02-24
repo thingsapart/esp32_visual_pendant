@@ -133,9 +133,25 @@ cam_transform_t cam_transform_create(uint16_t src_w, uint16_t src_h,
     }
 #endif
 
+    // When the caller passed the identity matrix but capture and output
+    // dimensions differ we must use a proper scale homography — otherwise the
+    // inverted identity produces a 1:1 crop instead of a full-frame resample.
+    // H_eff maps src→dst; its inverse (used in the LUT) maps dst→src.
+    float H_eff[9];
+    if (ctx->identity && (src_w != dst_w || src_h != dst_h)) {
+        ESP_LOGI(TAG, "Identity H with mismatched dims (%ux%u→%ux%u) — "
+                 "substituting scale homography", src_w, src_h, dst_w, dst_h);
+        H_eff[0] = (float)dst_w / src_w; H_eff[1] = 0.0f;                H_eff[2] = 0.0f;
+        H_eff[3] = 0.0f;                 H_eff[4] = (float)dst_h / src_h; H_eff[5] = 0.0f;
+        H_eff[6] = 0.0f;                 H_eff[7] = 0.0f;                 H_eff[8] = 1.0f;
+        ctx->identity = false;  // LUT is now non-trivial
+    } else {
+        memcpy(H_eff, H, sizeof(H_eff));
+    }
+
     // Compute inverse homography: H_inv maps dst → src.
     float Hi[9];
-    if (!invert3x3(H, Hi)) {
+    if (!invert3x3(H_eff, Hi)) {
         ESP_LOGW(TAG, "Singular homography — using identity");
         for (size_t i = 0; i < lut_entries; i++) {
             uint16_t y = (uint16_t)(i / dst_w);

@@ -193,6 +193,9 @@ static bool image_to_screen_coords(lv_cam_pos_priv_t *priv,
 }
 
 /// Bilinear interpolation on the grid to get physical coordinates.
+/// Accounts for grid insets: the grid spans from
+///   (inset_left, inset_top) to (img_w - inset_right - 1, img_h - inset_bottom - 1).
+/// Pixels outside the inset area are extrapolated (clamped to grid boundary).
 static bool grid_interpolate(const cam_grid_info_t *g,
                               uint16_t img_w, uint16_t img_h,
                               int16_t px_x, int16_t px_y,
@@ -200,9 +203,17 @@ static bool grid_interpolate(const cam_grid_info_t *g,
 {
     if (!g || !g->points || g->nx < 2 || g->ny < 2) return false;
 
-    // Fractional grid cell position
-    float gx = (float)px_x * (float)(g->nx - 1) / (float)(img_w > 1 ? img_w - 1 : 1);
-    float gy = (float)px_y * (float)(g->ny - 1) / (float)(img_h > 1 ? img_h - 1 : 1);
+    // Active pixel area after insets
+    float il = (float)g->inset_left;
+    float it = (float)g->inset_top;
+    float active_w = (float)img_w - il - (float)g->inset_right;
+    float active_h = (float)img_h - it - (float)g->inset_bottom;
+    if (active_w < 1.0f) active_w = 1.0f;
+    if (active_h < 1.0f) active_h = 1.0f;
+
+    // Fractional grid cell position (remapped from inset area)
+    float gx = ((float)px_x - il) * (float)(g->nx - 1) / active_w;
+    float gy = ((float)px_y - it) * (float)(g->ny - 1) / active_h;
 
     int ix = (int)gx;
     int iy = (int)gy;

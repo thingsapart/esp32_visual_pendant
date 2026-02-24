@@ -6,6 +6,8 @@
 #include "esp_camera.h"
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #undef ESP_LOGE
 #undef ESP_LOGW
@@ -30,6 +32,7 @@ static esp_err_t s_last_err        = ESP_OK;
 static uint8_t  s_ae_lock_interval = 0;   // 0 = disabled
 static uint8_t  s_ae_frame_counter = 0;
 static bool     s_ae_locked        = false;
+static uint8_t  s_ae_warmup_remaining = 0;  // frames to run AEC before first lock
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -198,8 +201,9 @@ void cam_capture_apply_sensor(const cam_settings_t *settings) {
 void cam_capture_set_ae_lock_interval(uint8_t interval) {
     s_ae_lock_interval = interval;
     s_ae_frame_counter = 0;
-    s_ae_locked        = false;  // start unlocked; first tick will lock
-    ESP_LOGI(TAG, "AE lock interval set to %u frames (0=disabled)", interval);
+    s_ae_locked        = false;  // start unlocked
+    s_ae_warmup_remaining = 8;  // let AEC/AGC run for 8 frames before first lock
+    ESP_LOGI(TAG, "AE lock interval set to %u frames (warmup=8, 0=disabled)", interval);
 }
 
 bool cam_capture_tick_ae(void) {
@@ -207,6 +211,16 @@ bool cam_capture_tick_ae(void) {
 
     sensor_t *s = esp_camera_sensor_get();
     if (!s) return false;
+
+    // Warmup phase: keep AEC/AGC running so the sensor can converge to the
+    // correct exposure level before we begin locking.
+    if (s_ae_warmup_remaining > 0) {
+        s_ae_warmup_remaining--;
+        if (s_ae_warmup_remaining == 0) {
+            ESP_LOGI(TAG, "AE warmup complete — locking");
+        }
+        return false;  // don't force keyframe during warmup
+    }
 
     bool unlocked_this_frame = false;
 
@@ -275,6 +289,13 @@ bool cam_capture_rgb565(uint8_t **buf, size_t *len,
     }
 
     s_last_fb = esp_camera_fb_get();
+    if (!s_last_fb) {
+        // Retry once after a short delay — the ISR DMA pipeline may need
+        // an extra VSYNC cycle to produce the first valid RGB565 frame
+        // after a format switch or cold start.
+        vTaskDelay(pdMS_TO_TICKS(100));
+        s_last_fb = esp_camera_fb_get();
+    }
     if (!s_last_fb) {
         s_last_err = ESP_FAIL;
         ESP_LOGE(TAG, "RGB565 capture failed");

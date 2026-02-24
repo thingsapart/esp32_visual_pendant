@@ -61,7 +61,8 @@ bool cam_espnow_send_grid(const uint8_t *peer_mac,
 
 // Compact grid send: packs surface width/height and spacing as four float32
 // (w,h,dx,dy) followed by u16 nx, u16 ny, u16 points_count, u16 img_w,
-// u16 img_h, and then points_count pairs of signed int8 offsets (x_off, y_off).
+// u16 img_h, u16 inset_left, u16 inset_top, u16 inset_right, u16 inset_bottom,
+// and then points_count pairs of signed int8 offsets (x_off, y_off).
 // The offsets are raw pixel differences: actual_image_px - ideal_image_px,
 // clamped to int8_t range.
 // img_w / img_h are the dimensions of the image when calibration was performed,
@@ -70,6 +71,8 @@ bool cam_espnow_send_grid_compact(const uint8_t *peer_mac,
                                   float w, float h, float dx, float dy,
                                   uint16_t nx, uint16_t ny,
                                   uint16_t img_w, uint16_t img_h,
+                                  uint16_t inset_l, uint16_t inset_t,
+                                  uint16_t inset_r, uint16_t inset_b,
                                   const int8_t *offsets_xy, uint16_t points_count);
 
 // Get our own MAC address.

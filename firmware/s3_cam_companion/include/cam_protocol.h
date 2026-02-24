@@ -248,16 +248,16 @@ typedef struct __attribute__((packed)) {
 // ---------------------------------------------------------------------------
 // Default configuration values
 // ---------------------------------------------------------------------------
-#define CAM_DEFAULT_RESOLUTION       CAM_RES_QVGA
-#define CAM_DEFAULT_JPEG_QUALITY     50
+#define CAM_DEFAULT_RESOLUTION       CAM_RES_VGA
+#define CAM_DEFAULT_JPEG_QUALITY     20
 #define CAM_DEFAULT_TILES_X          8
 #define CAM_DEFAULT_TILES_Y          6
 #define CAM_DEFAULT_DIFF_THRESHOLD   15
-#define CAM_DEFAULT_KEYFRAME_INTERVAL 30  // Every 30 frames
+#define CAM_DEFAULT_KEYFRAME_INTERVAL 20  // Every 30 frames
 #define CAM_DEFAULT_SEND_INTERVAL_MS  20   // ms between ESP-NOW chunk sends
 #define CAM_DEFAULT_FRAME_TIMEOUT_MS  2000 // ms before pendant drops incomplete frame
-#define CAM_DEFAULT_OUTPUT_WIDTH     640   // Default output width
-#define CAM_DEFAULT_OUTPUT_HEIGHT    480   // Default output height
+#define CAM_DEFAULT_OUTPUT_WIDTH     320   // Default output width
+#define CAM_DEFAULT_OUTPUT_HEIGHT    240   // Default output height
 
 // --- Extended sensor defaults ---
 #define CAM_DEFAULT_AE_LEVEL         0     // AEC brightness bias (0=neutral)
