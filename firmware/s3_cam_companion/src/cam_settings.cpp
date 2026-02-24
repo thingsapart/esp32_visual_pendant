@@ -19,6 +19,8 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->jpeg_quality      = CAM_DEFAULT_JPEG_QUALITY;
     s->tiles_x           = CAM_DEFAULT_TILES_X;
     s->tiles_y           = CAM_DEFAULT_TILES_Y;
+    s->output_width      = CAM_DEFAULT_OUTPUT_WIDTH;
+    s->output_height     = CAM_DEFAULT_OUTPUT_HEIGHT;
     s->diff_threshold    = CAM_DEFAULT_DIFF_THRESHOLD;
     s->keyframe_interval = CAM_DEFAULT_KEYFRAME_INTERVAL;
     s->brightness        = 0;
@@ -27,6 +29,23 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->agc_enable        = true;
     s->aec_value         = 300;
     s->agc_gain          = 0;
+
+    // Extended sensor defaults
+    s->ae_level          = CAM_DEFAULT_AE_LEVEL;
+    s->gainceiling       = CAM_DEFAULT_GAINCEILING;
+    s->bpc               = CAM_DEFAULT_BPC;
+    s->wpc               = CAM_DEFAULT_WPC;
+    s->raw_gma           = CAM_DEFAULT_RAW_GMA;
+    s->lenc              = CAM_DEFAULT_LENC;
+    s->hmirror           = CAM_DEFAULT_HMIRROR;
+    s->vflip             = CAM_DEFAULT_VFLIP;
+    s->dcw               = CAM_DEFAULT_DCW;
+    s->saturation        = CAM_DEFAULT_SATURATION;
+    s->sharpness         = CAM_DEFAULT_SHARPNESS;
+    s->denoise           = CAM_DEFAULT_DENOISE;
+    s->aec2              = CAM_DEFAULT_AEC2;
+    s->wb_mode           = CAM_DEFAULT_WB_MODE;
+
     s->send_interval_ms  = CAM_DEFAULT_SEND_INTERVAL_MS;
     s->swap_rb           = false;
     s->swap_bytes        = false;
@@ -68,7 +87,10 @@ void cam_settings_defaults(cam_settings_t *s) {
 #define NVS_NS   "cam"
 #define NVS_KEY  "cfg"
 #define NVS_VER_KEY "ver"
-#define NVS_VERSION 1
+// Bump whenever the cam_settings_t struct layout changes (field insertion,
+// reorder, type change).  A version mismatch forces a full reset to defaults
+// so stale NVS blobs don't corrupt field values.
+#define NVS_VERSION 2
 
 void cam_settings_init(cam_settings_t *s) {
     cam_settings_defaults(s);
@@ -130,6 +152,23 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     s->swap_rb           = cfg->swap_rb ? true : false;
     s->swap_bytes        = cfg->swap_bytes ? true : false;
     s->invert_colors     = cfg->invert_colors ? true : false;
+
+    // Extended sensor settings — only apply if the sender included them
+    // (backward-compatible: old senders send a shorter SET_CONFIG).
+    s->ae_level          = cfg->ae_level;
+    s->gainceiling       = cfg->gainceiling;
+    s->bpc               = cfg->bpc;
+    s->wpc               = cfg->wpc;
+    s->raw_gma           = cfg->raw_gma;
+    s->lenc              = cfg->lenc;
+    s->hmirror           = cfg->hmirror;
+    s->vflip             = cfg->vflip;
+    s->dcw               = cfg->dcw;
+    s->saturation        = cfg->saturation;
+    s->sharpness         = cfg->sharpness;
+    s->denoise           = cfg->denoise;
+    s->aec2              = cfg->aec2;
+    s->wb_mode           = cfg->wb_mode;
 
     // Copy homography if non-zero
     bool all_zero = true;

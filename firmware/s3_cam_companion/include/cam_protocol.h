@@ -72,7 +72,13 @@ typedef enum {
     CAM_RES_QVGA  = 0,   // 320×240
     CAM_RES_VGA   = 1,   // 640×480
     CAM_RES_SVGA  = 2,   // 800×600
+    CAM_RES_XGA   = 3,   // 1024×768
+    CAM_RES_SXGA  = 4,   // 1280×1024
+    CAM_RES_UXGA  = 5,   // 1600×1200  (OV3660 max for RGB565)
 } cam_resolution_t;
+
+// Output resolution "don't-care" sentinel — camera uses its default (480×320).
+#define CAM_OUTPUT_RES_DONT_CARE  0
 
 // ---------------------------------------------------------------------------
 // Camera → Pendant: frame metadata (sent once at the start of each frame)
@@ -157,7 +163,7 @@ typedef struct __attribute__((packed)) {
 // ---------------------------------------------------------------------------
 typedef struct __attribute__((packed)) {
     uint8_t  type;           // CAM_CMD_SET_CONFIG
-    uint8_t  resolution;     // cam_resolution_t
+    uint8_t  resolution;     // cam_resolution_t (capture resolution)
     uint8_t  jpeg_quality;   // 1–63
     uint8_t  tiles_x;        // Desired tile columns
     uint8_t  tiles_y;        // Desired tile rows
@@ -181,7 +187,27 @@ typedef struct __attribute__((packed)) {
     uint8_t  swap_bytes;     // 0 = no swap (default), 1 = swap bytes
     // Invert all pixel values (bitwise NOT on each RGB565 word).
     uint8_t  invert_colors;  // 0 = normal (default), 1 = invert colours
+    // --- Extended sensor settings (new fields, backward-compatible) ---
+    int8_t   ae_level;       // AEC target brightness bias (-3..+3), 0=neutral
+    uint8_t  gainceiling;    // Max analog gain: 0=2x,1=4x,2=8x,3=16x,4=32x,5=64x,6=128x
+    uint8_t  bpc;            // Black pixel correction (1=on, 0=off)
+    uint8_t  wpc;            // White pixel correction (1=on, 0=off)
+    uint8_t  raw_gma;        // Gamma correction (1=on, 0=off)
+    uint8_t  lenc;           // Lens correction (1=on, 0=off)
+    uint8_t  hmirror;        // Horizontal mirror (1=flip, 0=normal)
+    uint8_t  vflip;          // Vertical flip (1=flip, 0=normal)
+    uint8_t  dcw;            // Downsize enable (1=on, 0=off)
+    int8_t   saturation;     // Colour saturation (-2..+2)
+    int8_t   sharpness;      // Sharpness (-2..+2) — OV3660 specific
+    int8_t   denoise;        // Denoise level (0..10), 0=auto
+    uint8_t  aec2;           // AEC night mode / anti-banding (1=on)
+    uint8_t  wb_mode;        // White-balance mode: 0=auto,1=sunny,2=cloudy,3=office,4=home
 } cam_config_cmd_t;
+
+// Size of the original config fields (before the extended sensor settings).
+// Used for backward-compatibility parsing — if a received SET_CONFIG is shorter
+// than the full struct, the extended fields are left at their defaults.
+#define CAM_CONFIG_V1_SIZE  offsetof(cam_config_cmd_t, ae_level)
 
 // ---------------------------------------------------------------------------
 // Pendant → Camera: force keyframe (shorthand)
@@ -195,10 +221,18 @@ typedef struct __attribute__((packed)) {
 // Implies a force-keyframe.  The camera learns the sender MAC as its peer
 // and immediately sends a STATUS heartbeat back so the pendant can confirm
 // the link is alive.
+//
+// desired_width / desired_height: The output resolution the pendant wants.
+// Set both to CAM_OUTPUT_RES_DONT_CARE (0) if the pendant doesn't care —
+// the camera will default to its configured output (typically 480×320).
+// The camera captures at its configured (potentially higher) capture
+// resolution and resamples down to the requested output.
 // ---------------------------------------------------------------------------
 typedef struct __attribute__((packed)) {
-    uint8_t  type;    // CAM_CMD_STREAM_START
-    uint8_t  flags;   // bit 0: request keyframe immediately (always set)
+    uint8_t  type;           // CAM_CMD_STREAM_START
+    uint8_t  flags;          // bit 0: request keyframe immediately (always set)
+    uint16_t desired_width;  // Requested output width  (0 = don't-care → 480)
+    uint16_t desired_height; // Requested output height (0 = don't-care → 320)
 } cam_stream_start_cmd_t;
 
 // ---------------------------------------------------------------------------
@@ -222,6 +256,58 @@ typedef struct __attribute__((packed)) {
 #define CAM_DEFAULT_KEYFRAME_INTERVAL 30  // Every 30 frames
 #define CAM_DEFAULT_SEND_INTERVAL_MS  20   // ms between ESP-NOW chunk sends
 #define CAM_DEFAULT_FRAME_TIMEOUT_MS  2000 // ms before pendant drops incomplete frame
+#define CAM_DEFAULT_OUTPUT_WIDTH     640   // Default output width
+#define CAM_DEFAULT_OUTPUT_HEIGHT    480   // Default output height
+
+// --- Extended sensor defaults ---
+#define CAM_DEFAULT_AE_LEVEL         0     // AEC brightness bias (0=neutral)
+#define CAM_DEFAULT_GAINCEILING      0     // 0 → 2× max analog gain
+#define CAM_DEFAULT_BPC              1     // Black pixel correction on
+#define CAM_DEFAULT_WPC              1     // White pixel correction on
+#define CAM_DEFAULT_RAW_GMA          1     // Gamma correction on
+#define CAM_DEFAULT_LENC             1     // Lens correction on
+#define CAM_DEFAULT_HMIRROR          0
+#define CAM_DEFAULT_VFLIP            0
+#define CAM_DEFAULT_DCW              1     // Downsize enable on
+#define CAM_DEFAULT_SATURATION       0
+#define CAM_DEFAULT_SHARPNESS        0
+#define CAM_DEFAULT_DENOISE          0     // 0 = auto
+#define CAM_DEFAULT_AEC2             1     // Anti-banding / night mode on
+#define CAM_DEFAULT_WB_MODE          0     // Auto white-balance
+
+// ---------------------------------------------------------------------------
+// Enhanced processing feature gates
+// ---------------------------------------------------------------------------
+// Master switch — set to 0 to disable all enhanced processing (reverts to the
+// original nearest-neighbour, same-resolution pipeline).
+#ifndef CAM_ENHANCED_PROCESSING
+#define CAM_ENHANCED_PROCESSING      1
+#endif
+
+#if CAM_ENHANCED_PROCESSING
+// Sub-feature toggles:  set to 0 individually to disable a specific feature.
+#ifndef CAM_ENH_BILINEAR
+#define CAM_ENH_BILINEAR             1  // Fixed-point bilinear interp in homography LUT
+#endif
+#ifndef CAM_ENH_AREA_AVERAGE
+#define CAM_ENH_AREA_AVERAGE         1  // Adaptive area averaging for minification
+#endif
+#ifndef CAM_ENH_TEMPORAL_DENOISE
+#define CAM_ENH_TEMPORAL_DENOISE     1  // 2-frame EMA temporal noise reduction
+#endif
+#ifndef CAM_ENH_RGB888_CAPTURE
+#define CAM_ENH_RGB888_CAPTURE       0  // Capture in RGB888 (more memory, less quant)
+#endif
+#ifndef CAM_ENH_ANTI_BANDING
+#define CAM_ENH_ANTI_BANDING         1  // Sensor anti-flicker + AE-level bias
+#endif
+#else
+#define CAM_ENH_BILINEAR             0
+#define CAM_ENH_AREA_AVERAGE         0
+#define CAM_ENH_TEMPORAL_DENOISE     0
+#define CAM_ENH_RGB888_CAPTURE       0
+#define CAM_ENH_ANTI_BANDING         0
+#endif // CAM_ENHANCED_PROCESSING
 
 // ---------------------------------------------------------------------------
 // Target send rate (compile-time default)

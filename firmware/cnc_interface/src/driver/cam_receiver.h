@@ -105,6 +105,8 @@ typedef struct {
     cam_transport_t *transport;        ///< Required — ownership NOT transferred
     uint16_t         max_width;        ///< Maximum supported image width  (0 = 640)
     uint16_t         max_height;       ///< Maximum supported image height (0 = 480)
+    uint16_t         desired_width;    ///< Desired output width  (0 = don't-care)
+    uint16_t         desired_height;   ///< Desired output height (0 = don't-care)
 } cam_receiver_config_t;
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@
 #include "cam_led.h"
 #include "cam_webserver.h"
 #include "app_log.h"
+#include "esp_camera.h"
 
 #undef ESP_LOGE
 #undef ESP_LOGW
@@ -65,6 +66,20 @@ static cam_diff_t      g_diff      = NULL;
 
 // PSRAM buffers for the warped frame.
 static uint16_t *g_warped_buf = NULL;
+
+#if CAM_ENH_TEMPORAL_DENOISE
+// Temporal denoise: previous warped frame for 2-frame EMA.
+static uint16_t *g_temporal_prev = NULL;
+static bool      g_temporal_valid = false;
+// EMA alpha in 8-bit fixed-point: alpha=0.7 → 179/256.  Higher = more
+// new-frame weight (less smoothing, less motion blur).
+#define TEMPORAL_ALPHA  179   // 0.7 × 256 ≈ 179
+#define TEMPORAL_INV    (256 - TEMPORAL_ALPHA)  // 77
+#endif
+
+// Output resolution requested by the pendant (0 = don't-care → use defaults).
+static uint16_t g_output_w = 0;
+static uint16_t g_output_h = 0;
 
 static uint16_t g_frame_id   = 0;
 static bool     g_frame_requested = false;
@@ -108,6 +123,26 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         g_force_keyframe  = true;
         g_frame_requested = true;
         g_last_request_ms = millis();
+
+        // Parse desired output resolution from extended STREAM_START (v2).
+        if (len >= (int)sizeof(cam_stream_start_cmd_t)) {
+            const cam_stream_start_cmd_t *cmd = (const cam_stream_start_cmd_t *)data;
+            uint16_t dw = cmd->desired_width;
+            uint16_t dh = cmd->desired_height;
+            if (dw != 0 && dh != 0) {
+                g_output_w = dw;
+                g_output_h = dh;
+            } else {
+                g_output_w = CAM_DEFAULT_OUTPUT_WIDTH;
+                g_output_h = CAM_DEFAULT_OUTPUT_HEIGHT;
+            }
+            ESP_LOGI(TAG, "Client requested output %ux%u", g_output_w, g_output_h);
+        } else {
+            // Legacy client without output resolution fields
+            g_output_w = CAM_DEFAULT_OUTPUT_WIDTH;
+            g_output_h = CAM_DEFAULT_OUTPUT_HEIGHT;
+        }
+
         // Immediately acknowledge with a STATUS so the pendant confirms link.
         if (g_espnow_ready) {
             cam_espnow_send_status(g_settings.hub_mac,
@@ -172,8 +207,8 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
 // ---------------------------------------------------------------------------
 // Allocate PSRAM buffers
 // ---------------------------------------------------------------------------
-static bool allocate_buffers(uint16_t w, uint16_t h) {
-    size_t frame_bytes = (size_t)w * h * sizeof(uint16_t);
+static bool allocate_buffers(uint16_t out_w, uint16_t out_h) {
+    size_t frame_bytes = (size_t)out_w * out_h * sizeof(uint16_t);
 
     if (g_warped_buf) heap_caps_free(g_warped_buf);
     g_warped_buf = (uint16_t *)heap_caps_malloc(frame_bytes, MALLOC_CAP_SPIRAM);
@@ -182,34 +217,125 @@ static bool allocate_buffers(uint16_t w, uint16_t h) {
         return false;
     }
     memset(g_warped_buf, 0, frame_bytes);
+
+#if CAM_ENH_TEMPORAL_DENOISE
+    if (g_temporal_prev) heap_caps_free(g_temporal_prev);
+    g_temporal_prev = (uint16_t *)heap_caps_malloc(frame_bytes, MALLOC_CAP_SPIRAM);
+    if (!g_temporal_prev) {
+        ESP_LOGW(TAG, "Failed to alloc temporal buffer — temporal denoise disabled");
+    }
+    g_temporal_valid = false;
+#endif
+
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Build / rebuild the pipeline after settings change
-// ---------------------------------------------------------------------------
-static bool setup_pipeline(void) {
-    uint16_t w, h;
-    cam_capture_get_resolution(&w, &h);
+// Forward declaration (defined below).
+static bool setup_pipeline(void);
 
-    ESP_LOGI(TAG, "Setting up pipeline: %ux%u, %dx%d tiles",
-             w, h, g_settings.tiles_x, g_settings.tiles_y);
+// ---------------------------------------------------------------------------
+// Resolution fallback ladder (highest to lowest).
+// ---------------------------------------------------------------------------
+static const uint8_t s_res_ladder[] = {
+    CAM_RES_UXGA, CAM_RES_SXGA, CAM_RES_XGA, CAM_RES_SVGA, CAM_RES_VGA, CAM_RES_QVGA
+};
+static const int s_res_ladder_len = sizeof(s_res_ladder) / sizeof(s_res_ladder[0]);
+
+// Return the next-lower resolution in the ladder, or -1 if none left.
+static int next_lower_resolution(uint8_t current) {
+    for (int i = 0; i < s_res_ladder_len; i++) {
+        if (s_res_ladder[i] == current) {
+            return (i + 1 < s_res_ladder_len) ? s_res_ladder[i + 1] : -1;
+        }
+    }
+    return -1;  // not in ladder
+}
+
+// Try to bring up camera + full pipeline.  Returns true on success.
+// On failure, cleans up partially-initialised state so a retry is safe.
+static bool try_camera_and_pipeline(void) {
+    // (Re)init camera with current settings.
+    if (!cam_capture_init(&g_settings)) {
+        ESP_LOGE(TAG, "Camera init failed at resolution %d", g_settings.resolution);
+        return false;
+    }
+
+    if (!setup_pipeline()) {
+        ESP_LOGE(TAG, "Pipeline setup failed at resolution %d", g_settings.resolution);
+        // Camera is initialised but pipeline alloc failed — tear down camera
+        // to free PSRAM for the next attempt.
+        cam_capture_release();
+        esp_camera_deinit();
+        return false;
+    }
+    return true;
+}
+
+// Attempt camera + pipeline with automatic resolution fallback.
+// Returns true if at least one resolution succeeds.
+static bool init_camera_with_fallback(void) {
+    // First attempt: user-configured resolution.
+    if (try_camera_and_pipeline()) return true;
+
+    // Walk down the resolution ladder trying progressively lower resolutions.
+    uint8_t current = g_settings.resolution;
+    while (true) {
+        int next = next_lower_resolution(current);
+        if (next < 0) break;  // nothing lower to try
+
+        current = (uint8_t)next;
+        g_settings.resolution = current;
+        ESP_LOGW(TAG, "Falling back to capture resolution %d", current);
+
+        if (try_camera_and_pipeline()) {
+            ESP_LOGW(TAG, "Pipeline OK after fallback to resolution %d — "
+                     "saving updated settings", current);
+            cam_settings_save(&g_settings);
+            return true;
+        }
+    }
+
+    ESP_LOGE(TAG, "All capture resolutions exhausted — cannot start camera");
+    return false;
+}
+static bool setup_pipeline(void) {
+    uint16_t cap_w, cap_h;
+    cam_capture_get_resolution(&cap_w, &cap_h);
+
+    // Determine output dimensions.  Priority:
+    //  1. Settings from webui (output_width/output_height > 0)
+    //  2. Pendant request (g_output_w/g_output_h > 0)
+    //  3. Fall back to capture resolution
+    uint16_t out_w, out_h;
+    if (g_settings.output_width > 0 && g_settings.output_height > 0) {
+        out_w = g_settings.output_width;
+        out_h = g_settings.output_height;
+    } else if (g_output_w > 0 && g_output_h > 0) {
+        out_w = g_output_w;
+        out_h = g_output_h;
+    } else {
+        out_w = cap_w;
+        out_h = cap_h;
+    }
+
+    ESP_LOGI(TAG, "Setting up pipeline: capture %ux%u → output %ux%u, %dx%d tiles",
+             cap_w, cap_h, out_w, out_h, g_settings.tiles_x, g_settings.tiles_y);
 
     ESP_LOGI(TAG, "Pipeline settings: swap_rb=%d swap_bytes=%d jpeg_q=%d",
              g_settings.swap_rb, g_settings.swap_bytes, g_settings.jpeg_quality);
 
-    // Homography LUT.
+    // Homography LUT — maps from output pixels directly to capture pixels.
     if (g_transform) cam_transform_destroy(g_transform);
-    g_transform = cam_transform_create(w, h, w, h, g_settings.homography);
+    g_transform = cam_transform_create(cap_w, cap_h, out_w, out_h, g_settings.homography);
     if (!g_transform) return false;
 
-    // Diff engine.
+    // Diff engine works on the output (warped) frame dimensions.
     if (g_diff) cam_diff_destroy(g_diff);
-    g_diff = cam_diff_create(w, h, g_settings.tiles_x, g_settings.tiles_y);
+    g_diff = cam_diff_create(out_w, out_h, g_settings.tiles_x, g_settings.tiles_y);
     if (!g_diff) return false;
 
-    // Warped frame buffer.
-    if (!allocate_buffers(w, h)) return false;
+    // Warped frame buffer (output dimensions).
+    if (!allocate_buffers(out_w, out_h)) return false;
 
     // Apply channel-swap preference (must happen after diff engine is created).
     cam_diff_set_swap_rb(g_diff, g_settings.swap_rb);
@@ -220,7 +346,7 @@ static bool setup_pipeline(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Process one frame: capture → transform → diff → send
+// Process one frame: capture → transform → [temporal denoise] → diff → send
 // ---------------------------------------------------------------------------
 static void process_frame(void) {
     uint8_t *raw_buf = NULL;
@@ -235,7 +361,7 @@ static void process_frame(void) {
         return;
     }
 
-    // 2. Apply perspective transform.
+    // 2. Apply perspective transform (capture → output dimensions).
     cam_transform_apply(g_transform,
                         (const uint16_t *)raw_buf,
                         g_warped_buf);
@@ -246,13 +372,47 @@ static void process_frame(void) {
     bool ae_resampled = cam_capture_tick_ae();
     cam_capture_release();
 
+    // 2b. Temporal denoise — EMA blend with previous warped frame.
+#if CAM_ENH_TEMPORAL_DENOISE
+    uint16_t out_w, out_h;
+    cam_transform_get_size(g_transform, &out_w, &out_h);
+    size_t px_count = (size_t)out_w * out_h;
+
+    if (g_temporal_prev && g_temporal_valid) {
+        // Blend: out[i] = (ALPHA * cur + INV * prev) >> 8
+        // Camera outputs big-endian RGB565; byte-swap for correct channel
+        // decomposition on the little-endian ESP32, then swap back.
+        for (size_t i = 0; i < px_count; i++) {
+            uint16_t cur  = __builtin_bswap16(g_warped_buf[i]);
+            uint16_t prev = __builtin_bswap16(g_temporal_prev[i]);
+            // Decompose RGB565
+            uint32_t cr = (cur >> 11) & 0x1F, cg = (cur >> 5) & 0x3F, cb = cur & 0x1F;
+            uint32_t pr = (prev >> 11) & 0x1F, pg = (prev >> 5) & 0x3F, pb = prev & 0x1F;
+            uint32_t r = (TEMPORAL_ALPHA * cr + TEMPORAL_INV * pr) >> 8;
+            uint32_t g = (TEMPORAL_ALPHA * cg + TEMPORAL_INV * pg) >> 8;
+            uint32_t b = (TEMPORAL_ALPHA * cb + TEMPORAL_INV * pb) >> 8;
+            g_warped_buf[i] = __builtin_bswap16((uint16_t)((r << 11) | (g << 5) | b));
+        }
+    }
+
+    // Store current frame as the new "previous".
+    if (g_temporal_prev) {
+        memcpy(g_temporal_prev, g_warped_buf, px_count * sizeof(uint16_t));
+        g_temporal_valid = true;
+    }
+#endif // CAM_ENH_TEMPORAL_DENOISE
+
     // 3. Diff against previous frame.
+    //    Use the output (warped) dimensions, NOT the capture dimensions.
+    uint16_t diff_w, diff_h;
+    cam_transform_get_size(g_transform, &diff_w, &diff_h);
+
     bool keyframe = g_force_keyframe || ae_resampled ||
                     (g_settings.keyframe_interval > 0 &&
                      (g_frame_id % g_settings.keyframe_interval) == 0);
     g_force_keyframe = false;
 
-    cam_diff_process(g_diff, g_warped_buf, fw, fh,
+    cam_diff_process(g_diff, g_warped_buf, diff_w, diff_h,
                      g_settings.jpeg_quality,
                      g_settings.diff_threshold,
                      keyframe);
@@ -353,20 +513,26 @@ void setup() {
     // --- Normal camera mode ---
     ESP_LOGI(TAG, ">>> NORMAL MODE <<<");
 
-    // Init camera hardware.
-    if (!cam_capture_init(&g_settings)) {
-        ESP_LOGE(TAG, "Camera init failed!");
+    // Init camera hardware with automatic resolution fallback.
+    // If the configured resolution exceeds available PSRAM, progressively
+    // lower resolutions are tried until one succeeds (or we run out).
+    bool camera_ok = init_camera_with_fallback();
+    if (!camera_ok) {
+        ESP_LOGE(TAG, "Camera + pipeline init failed at all resolutions!");
+        ESP_LOGW(TAG, "Device will continue without camera — "
+                 "use BOOT button or reflash to reconfigure.");
         cam_led_set(CAM_LED_ERROR);
-        while (true) { cam_led_tick(); delay(20); }
+        // Don't block here — fall through so ESP-NOW and BOOT button still work.
     }
 
     // Init ESP-NOW.
     if (!cam_espnow_init(g_settings.wifi_channel, on_espnow_recv)) {
         ESP_LOGE(TAG, "ESP-NOW init failed!");
         cam_led_set(CAM_LED_ERROR);
-        while (true) { cam_led_tick(); delay(20); }
+        // Continue anyway — the device stays alive for web UI reconfiguration.
+    } else {
+        g_espnow_ready = true;
     }
-    g_espnow_ready = true;
 
     // Re-register the saved hub MAC as an ESP-NOW peer so heartbeats and
     // frame replies can be sent immediately without waiting for the pendant
@@ -379,13 +545,7 @@ void setup() {
         ESP_LOGI(TAG, "Restored saved peer: " MACSTR, MAC2STR(g_settings.hub_mac));
     }
 
-    // Build pipeline (LUT + diff engine + buffers).
-    if (!setup_pipeline()) {
-        ESP_LOGE(TAG, "Pipeline setup failed!");
-        cam_led_set(CAM_LED_ERROR);
-        while (true) { cam_led_tick(); delay(20); }
-    }
-
+    // Pipeline was already built inside init_camera_with_fallback().
     // Lock AEC/AGC between frames; re-sample every 30 captures.
     // This prevents the sensor's per-frame gain/shutter adjustment from
     // producing a uniform brightness step that the diff mistakes for scene
@@ -461,8 +621,9 @@ void loop() {
         }
     }
 
-    // Poll-driven: only capture and send when the pendant requests a frame.
-    if (g_frame_requested) {
+    // Poll-driven: only capture and send when the pendant requests a frame
+    // and the camera pipeline is operational.
+    if (g_frame_requested && cam_capture_is_ready() && g_diff) {
         uint32_t now = millis();
         const uint32_t min_frame_interval = (CAM_TARGET_FPS > 0) ? (1000 / CAM_TARGET_FPS) : 0;
         if (min_frame_interval == 0 || now - g_last_frame_ms >= min_frame_interval) {

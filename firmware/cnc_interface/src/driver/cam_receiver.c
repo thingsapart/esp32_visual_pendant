@@ -202,6 +202,10 @@ struct cam_receiver {
     uint32_t            last_reconnect_ms;      ///< Monotonic ms of last reconnect beacon
     uint16_t            last_status_frame_id;   ///< frame_id from previous STATUS (reboot detection)
 
+    // --- Desired output resolution (sent in STREAM_START) ---
+    uint16_t            desired_width;
+    uint16_t            desired_height;
+
     // --- TJpgDec work buffer (heap-allocated, reused per tile) ---
     uint8_t            *tjpgd_work;       ///< Work pool for jd_prepare/jd_decomp
 
@@ -347,6 +351,8 @@ cam_receiver_t *cam_receiver_create(const cam_receiver_config_t *cfg)
     r->transport  = cfg->transport;
     r->max_width  = cfg->max_width  ? cfg->max_width  : 640;
     r->max_height = cfg->max_height ? cfg->max_height : 480;
+    r->desired_width  = cfg->desired_width;
+    r->desired_height = cfg->desired_height;
 
     // Allocate the frame buffer (max resolution)
     r->frame_buf_size = (size_t)r->max_width * r->max_height * 2;
@@ -430,6 +436,21 @@ cam_receiver_t *cam_receiver_create(const cam_receiver_config_t *cfg)
     r->stored_cfg.swap_rb        = 0;
     r->stored_cfg.swap_bytes     = 0;
     r->stored_cfg.invert_colors  = 0;
+    // Extended sensor controls (v2 fields).
+    r->stored_cfg.ae_level       = CAM_DEFAULT_AE_LEVEL;
+    r->stored_cfg.gainceiling    = CAM_DEFAULT_GAINCEILING;
+    r->stored_cfg.bpc            = CAM_DEFAULT_BPC;
+    r->stored_cfg.wpc            = CAM_DEFAULT_WPC;
+    r->stored_cfg.raw_gma        = CAM_DEFAULT_RAW_GMA;
+    r->stored_cfg.lenc           = CAM_DEFAULT_LENC;
+    r->stored_cfg.hmirror        = CAM_DEFAULT_HMIRROR;
+    r->stored_cfg.vflip          = CAM_DEFAULT_VFLIP;
+    r->stored_cfg.dcw            = CAM_DEFAULT_DCW;
+    r->stored_cfg.saturation     = CAM_DEFAULT_SATURATION;
+    r->stored_cfg.sharpness      = CAM_DEFAULT_SHARPNESS;
+    r->stored_cfg.denoise        = CAM_DEFAULT_DENOISE;
+    r->stored_cfg.aec2           = CAM_DEFAULT_AEC2;
+    r->stored_cfg.wb_mode        = CAM_DEFAULT_WB_MODE;
     r->has_stored_cfg    = true;
     r->last_cfg_send_ms  = 0;  // Force immediate send on first STATUS
     r->cfg_warmup_sends  = 0;
@@ -613,8 +634,11 @@ void cam_receiver_start_stream(cam_receiver_t *self)
     self->last_reconnect_ms  = 0;        // Allow immediate beacon if needed
 
     cam_stream_start_cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
     cmd.type  = CAM_CMD_STREAM_START;
     cmd.flags = 0x01;  // request keyframe
+    cmd.desired_width  = self->desired_width;
+    cmd.desired_height = self->desired_height;
 
     // Re-arm config warmup so the camera gets correct swap_bytes on reconnect.
     self->cfg_warmup_sends = 0;
@@ -625,7 +649,8 @@ void cam_receiver_start_stream(cam_receiver_t *self)
                            sizeof(self->stored_cfg));
     }
     cam_transport_send(self->transport, (const uint8_t *)&cmd, sizeof(cmd));
-    LOGI(TAG, "Stream started — sent STREAM_START");
+    LOGI(TAG, "Stream started — sent STREAM_START (desired %ux%u)",
+         cmd.desired_width, cmd.desired_height);
 }
 
 void cam_receiver_stop_stream(cam_receiver_t *self)
@@ -663,8 +688,11 @@ bool cam_receiver_tick(cam_receiver_t *self)
                                sizeof(self->stored_cfg));
         }
         cam_stream_start_cmd_t cmd;
+        memset(&cmd, 0, sizeof(cmd));
         cmd.type  = CAM_CMD_STREAM_START;
         cmd.flags = 0x01;
+        cmd.desired_width  = self->desired_width;
+        cmd.desired_height = self->desired_height;
         cam_transport_send(self->transport, (const uint8_t *)&cmd, sizeof(cmd));
         LOGD(TAG, "Reconnect beacon sent (last_status %u ms ago)",
              self->last_status_ms ? (now - self->last_status_ms) : 0u);
@@ -712,14 +740,36 @@ static void handle_frame_start(cam_receiver_t *r, const uint8_t *data, size_t le
 
     const cam_frame_start_msg_t *msg = (const cam_frame_start_msg_t *)data;
 
-    // Validate dimensions
-    if (msg->img_width > r->max_width || msg->img_height > r->max_height) {
-        LOGW(TAG, "Image %ux%u exceeds max %ux%u",
-             msg->img_width, msg->img_height, r->max_width, r->max_height);
-        CAM_DBG("FRAME_START id=%u: rejected — image %ux%u > max %ux%u",
-                msg->frame_id, msg->img_width, msg->img_height,
-                r->max_width, r->max_height);
+    // Validate dimensions — dynamically reallocate if frame is larger than
+    // current buffer, up to a hard limit (UXGA 1600×1200 = ~3.8 MB).
+    #define CAM_RECV_HARD_MAX_W  1600
+    #define CAM_RECV_HARD_MAX_H  1200
+    if (msg->img_width > CAM_RECV_HARD_MAX_W || msg->img_height > CAM_RECV_HARD_MAX_H) {
+        LOGW(TAG, "Image %ux%u exceeds hard max %ux%u",
+             msg->img_width, msg->img_height,
+             CAM_RECV_HARD_MAX_W, CAM_RECV_HARD_MAX_H);
         return;
+    }
+
+    size_t needed = (size_t)msg->img_width * msg->img_height * 2;
+    if (needed > r->frame_buf_size) {
+        LOGI(TAG, "Reallocating frame buffer: %ux%u (%u bytes) → %ux%u (%u bytes)",
+             r->max_width, r->max_height, (unsigned)r->frame_buf_size,
+             msg->img_width, msg->img_height, (unsigned)needed);
+        CAM_MUTEX_LOCK(r->display_mutex);
+        uint8_t *new_buf = CAM_ALLOC_LARGE(needed);
+        if (!new_buf) {
+            CAM_MUTEX_UNLOCK(r->display_mutex);
+            LOGE(TAG, "Failed to realloc frame_buf to %u bytes", (unsigned)needed);
+            return;
+        }
+        memset(new_buf, 0, needed);
+        CAM_FREE(r->frame_buf);
+        r->frame_buf      = new_buf;
+        r->frame_buf_size = needed;
+        r->max_width      = msg->img_width;
+        r->max_height     = msg->img_height;
+        CAM_MUTEX_UNLOCK(r->display_mutex);
     }
     uint16_t total_tiles = (uint16_t)msg->tiles_x * msg->tiles_y;
     if (total_tiles > CAM_RECEIVER_MAX_TILES) {
@@ -1142,8 +1192,11 @@ static void handle_status(cam_receiver_t *r, const uint8_t *data, size_t len)
             // the camera knows to begin streaming.
             if ((first_contact || camera_rebooted) && r->in_stream) {
                 cam_stream_start_cmd_t start_cmd;
+                memset(&start_cmd, 0, sizeof(start_cmd));
                 start_cmd.type  = CAM_CMD_STREAM_START;
                 start_cmd.flags = 0x01;
+                start_cmd.desired_width  = r->desired_width;
+                start_cmd.desired_height = r->desired_height;
                 cam_transport_send(r->transport,
                                    (const uint8_t *)&start_cmd,
                                    sizeof(start_cmd));

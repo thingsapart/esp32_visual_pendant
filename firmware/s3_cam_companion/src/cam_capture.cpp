@@ -38,6 +38,9 @@ static framesize_t res_to_framesize(cam_resolution_t res) {
     switch (res) {
         case CAM_RES_QVGA: return FRAMESIZE_QVGA;
         case CAM_RES_SVGA: return FRAMESIZE_SVGA;
+        case CAM_RES_XGA:  return FRAMESIZE_XGA;
+        case CAM_RES_SXGA: return FRAMESIZE_SXGA;
+        case CAM_RES_UXGA: return FRAMESIZE_UXGA;
         case CAM_RES_VGA:
         default:           return FRAMESIZE_VGA;
     }
@@ -86,7 +89,10 @@ bool cam_capture_init(const cam_settings_t *settings) {
     cfg.frame_size   = res_to_framesize((cam_resolution_t)settings->resolution);
     cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     cfg.grab_mode    = CAMERA_GRAB_LATEST;
-    cfg.fb_count     = 2;
+    // Use single framebuffer for resolutions above VGA to save PSRAM.
+    // At SXGA (1280×1024) each FB is ~2.5 MB — two would consume 5 MB of the
+    // 8 MB PSRAM budget, leaving too little for the diff/transform pipeline.
+    cfg.fb_count     = (cfg.frame_size > FRAMESIZE_VGA) ? 1 : 2;
     cfg.jpeg_quality = settings->jpeg_quality;
 
     ESP_LOGI(TAG,
@@ -153,6 +159,9 @@ void cam_capture_apply_sensor(const cam_settings_t *settings) {
 
     s->set_brightness(s, settings->brightness);
     s->set_contrast(s, settings->contrast);
+    s->set_saturation(s, settings->saturation);
+    s->set_sharpness(s, settings->sharpness);
+    s->set_denoise(s, settings->denoise);
     s->set_exposure_ctrl(s, settings->aec_enable ? 1 : 0);
     s->set_gain_ctrl(s, settings->agc_enable ? 1 : 0);
 
@@ -161,10 +170,26 @@ void cam_capture_apply_sensor(const cam_settings_t *settings) {
     if (!settings->agc_enable)
         s->set_agc_gain(s, settings->agc_gain);
 
-    s->set_aec2(s, 0);
-    s->set_ae_level(s, 0);
+    // Extended sensor controls
+    s->set_aec2(s, settings->aec2);             // Anti-banding / night mode
+    s->set_ae_level(s, settings->ae_level);      // AEC brightness bias
+    s->set_gainceiling(s, (gainceiling_t)settings->gainceiling);
+    s->set_bpc(s, settings->bpc);
+    s->set_wpc(s, settings->wpc);
+    s->set_raw_gma(s, settings->raw_gma);
+    s->set_lenc(s, settings->lenc);
+    s->set_hmirror(s, settings->hmirror);
+    s->set_vflip(s, settings->vflip);
+    s->set_dcw(s, settings->dcw);
     s->set_whitebal(s, 1);
     s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, settings->wb_mode);
+
+    ESP_LOGI(TAG, "Sensor: bri=%d con=%d sat=%d sharp=%d ae_lv=%d gc=%d aec2=%d wb=%d bpc=%d wpc=%d gma=%d lenc=%d",
+             settings->brightness, settings->contrast, settings->saturation,
+             settings->sharpness, settings->ae_level, settings->gainceiling,
+             settings->aec2, settings->wb_mode, settings->bpc, settings->wpc,
+             settings->raw_gma, settings->lenc);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,8 +363,11 @@ void cam_capture_release(void) {
 
 void cam_capture_get_resolution(uint16_t *w, uint16_t *h) {
     switch (s_current_size) {
-        case FRAMESIZE_QVGA: *w = 320; *h = 240; break;
-        case FRAMESIZE_SVGA: *w = 800; *h = 600; break;
-        default:             *w = 640; *h = 480; break;
+        case FRAMESIZE_QVGA: *w = 320;  *h = 240;  break;
+        case FRAMESIZE_SVGA: *w = 800;  *h = 600;  break;
+        case FRAMESIZE_XGA:  *w = 1024; *h = 768;  break;
+        case FRAMESIZE_SXGA: *w = 1280; *h = 1024; break;
+        case FRAMESIZE_UXGA: *w = 1600; *h = 1200; break;
+        default:             *w = 640;  *h = 480;  break;
     }
 }

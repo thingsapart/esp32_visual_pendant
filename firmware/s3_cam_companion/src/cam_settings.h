@@ -24,6 +24,10 @@ typedef struct {
     uint8_t  tiles_x;
     uint8_t  tiles_y;
 
+    // Output resolution after transform (0 = same as capture)
+    uint16_t output_width;
+    uint16_t output_height;
+
     // Diff engine
     uint8_t  diff_threshold;      // Per-pixel channel diff to count as changed
     uint8_t  keyframe_interval;   // Send full keyframe every N frames
@@ -35,6 +39,22 @@ typedef struct {
     bool     agc_enable;          // Auto-gain control
     int16_t  aec_value;           // Manual exposure (when AEC off)
     uint8_t  agc_gain;            // Manual gain ceiling (when AGC off)
+
+    // Extended sensor settings
+    int8_t   ae_level;            // AEC brightness bias (-3..+3)
+    uint8_t  gainceiling;         // Max analog gain: 0=2x .. 6=128x
+    uint8_t  bpc;                 // Black pixel correction
+    uint8_t  wpc;                 // White pixel correction
+    uint8_t  raw_gma;             // Gamma correction
+    uint8_t  lenc;                // Lens correction
+    uint8_t  hmirror;             // Horizontal mirror
+    uint8_t  vflip;               // Vertical flip
+    uint8_t  dcw;                 // Downsize enable
+    int8_t   saturation;          // Colour saturation (-2..+2)
+    int8_t   sharpness;           // Sharpness (-2..+2) — OV3660
+    int8_t   denoise;             // Denoise level (0..10), 0=auto
+    uint8_t  aec2;                // Anti-banding / AEC night mode
+    uint8_t  wb_mode;             // WB mode: 0=auto,1=sunny,2=cloudy,3=office,4=home
 
     // Homography (3×3 row-major, identity = no transform)
     float    homography[9];

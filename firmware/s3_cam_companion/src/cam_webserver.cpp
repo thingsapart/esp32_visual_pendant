@@ -277,13 +277,24 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
 <!-- Camera Settings -->
 <div class="card">
   <h2>Camera Settings</h2>
-  <label>Resolution
+  <label>Capture Resolution
     <select id="resolution">
       <option value="0">QVGA (320×240)</option>
       <option value="1" selected>VGA (640×480)</option>
       <option value="2">SVGA (800×600)</option>
+      <option value="3">XGA (1024×768)</option>
+      <option value="4">SXGA (1280×1024)</option>
+      <option value="5">UXGA (1600×1200)</option>
     </select>
   </label>
+  <div class="row">
+    <div>
+      <label>Output Width (0=same) <input type="number" id="out_w" min="0" max="1600" value="0"></label>
+    </div>
+    <div>
+      <label>Output Height (0=same) <input type="number" id="out_h" min="0" max="1200" value="0"></label>
+    </div>
+  </div>
   <div class="row">
     <div>
       <label>JPEG Quality (1–63) <input type="number" id="quality" min="1" max="63" value="12"></label>
@@ -329,6 +340,80 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
     </div>
     <div>
       <label>Gain Ceiling <input type="number" id="agc_gain" min="0" max="30" value="0"></label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>AE Level (-2..+2) <input type="number" id="ae_level" min="-2" max="2" value="0"></label>
+    </div>
+    <div>
+      <label>Gain Ceiling Mode (0-6)
+        <select id="gainceiling">
+          <option value="0">2x</option>
+          <option value="1">4x</option>
+          <option value="2" selected>8x</option>
+          <option value="3">16x</option>
+          <option value="4">32x</option>
+          <option value="5">64x</option>
+          <option value="6">128x</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Saturation (-2..+2) <input type="number" id="saturation" min="-2" max="2" value="0"></label>
+    </div>
+    <div>
+      <label>Sharpness (-2..+2) <input type="number" id="sharpness" min="-2" max="2" value="0"></label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Denoise (0..10) <input type="number" id="denoise" min="0" max="10" value="0"></label>
+    </div>
+    <div>
+      <label>White Balance Mode
+        <select id="wb_mode">
+          <option value="0" selected>Auto</option>
+          <option value="1">Sunny</option>
+          <option value="2">Cloudy</option>
+          <option value="3">Office</option>
+          <option value="4">Home</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label><input type="checkbox" id="aec2" checked> Anti-banding (AEC2)</label>
+    </div>
+    <div>
+      <label><input type="checkbox" id="bpc" checked> Black Pixel Correction</label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label><input type="checkbox" id="wpc" checked> White Pixel Correction</label>
+    </div>
+    <div>
+      <label><input type="checkbox" id="raw_gma" checked> Gamma Correction</label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label><input type="checkbox" id="lenc" checked> Lens Correction</label>
+    </div>
+    <div>
+      <label><input type="checkbox" id="dcw" checked> Downsize Enable</label>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label><input type="checkbox" id="hmirror"> Horizontal Mirror</label>
+    </div>
+    <div>
+      <label><input type="checkbox" id="vflip"> Vertical Flip</label>
     </div>
   </div>
 </div>
@@ -1051,6 +1136,8 @@ async function loadConfig() {
     const c = await r.json();
     updateViewButtons();
     document.getElementById('resolution').value = c.resolution;
+    document.getElementById('out_w').value = c.output_width || 0;
+    document.getElementById('out_h').value = c.output_height || 0;
     document.getElementById('quality').value = c.jpeg_quality;
     document.getElementById('diff_thr').value = c.diff_threshold;
     document.getElementById('tiles_x').value = c.tiles_x;
@@ -1063,6 +1150,21 @@ async function loadConfig() {
     document.getElementById('agc').checked = c.agc_enable;
     document.getElementById('aec_val').value = c.aec_value;
     document.getElementById('agc_gain').value = c.agc_gain;
+    // Extended sensor controls
+    if (typeof c.ae_level !== 'undefined')    document.getElementById('ae_level').value = c.ae_level;
+    if (typeof c.gainceiling !== 'undefined') document.getElementById('gainceiling').value = c.gainceiling;
+    if (typeof c.saturation !== 'undefined')  document.getElementById('saturation').value = c.saturation;
+    if (typeof c.sharpness !== 'undefined')   document.getElementById('sharpness').value = c.sharpness;
+    if (typeof c.denoise !== 'undefined')     document.getElementById('denoise').value = c.denoise;
+    if (typeof c.wb_mode !== 'undefined')     document.getElementById('wb_mode').value = c.wb_mode;
+    if (typeof c.aec2 !== 'undefined')        document.getElementById('aec2').checked = c.aec2;
+    if (typeof c.bpc !== 'undefined')         document.getElementById('bpc').checked = c.bpc;
+    if (typeof c.wpc !== 'undefined')         document.getElementById('wpc').checked = c.wpc;
+    if (typeof c.raw_gma !== 'undefined')     document.getElementById('raw_gma').checked = c.raw_gma;
+    if (typeof c.lenc !== 'undefined')        document.getElementById('lenc').checked = c.lenc;
+    if (typeof c.dcw !== 'undefined')         document.getElementById('dcw').checked = c.dcw;
+    if (typeof c.hmirror !== 'undefined')     document.getElementById('hmirror').checked = c.hmirror;
+    if (typeof c.vflip !== 'undefined')       document.getElementById('vflip').checked = c.vflip;
     // Project surface dims
     if (typeof c.surface_width !== 'undefined') document.getElementById('proj_w').value = c.surface_width;
     if (typeof c.surface_height !== 'undefined') document.getElementById('proj_h').value = c.surface_height;
@@ -1100,6 +1202,8 @@ async function saveConfig() {
   const srcCorners = corners.length === 4 ? getSourceCornersForSubmit() : null;
   const body = {
     resolution: parseInt(document.getElementById('resolution').value),
+    output_width: parseInt(document.getElementById('out_w').value),
+    output_height: parseInt(document.getElementById('out_h').value),
     jpeg_quality: parseInt(document.getElementById('quality').value),
     diff_threshold: parseInt(document.getElementById('diff_thr').value),
     tiles_x: parseInt(document.getElementById('tiles_x').value),
@@ -1112,6 +1216,20 @@ async function saveConfig() {
     agc_enable: document.getElementById('agc').checked,
     aec_value: parseInt(document.getElementById('aec_val').value),
     agc_gain: parseInt(document.getElementById('agc_gain').value),
+    ae_level: parseInt(document.getElementById('ae_level').value),
+    gainceiling: parseInt(document.getElementById('gainceiling').value),
+    saturation: parseInt(document.getElementById('saturation').value),
+    sharpness: parseInt(document.getElementById('sharpness').value),
+    denoise: parseInt(document.getElementById('denoise').value),
+    wb_mode: parseInt(document.getElementById('wb_mode').value),
+    aec2: document.getElementById('aec2').checked,
+    bpc: document.getElementById('bpc').checked,
+    wpc: document.getElementById('wpc').checked,
+    raw_gma: document.getElementById('raw_gma').checked,
+    lenc: document.getElementById('lenc').checked,
+    dcw: document.getElementById('dcw').checked,
+    hmirror: document.getElementById('hmirror').checked,
+    vflip: document.getElementById('vflip').checked,
     cal_src: srcCorners,
     surface_width: parseFloat(document.getElementById('proj_w').value),
     surface_height: parseFloat(document.getElementById('proj_h').value),
@@ -1195,10 +1313,12 @@ static void handle_get_config() {
     cam_settings_t *s = s_settings;
 
     // Build JSON manually (no ArduinoJson dependency).
-    char json[2048];
+    char json[3072];
     int n = snprintf(json, sizeof(json),
       "{"
       "\"resolution\":%d,"
+      "\"output_width\":%u,"
+      "\"output_height\":%u,"
       "\"jpeg_quality\":%d,"
       "\"diff_threshold\":%d,"
       "\"tiles_x\":%d,"
@@ -1211,17 +1331,44 @@ static void handle_get_config() {
       "\"agc_enable\":%s,"
       "\"aec_value\":%d,"
       "\"agc_gain\":%d,"
+      "\"ae_level\":%d,"
+      "\"gainceiling\":%u,"
+      "\"saturation\":%d,"
+      "\"sharpness\":%d,"
+      "\"denoise\":%d,"
+      "\"wb_mode\":%u,"
+      "\"aec2\":%s,"
+      "\"bpc\":%s,"
+      "\"wpc\":%s,"
+      "\"raw_gma\":%s,"
+      "\"lenc\":%s,"
+      "\"dcw\":%s,"
+      "\"hmirror\":%s,"
+      "\"vflip\":%s,"
       "\"calibrated\":%s,"
       "\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f],"
       "\"cal_src\":[[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f],[%.4f,%.4f]],"
+      "\"surface_width\":%.4f,\"surface_height\":%.4f,"
       "\"grid_calibrated\":%s,"
       "\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
-      s->resolution, s->jpeg_quality, s->diff_threshold,
+      s->resolution, (unsigned)s->output_width, (unsigned)s->output_height,
+      s->jpeg_quality, s->diff_threshold,
       s->tiles_x, s->tiles_y, s->keyframe_interval, s->send_interval_ms,
       s->brightness, s->contrast,
       s->aec_enable ? "true" : "false",
       s->agc_enable ? "true" : "false",
       s->aec_value, s->agc_gain,
+      s->ae_level, (unsigned)s->gainceiling,
+      s->saturation, s->sharpness, s->denoise,
+      (unsigned)s->wb_mode,
+      s->aec2       ? "true" : "false",
+      s->bpc        ? "true" : "false",
+      s->wpc        ? "true" : "false",
+      s->raw_gma    ? "true" : "false",
+      s->lenc       ? "true" : "false",
+      s->dcw        ? "true" : "false",
+      s->hmirror    ? "true" : "false",
+      s->vflip      ? "true" : "false",
       s->calibrated ? "true" : "false",
       s->homography[0], s->homography[1], s->homography[2],
       s->homography[3], s->homography[4], s->homography[5],
@@ -1230,9 +1377,9 @@ static void handle_get_config() {
       s->cal_src[1][0], s->cal_src[1][1],
       s->cal_src[2][0], s->cal_src[2][1],
       s->cal_src[3][0], s->cal_src[3][1],
+      s->surface_width, s->surface_height,
       s->grid_calibrated ? "true" : "false",
-      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny,
-      s->surface_width, s->surface_height);
+      s->grid_dx, s->grid_dy, s->grid_nx, s->grid_ny);
     (void)n;
     size_t off = strlen(json);
     for (uint16_t i = 0; i < s->grid_points_count && i < CAM_SETTINGS_MAX_GRID_POINTS; i++) {
@@ -1299,6 +1446,8 @@ static void handle_post_config() {
     cam_settings_t *s = s_settings;
 
     s->resolution        = (uint8_t)json_int(body, "resolution", s->resolution);
+    s->output_width      = (uint16_t)json_int(body, "output_width", s->output_width);
+    s->output_height     = (uint16_t)json_int(body, "output_height", s->output_height);
     s->jpeg_quality      = (uint8_t)json_int(body, "jpeg_quality", s->jpeg_quality);
     s->diff_threshold    = (uint8_t)json_int(body, "diff_threshold", s->diff_threshold);
     s->tiles_x           = (uint8_t)json_int(body, "tiles_x", s->tiles_x);
@@ -1311,6 +1460,21 @@ static void handle_post_config() {
     s->agc_enable        = json_bool(body, "agc_enable", s->agc_enable);
     s->aec_value         = (int16_t)json_int(body, "aec_value", s->aec_value);
     s->agc_gain          = (uint8_t)json_int(body, "agc_gain", s->agc_gain);
+    // Extended sensor controls
+    s->ae_level          = (int8_t)json_int(body, "ae_level", s->ae_level);
+    s->gainceiling       = (uint8_t)json_int(body, "gainceiling", s->gainceiling);
+    s->saturation        = (int8_t)json_int(body, "saturation", s->saturation);
+    s->sharpness         = (int8_t)json_int(body, "sharpness", s->sharpness);
+    s->denoise           = (int8_t)json_int(body, "denoise", s->denoise);
+    s->wb_mode           = (uint8_t)json_int(body, "wb_mode", s->wb_mode);
+    s->aec2              = json_bool(body, "aec2", s->aec2) ? 1 : 0;
+    s->bpc               = json_bool(body, "bpc", s->bpc) ? 1 : 0;
+    s->wpc               = json_bool(body, "wpc", s->wpc) ? 1 : 0;
+    s->raw_gma           = json_bool(body, "raw_gma", s->raw_gma) ? 1 : 0;
+    s->lenc              = json_bool(body, "lenc", s->lenc) ? 1 : 0;
+    s->dcw               = json_bool(body, "dcw", s->dcw) ? 1 : 0;
+    s->hmirror           = json_bool(body, "hmirror", s->hmirror) ? 1 : 0;
+    s->vflip             = json_bool(body, "vflip", s->vflip) ? 1 : 0;
     s->surface_width     = json_float(body, "surface_width", s->surface_width);
     s->surface_height    = json_float(body, "surface_height", s->surface_height);
 
@@ -1323,6 +1487,15 @@ static void handle_post_config() {
       cam_capture_get_resolution(&w, &h);
       cam_settings_compute_homography(s, w, h);
       s_preview_homography_valid = false;
+    } else if (!s->calibrated) {
+      // No corner calibration provided — mark as calibrated anyway with
+      // identity homography so the device boots into camera mode after reboot.
+      s->calibrated = true;
+      // Identity homography (already set by defaults, but be explicit)
+      s->homography[0] = 1.0f; s->homography[1] = 0.0f; s->homography[2] = 0.0f;
+      s->homography[3] = 0.0f; s->homography[4] = 1.0f; s->homography[5] = 0.0f;
+      s->homography[6] = 0.0f; s->homography[7] = 0.0f; s->homography[8] = 1.0f;
+      ESP_LOGI(TAG, "No calibration corners — using identity homography");
     }
 
     cam_settings_save(s);
