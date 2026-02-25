@@ -76,12 +76,17 @@ typedef struct {
     float    grid_dy;
     uint16_t grid_nx;
     uint16_t grid_ny;
-    // Grid insets in output/screen pixels — offset from edges of the image
-    // where the grid mapping begins/ends.  Allows framing/margin.
-    uint16_t grid_inset_left;
-    uint16_t grid_inset_top;
-    uint16_t grid_inset_right;
-    uint16_t grid_inset_bottom;
+    // Image margins in output pixels — how far from the output image edge the
+    // selected work-area corner points land after transformation.  The
+    // homography maps the calibration corners to
+    //   (margin_left, margin_top) → (w-1-margin_right, h-1-margin_bottom)
+    // so the output image captures margin_* extra pixels of raw image around
+    // the work area.  The grid spans this same inset region, aligning exactly
+    // with the corner points.
+    uint16_t image_margin_left;
+    uint16_t image_margin_top;
+    uint16_t image_margin_right;
+    uint16_t image_margin_bottom;
 #define CAM_SETTINGS_MAX_GRID_POINTS 256
     float    grid_points[CAM_SETTINGS_MAX_GRID_POINTS][2];
     uint16_t grid_points_count;
@@ -120,6 +125,10 @@ void cam_settings_save(const cam_settings_t *s);
 
 // Reset all settings to factory defaults (does NOT save — call save after).
 void cam_settings_defaults(cam_settings_t *s);
+
+// Erase the settings NVS namespace.  Call cam_settings_defaults() +
+// cam_settings_save() afterwards, then reboot.
+void cam_settings_erase(void);
 
 // Apply an incoming cam_config_cmd_t to the live settings (and persist).
 void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg);

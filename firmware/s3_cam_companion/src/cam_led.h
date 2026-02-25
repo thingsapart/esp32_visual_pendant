@@ -18,6 +18,7 @@ typedef enum {
     CAM_LED_SENDING,       // Purple flash — sending chunks
     CAM_LED_ERROR,         // Red blink — error
     CAM_LED_NO_PEER,       // Yellow blink — no pendant paired
+    CAM_LED_FACTORY_RESET, // Fast orange blink — factory reset imminent
 } cam_led_state_t;
 
 // Initialise the NeoPixel on CAM_LED_PIN.

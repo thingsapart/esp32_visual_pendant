@@ -225,19 +225,22 @@ bool remote_wrapper_add_peer(const uint8_t *mac_addr) {
   peer_info.encrypt = false;      // No encryption for simplicity
 
   // Add the peer
-  esp_err_t res = ESP_OK;
-  if ((res = esp_now_add_peer(&peer_info)) != ESP_OK) {
-    LOGE(TAG, "Failed to add peer %d", res);
-    return false;
+  esp_err_t res = esp_now_add_peer(&peer_info);
+  if (res == ESP_OK || res == ESP_ERR_ESPNOW_EXIST) {
+    // ESP_ERR_ESPNOW_EXIST is not an error: cam_transport_espnow may have
+    // already added the peer in its auto-discovery recv callback before this
+    // function is called.  Treat it as success.
+    return true;
   }
-  return true;
+  LOGE(TAG, "Failed to add peer %d", res);
+  return false;
 }
 
 bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
                                           uint8_t *stored_mac_addr) {
-  // Check if the stored MAC address is all zeros (uninitialized)
+  // Check if the stored MAC address is all zeros (uninitialized) or broadcast
   bool is_uninitialized = memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0 ||
-                          memcmp(stored_mac_addr, broadcast_mac, 6);
+                          memcmp(stored_mac_addr, broadcast_mac, 6) == 0;
   LOGI(TAG,
        "RECV hub MAC address " MACSTR " == new MAC " MACSTR " => is_unknown %d",
        MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr), is_uninitialized);
@@ -671,7 +674,7 @@ bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
                                           uint8_t *stored_mac_addr)
 {
     bool is_uninit = (memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0) ||
-                     (memcmp(stored_mac_addr, broadcast_mac, 6) != 0);
+                     (memcmp(stored_mac_addr, broadcast_mac, 6) == 0);
 
     LOGI(TAG,
          "RECV hub MAC " MACSTR " == new MAC " MACSTR " => is_unknown %d",

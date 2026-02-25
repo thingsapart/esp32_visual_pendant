@@ -98,10 +98,13 @@ static uint8_t  g_fps_x10        = 0;
 //   g_streaming = false → idle; next REQUEST_FRAME or STREAM_START restarts a session
 static bool     g_streaming        = false;
 static uint32_t g_last_request_ms  = 0;  // millis() of last received frame request
+static uint8_t  g_grid_send_count  = 0;  // # of grid packets sent this session; reset on STREAM_START
 
-// BOOT button press flag (set from ISR)
+// BOOT button press flag (set from ISR on FALLING edge)
 static volatile bool g_boot_pressed = false;
-static uint32_t g_last_boot_press_ms = 0;
+static uint32_t g_last_boot_press_ms = 0;  // millis() when debounced press started
+// Long-press factory reset tracking (polled in loop)
+static bool g_boot_hold_armed = false;  // true while a hold is being measured
 
 // ISR for BOOT button (minimal work)
 static void IRAM_ATTR boot_isr(void) {
@@ -126,6 +129,7 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         g_force_keyframe  = true;
         g_frame_requested = true;
         g_last_request_ms = millis();
+        g_grid_send_count = 0;  // New session — resend grid to pendant
 
         // Parse desired output resolution from extended STREAM_START (v2).
         if (len >= (int)sizeof(cam_stream_start_cmd_t)) {
@@ -182,6 +186,7 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         if (!g_streaming) {
             g_streaming      = true;
             g_force_keyframe = true;  // Re-establish with keyframe after idle gap
+            g_grid_send_count = 0;    // New implicit session — resend grid
             ESP_LOGI(TAG, "Implicit stream start from " MACSTR, MAC2STR(mac));
         }
         g_frame_requested = true;
@@ -403,9 +408,9 @@ static void process_frame(void) {
             // Decompose RGB565
             uint32_t cr = (cur >> 11) & 0x1F, cg = (cur >> 5) & 0x3F, cb = cur & 0x1F;
             uint32_t pr = (prev >> 11) & 0x1F, pg = (prev >> 5) & 0x3F, pb = prev & 0x1F;
-            uint32_t r = (TEMPORAL_ALPHA * cr + TEMPORAL_INV * pr) >> 8;
-            uint32_t g = (TEMPORAL_ALPHA * cg + TEMPORAL_INV * pg) >> 8;
-            uint32_t b = (TEMPORAL_ALPHA * cb + TEMPORAL_INV * pb) >> 8;
+            uint32_t r = (TEMPORAL_ALPHA * cr + TEMPORAL_INV * pr + 128u) >> 8;
+            uint32_t g = (TEMPORAL_ALPHA * cg + TEMPORAL_INV * pg + 128u) >> 8;
+            uint32_t b = (TEMPORAL_ALPHA * cb + TEMPORAL_INV * pb + 128u) >> 8;
             g_warped_buf[i] = __builtin_bswap16((uint16_t)((r << 11) | (g << 5) | b));
         }
     }
@@ -456,9 +461,17 @@ static void process_frame(void) {
                      g_settings.swap_rb,
                      g_settings.swap_bytes,
                      g_settings.jpeg_quality);
-            cam_espnow_send_frame(dst, g_frame_id, result,
-                                  g_settings.send_interval_ms);
-            g_frames_sent++;
+            bool sent_ok = cam_espnow_send_frame(dst, g_frame_id, result,
+                                                 g_settings.send_interval_ms);
+            if (!sent_ok) {
+                // TX queue was saturated (peer likely restarted mid-frame).
+                // Force a full keyframe once the peer reconnects so the
+                // pendant gets a clean baseline rather than a partial diff.
+                g_force_keyframe = true;
+                ESP_LOGW(TAG, "Frame aborted — will retry as keyframe");
+            } else {
+                g_frames_sent++;
+            }
         } else {
             // No tiles changed — send a lightweight empty FRAME_START+FRAME_END
             // (no tile chunks) so the pendant's backpressure is released.
@@ -586,38 +599,79 @@ void setup() {
 // Arduino loop()
 // ---------------------------------------------------------------------------
 void loop() {
-    // Handle BOOT button toggle (debounced)
-    if (g_boot_pressed) {
+    // ---------------------------------------------------------------------------
+    // BOOT button handler
+    //
+    // Short press  (<2 s)  : toggle AP / camera mode (existing behaviour)
+    // Hold 2–5 s          : LED switches to fast orange blink as a warning
+    // Hold ≥5 s           : factory reset — erase NVS, restore defaults, reboot
+    // Release 2–5 s       : cancelled — LED restored, no action taken
+    // ---------------------------------------------------------------------------
+
+    // Arm the hold tracker on the first debounced FALLING edge.
+    if (g_boot_pressed && !g_boot_hold_armed) {
         g_boot_pressed = false;
         uint32_t now = millis();
-        if (now - g_last_boot_press_ms > 300) {
-            g_last_boot_press_ms = now;
-            if (cam_webserver_is_running()) {
-                ESP_LOGI(TAG, "BOOT pressed: stopping AP/web UI");
-                cam_webserver_stop();
-                cam_led_set(CAM_LED_IDLE);
+        if (now - g_last_boot_press_ms > 300) {  // 300 ms debounce
+            g_last_boot_press_ms = now;           // hold start time
+            g_boot_hold_armed = true;
+        }
+    } else if (g_boot_pressed) {
+        g_boot_pressed = false;  // discard edge while hold already tracked
+    }
 
-                // AP mode switches Wi-Fi state; bring ESP-NOW back up.
-                if (!g_espnow_ready) {
-                    if (cam_espnow_init(g_settings.wifi_channel, on_espnow_recv)) {
-                        g_espnow_ready = true;
-                        ESP_LOGI(TAG, "ESP-NOW reinitialized after AP mode");
-                    } else {
-                        g_espnow_ready = false;
-                        ESP_LOGW(TAG, "ESP-NOW reinit failed after AP mode; status tx disabled");
+    if (g_boot_hold_armed) {
+        uint32_t now      = millis();
+        uint32_t held_ms  = now - g_last_boot_press_ms;
+        bool     released = (digitalRead(CAM_BOOT_PIN) == HIGH);
+
+        if (released) {
+            g_boot_hold_armed = false;
+
+            if (held_ms < 2000) {
+                // ---- Short press: toggle AP/camera mode ----
+                if (cam_webserver_is_running()) {
+                    ESP_LOGI(TAG, "BOOT short press: stopping AP/web UI");
+                    cam_webserver_stop();
+                    cam_led_set(CAM_LED_IDLE);
+                    if (!g_espnow_ready) {
+                        if (cam_espnow_init(g_settings.wifi_channel, on_espnow_recv)) {
+                            g_espnow_ready = true;
+                            ESP_LOGI(TAG, "ESP-NOW reinitialized after AP mode");
+                        } else {
+                            g_espnow_ready = false;
+                            ESP_LOGW(TAG, "ESP-NOW reinit failed after AP mode; status tx disabled");
+                        }
                     }
+                } else {
+                    ESP_LOGI(TAG, "BOOT short press: starting AP/web UI");
+                    if (g_espnow_ready) {
+                        cam_espnow_deinit();
+                        g_espnow_ready = false;
+                    }
+                    cam_led_set(CAM_LED_CONFIG_MODE);
+                    cam_webserver_start(&g_settings);
                 }
             } else {
-                ESP_LOGI(TAG, "BOOT pressed: starting AP/web UI");
-
-                // Suspend ESP-NOW while AP config UI is active.
-                if (g_espnow_ready) {
-                    cam_espnow_deinit();
-                    g_espnow_ready = false;
-                }
-
-                cam_led_set(CAM_LED_CONFIG_MODE);
-                cam_webserver_start(&g_settings);
+                // ---- Hold 2–5 s released early: cancelled ----
+                ESP_LOGI(TAG, "BOOT hold cancelled after %lums — no action",
+                         (unsigned long)held_ms);
+                cam_led_set(cam_webserver_is_running() ? CAM_LED_CONFIG_MODE
+                                                       : CAM_LED_NO_PEER);
+            }
+        } else {
+            // Still held — update LED and check for factory reset threshold.
+            if (held_ms >= 2000) {
+                cam_led_set(CAM_LED_FACTORY_RESET);  // fast orange blink warning
+            }
+            if (held_ms >= 5000) {
+                // ---- Factory reset ----
+                ESP_LOGW(TAG, "=== FACTORY RESET: erasing NVS settings ===");
+                cam_settings_erase();
+                cam_settings_defaults(&g_settings);
+                cam_settings_save(&g_settings);
+                delay(800);  // let LED blink a few more times before rebooting
+                ESP.restart();
             }
         }
     }
@@ -695,8 +749,9 @@ void loop() {
             cam_espnow_send_status(has_peer ? g_settings.hub_mac : NULL,
                                    has_peer ? CAM_STATUS_IDLE : CAM_STATUS_IDLE,
                                    g_frame_id, g_fps_x10);
-            // Periodically broadcast grid mapping if available
-            if (g_settings.grid_calibrated) {
+            // Send grid mapping at session start (up to 3 times to handle
+            // packet loss), then stop until the next STREAM_START.
+            if (g_settings.grid_calibrated && g_grid_send_count < 3) {
                 uint16_t pts = g_settings.grid_points_count;
                 if (pts > 0 && pts <= CAM_SETTINGS_MAX_GRID_POINTS) {
                     int8_t offsets[CAM_SETTINGS_MAX_GRID_POINTS * 2];
@@ -707,13 +762,13 @@ void loop() {
                     if (img_w == 0 || img_h == 0 || g_settings.surface_width <= 0.0f || g_settings.surface_height <= 0.0f) {
                         for (uint16_t i = 0; i < pts; i++) { offsets[i*2] = 0; offsets[i*2+1] = 0; }
                     } else {
-                        // Active area after insets
-                        uint16_t il = g_settings.grid_inset_left;
-                        uint16_t it = g_settings.grid_inset_top;
-                        uint16_t ir = g_settings.grid_inset_right;
-                        uint16_t ib = g_settings.grid_inset_bottom;
-                        float active_w = (float)(img_w - il - ir);
-                        float active_h = (float)(img_h - it - ib);
+                        // Active area after image margins
+                        uint16_t il = g_settings.image_margin_left;
+                        uint16_t it = g_settings.image_margin_top;
+                        uint16_t ir = g_settings.image_margin_right;
+                        uint16_t ib = g_settings.image_margin_bottom;
+                        float active_w = (float)((int)img_w - (int)il - (int)ir);
+                        float active_h = (float)((int)img_h - (int)it - (int)ib);
                         if (active_w < 1.0f) active_w = 1.0f;
                         if (active_h < 1.0f) active_h = 1.0f;
 
@@ -723,10 +778,11 @@ void loop() {
                             // Ideal pixel position within the inset area
                             float frac_x = (nx > 1) ? ((float)ixx / (float)(nx - 1)) : 0.0f;
                             float frac_y = (ny > 1) ? ((float)iyy / (float)(ny - 1)) : 0.0f;
-                            float ideal_px = (float)il + frac_x * active_w;
-                            float ideal_py = (float)it + frac_y * active_h;
-                            float actual_px = g_settings.grid_points[i][0] * (float)img_w;
-                            float actual_py = g_settings.grid_points[i][1] * (float)img_h;
+                            float ideal_px = (float)il + frac_x * (active_w - 1.0f);
+                            float ideal_py = (float)it + frac_y * (active_h - 1.0f);
+                            // grid_points are output-normalised (0..1 over [0..img_w-1]).
+                            float actual_px = g_settings.grid_points[i][0] * (float)(img_w - 1);
+                            float actual_py = g_settings.grid_points[i][1] * (float)(img_h - 1);
                             int dx_px = (int)lroundf(actual_px - ideal_px);
                             int dy_px = (int)lroundf(actual_py - ideal_py);
                             if (dx_px < -127) dx_px = -127; if (dx_px > 127) dx_px = 127;
@@ -741,9 +797,10 @@ void loop() {
                                                  g_settings.grid_dx, g_settings.grid_dy,
                                                  g_settings.grid_nx, g_settings.grid_ny,
                                                  img_w, img_h,
-                                                 g_settings.grid_inset_left, g_settings.grid_inset_top,
-                                                 g_settings.grid_inset_right, g_settings.grid_inset_bottom,
+                                                 g_settings.image_margin_left, g_settings.image_margin_top,
+                                                 g_settings.image_margin_right, g_settings.image_margin_bottom,
                                                  offsets, pts);
+                    g_grid_send_count++;
                 }
             }
         }

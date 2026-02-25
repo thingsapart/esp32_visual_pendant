@@ -167,6 +167,7 @@ bool cam_espnow_send_frame(const uint8_t *peer_mac,
                            uint8_t send_interval_ms) {
     const uint8_t *dst = peer_mac ? peer_mac : BROADCAST_MAC;
     uint8_t bitmap_bytes = cam_tile_bitmap_bytes(diff->tiles_x, diff->tiles_y);
+    int consec_fails = 0;  // consecutive send failures — used to detect TX saturation
 
     // --- 1. FRAME_START ---
     uint8_t start_buf[CAM_ESPNOW_MAX_DATA];
@@ -225,7 +226,28 @@ bool cam_espnow_send_frame(const uint8_t *peer_mac,
             size_t msg_len = CAM_TILE_CHUNK_HEADER_SIZE + payload;
             if (!cam_espnow_send(dst, chunk_buf, msg_len)) {
                 ESP_LOGW(TAG, "Failed to send tile %d chunk %d", ti, chunk_idx);
-                // Continue — don't abort entire frame for one dropped chunk.
+                consec_fails++;
+                // After too many consecutive failures the TX queue is saturated
+                // (peer likely restarted).  Abort the frame, refresh the peer
+                // entry so the queue drains, and signal failure to the caller.
+                if (consec_fails >= 5) {
+                    ESP_LOGE(TAG, "TX queue saturated after %d failures — "
+                             "aborting frame, refreshing peer", consec_fails);
+                    static const uint8_t zero_mac[6] = {0};
+                    if (memcmp(dst, zero_mac, 6) != 0) {
+                        // Delete & re-add to flush any stale ESP-NOW peer state.
+                        esp_now_del_peer(dst);
+                        esp_now_peer_info_t peer = {};
+                        memcpy(peer.peer_addr, dst, 6);
+                        peer.channel = 0;
+                        peer.ifidx   = WIFI_IF_STA;
+                        peer.encrypt = false;
+                        esp_now_add_peer(&peer);
+                    }
+                    return false;
+                }
+            } else {
+                consec_fails = 0;
             }
 
             offset    += payload;

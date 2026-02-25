@@ -60,10 +60,10 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->grid_maxx = s->grid_maxy = 0.0f;
     s->grid_dx = s->grid_dy = 0.0f;
     s->grid_nx = s->grid_ny = 0;
-    s->grid_inset_left = 0;
-    s->grid_inset_top = 0;
-    s->grid_inset_right = 0;
-    s->grid_inset_bottom = 0;
+    s->image_margin_left = 0;
+    s->image_margin_top = 0;
+    s->image_margin_right = 0;
+    s->image_margin_bottom = 0;
     s->grid_points_count = 0;
     for (int i = 0; i < CAM_SETTINGS_MAX_GRID_POINTS; i++) { s->grid_points[i][0] = 0.0f; s->grid_points[i][1] = 0.0f; }
     s->surface_width = 100.0f;
@@ -96,7 +96,9 @@ void cam_settings_defaults(cam_settings_t *s) {
 // reorder, type change).  A version mismatch forces a full reset to defaults
 // so stale NVS blobs don't corrupt field values.
 // v5: forces re-load of defaults so CAM_DEFAULT_JPEG_QUALITY (now 20) takes effect.
-#define NVS_VERSION 5
+// v6: renamed grid_inset_* -> image_margin_*; homography now maps corners to the
+//     margin-inset positions so extra image area appears around the work area.
+#define NVS_VERSION 6
 
 void cam_settings_init(cam_settings_t *s) {
     cam_settings_defaults(s);
@@ -137,6 +139,13 @@ void cam_settings_save(const cam_settings_t *s) {
     prefs.putBytes(NVS_KEY, s, sizeof(*s));
     prefs.end();
     ESP_LOGI(TAG, "Settings saved to NVS");
+}
+
+void cam_settings_erase(void) {
+    prefs.begin(NVS_NS, false);
+    prefs.clear();
+    prefs.end();
+    ESP_LOGW(TAG, "NVS settings namespace erased");
 }
 
 // ---------------------------------------------------------------------------
@@ -227,9 +236,15 @@ void cam_settings_compute_homography(cam_settings_t *s,
         sy[i] = s->cal_src[i][1] * max_y;
     }
 
-    // Destination points (output rectangle corners).
-    const float dx[4] = {0.0f, max_x, max_x, 0.0f};
-    const float dy[4] = {0.0f, 0.0f, max_y, max_y};
+    // Destination corners — the selected work-area corners land at the
+    // margin-inset positions so that image_margin_* pixels of extra image
+    // appear around the work area in the output.
+    const float ml = (float)s->image_margin_left;
+    const float mt = (float)s->image_margin_top;
+    const float mr = (float)s->image_margin_right;
+    const float mb = (float)s->image_margin_bottom;
+    const float dx[4] = {ml, max_x - mr, max_x - mr, ml};        // TL, TR, BR, BL
+    const float dy[4] = {mt, mt, max_y - mb, max_y - mb};
 
     // Solve A * h = b for h=[h0..h7], with h8 fixed to 1.
     // Equations:

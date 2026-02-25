@@ -105,5 +105,13 @@ void cam_led_tick(void) {
         set_rgb(on ? MAX_BRIGHT : 0, on ? MAX_BRIGHT / 2 : 0, 0);
         break;
     }
+
+    case CAM_LED_FACTORY_RESET: {
+        // Fast orange blink ~5 Hz (4 ticks on / 4 off at 50 ms per tick).
+        // Visually distinct from all other states — a clear hold warning.
+        bool on = (s_counter % 8) < 4;
+        set_rgb(on ? MAX_BRIGHT : 0, on ? MAX_BRIGHT / 4 : 0, 0);
+        break;
+    }
     }
 }

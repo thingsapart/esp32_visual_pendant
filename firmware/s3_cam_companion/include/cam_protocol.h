@@ -287,19 +287,19 @@ typedef struct __attribute__((packed)) {
 #if CAM_ENHANCED_PROCESSING
 // Sub-feature toggles:  set to 0 individually to disable a specific feature.
 #ifndef CAM_ENH_BILINEAR
-#define CAM_ENH_BILINEAR             1  // Fixed-point bilinear interp in homography LUT
+#define CAM_ENH_BILINEAR             0  // Fixed-point bilinear interp in homography LUT
 #endif
 #ifndef CAM_ENH_AREA_AVERAGE
-#define CAM_ENH_AREA_AVERAGE         1  // Adaptive area averaging for minification
+#define CAM_ENH_AREA_AVERAGE         0  // Adaptive area averaging for minification
 #endif
 #ifndef CAM_ENH_TEMPORAL_DENOISE
-#define CAM_ENH_TEMPORAL_DENOISE     1  // 2-frame EMA temporal noise reduction
+#define CAM_ENH_TEMPORAL_DENOISE     0  // 2-frame EMA temporal noise reduction
 #endif
 #ifndef CAM_ENH_RGB888_CAPTURE
 #define CAM_ENH_RGB888_CAPTURE       0  // Capture in RGB888 (more memory, less quant)
 #endif
 #ifndef CAM_ENH_ANTI_BANDING
-#define CAM_ENH_ANTI_BANDING         1  // Sensor anti-flicker + AE-level bias
+#define CAM_ENH_ANTI_BANDING         0  // Sensor anti-flicker + AE-level bias
 #endif
 #else
 #define CAM_ENH_BILINEAR             0
@@ -316,7 +316,7 @@ typedef struct __attribute__((packed)) {
 // companion will throttle outgoing frames so that it does not send more
 // frequently than this value. Set to 0 to disable throttling.
 #ifndef CAM_TARGET_FPS
-#define CAM_TARGET_FPS 3
+#define CAM_TARGET_FPS 6
 #endif
 // ---------------------------------------------------------------------------
 // Tile geometry helpers

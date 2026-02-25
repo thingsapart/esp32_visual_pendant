@@ -496,26 +496,15 @@ static void draw_wiz_marker(lv_layer_t *layer, int32_t cx, int32_t cy,
     lv_draw_label(layer, &txt, &tarea);
 }
 
-/// draw_calib_grid: REMOVED from the overlay draw callback.
+/// draw_calib_grid: not called from overlay_draw_cb.
 ///
-/// Every lv_draw_line call allocates one lv_draw_task_t block (lv_malloc_zeroed)
-/// from DRAM.  overlay_draw_cb fires deep in lv_refr's child-render recursion
-/// after dozens of UI-widget draw tasks have already been added; the DRAM heap
-/// is too tight for even two extra tasks.  LV_USE_ASSERT_MALLOC=0 silences the
-/// NULL check, so the fault becomes a LoadProhibited crash inside the IRAM
-/// lv_draw_line (lv_draw_add_task inlined → ??:? / lv_draw_line.c:121).
-///
-/// The px_points array is still used exclusively for pixel↔physical coordinate
+/// This function draws per-point calibration offsets as distorted grid lines.
+/// It is more expensive than draw_axis_grid and currently unused for rendering.
+/// The px_points array is used exclusively for pixel↔physical coordinate
 /// translation in image_to_screen_coords — never for drawing.
 ///
-/// If a visual calib-grid indicator is needed in future, render it once into
-/// an lv_canvas that is only invalidated when the grid changes, so zero
-/// draw-task pressure is added during normal frame rendering.
-///
-/// Leaving the function body here (disabled) so the coordinate-translation
-/// path and the idealized-line logic can be referenced if re-enabled.
-///
-/// NOTE: do NOT call this from overlay_draw_cb.
+/// If a visual calib-grid indicator is needed in future, this can be called
+/// directly from overlay_draw_cb now that LV_MEM_SIZE has been raised.
 __attribute__((unused))
 static void draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
@@ -645,12 +634,13 @@ static float cam_pos_choose_grid_step(float range_x, float range_y)
     return best_step;
 }
 
-/// Draw a millimetre-spaced grid over the camera image using the physical
-/// bounds from the camera calibration grid and the step derived from the
-/// machine axis limits.
+/// Draw a millimetre-spaced idealized grid over the camera image using the
+/// physical bounds from the camera calibration grid.  Step size is chosen
+/// to give roughly 5–10 divisions across the shorter physical dimension of
+/// the camera's field of view.
 static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
-    if (!priv->machine || !priv->receiver) return;
+    if (!priv->receiver) return;
 
     // Snapshot the grid scalar bounds under the grid lock so we can't race
     // with a concurrent handle_grid_map that may update them.
@@ -668,17 +658,15 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
     lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
     if (img_w == 0 || img_h == 0) return;
 
-    // Machine axis ranges drive step-size selection
-    float range_x = priv->machine->axis_max[0] - priv->machine->axis_min[0];
-    float range_y = priv->machine->axis_max[1] - priv->machine->axis_min[1];
-    if (range_x <= 0.0f && range_y <= 0.0f) return;  // Limits not yet received
-
-    float step = cam_pos_choose_grid_step(range_x, range_y);
-
     // Camera physical view bounds (from snapshot above)
     float phys_w = cam_max_x - cam_min_x;
     float phys_h = cam_max_y - cam_min_y;
     if (phys_w <= 0.0f || phys_h <= 0.0f) return;
+
+    // Step is chosen from the camera's physical extent (not the full machine
+    // travel).  Using machine range caused the step to exceed the camera FOV
+    // entirely (e.g. 50 mm step for a 25 mm FOV), leaving no visible lines.
+    float step = cam_pos_choose_grid_step(phys_w, phys_h);
 
     // Screen area occupied by the image object (absolute coordinates)
     lv_obj_t *img_obj = lv_cam_stream_get_image_obj(priv->stream);
@@ -694,12 +682,8 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
     line_dsc.color = lv_color_hex(GRID_LINE_COLOR);
     line_dsc.width = 1;
     line_dsc.opa   = GRID_LINE_OPA;
-    // dash_width/dash_gap intentionally NOT set (remain 0 from lv_draw_line_dsc_init).
-    // The LVGL SW renderer allocates lv_malloc(blend_area_w) per draw-task at
-    // render time for dashed lines.  LV_USE_ASSERT_MALLOC=0 silences the NULL
-    // check, so an OOM during dispatch_cb crashes exactly as seen in backtrace
-    // (lv_draw.c:284 → lv_refr.c:945).  The non-dashed path writes pixels
-    // directly into the draw buffer with zero heap allocation.
+    // dash_width/dash_gap left at 0 (solid lines) — dashed lines allocate a
+    // temporary blend buffer per draw-task at render time; solid lines do not.
 
     // Vertical grid lines — constant physical-X values
     float x_first = ceilf(cam_min_x / step) * step;
@@ -808,10 +792,15 @@ static void _probe_done_async(void *user_data)
     lv_cam_pos_priv_t *priv = get_priv(ac->root);
     if (!priv) { free(ac); return; }
 
-    // Operation done — reset sidebar to idle
+    // Operation done — clear all wizard state and return to idle
+    priv->wiz_state    = WIZ_IDLE;
+    priv->wiz_op       = PROBE_OP_NONE;
+    priv->wiz_pt1_set  = false;  memset(&priv->wiz_pt1,  0, sizeof(priv->wiz_pt1));
+    priv->wiz_pt2_set  = false;  memset(&priv->wiz_pt2,  0, sizeof(priv->wiz_pt2));
+    priv->wiz_zref_set = false;  memset(&priv->wiz_zref, 0, sizeof(priv->wiz_zref));
+    priv->wiz_step_idx = 0;
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
-    priv->wiz_state = WIZ_IDLE;
     lv_obj_invalidate(priv->overlay);
 
     // Build result / error text
@@ -1014,10 +1003,10 @@ static const int k_op_step_counts[] = {
 #define WIZ_OP_COUNT 5
 static const wiz_op_def_t k_op_defs[WIZ_OP_COUNT] = {
     { PROBE_OP_MOVE_TO,      LV_SYMBOL_GPS,     "Move to", WIZ_BTN_MOVE_COLOR },
-    { PROBE_OP_PROBE_RECT,   LV_SYMBOL_EDIT,    "Block",   WIZ_BTN_RECT_COLOR },
-    { PROBE_OP_PROBE_POCKET, LV_SYMBOL_EDIT,    "Pocket",  WIZ_BTN_RECT_COLOR },
-    { PROBE_OP_PROBE_BOSS,   LV_SYMBOL_REFRESH, "Boss",    WIZ_BTN_CIRC_COLOR },
-    { PROBE_OP_PROBE_BORE,   LV_SYMBOL_REFRESH, "Bore",    WIZ_BTN_CIRC_COLOR },
+    { PROBE_OP_PROBE_RECT,   LV_SYMBOL_LOOP,    "Block",   WIZ_BTN_RECT_COLOR },
+    { PROBE_OP_PROBE_POCKET, LV_SYMBOL_LOOP,    "Pocket",  WIZ_BTN_RECT_COLOR },
+    { PROBE_OP_PROBE_BOSS,   LV_SYMBOL_POWER,   "Boss",    WIZ_BTN_CIRC_COLOR },
+    { PROBE_OP_PROBE_BORE,   LV_SYMBOL_POWER,   "Bore",    WIZ_BTN_CIRC_COLOR },
 };
 
 // ---------------------------------------------------------------------------
@@ -1025,6 +1014,19 @@ static const wiz_op_def_t k_op_defs[WIZ_OP_COUNT] = {
 // ---------------------------------------------------------------------------
 
 /// Style a button produced by lv_list_add_button() for the sidebar.
+/// Animation callback for the active wizard step button: blinks between
+/// green+white (v < 128) and yellow+black (v >= 128).
+static void _step_blink_cb(void *obj, int32_t v)
+{
+    lv_obj_t *btn = (lv_obj_t *)obj;
+    lv_color_t bg  = (v < 128) ? lv_color_hex(WIZ_STEP_CURR_COLOR) : lv_color_hex(0xEAB308);
+    lv_color_t txt = (v < 128) ? lv_color_white()                   : lv_color_black();
+    lv_obj_set_style_bg_color(btn, bg, 0);
+    lv_obj_set_style_text_color(btn, txt, 0);
+    for (uint32_t ci = 0; ci < lv_obj_get_child_count(btn); ci++)
+        lv_obj_set_style_text_color(lv_obj_get_child(btn, ci), txt, 0);
+}
+
 static void _lst_style(lv_obj_t *btn, uint32_t bg_hex, bool enabled)
 {
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg_hex), 0);
@@ -1071,14 +1073,7 @@ static void sidebar_update_coords(lv_cam_pos_priv_t *priv)
         lv_obj_set_style_text_color(lbl, lv_color_hex(WIZ_XY_COLOR), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
     }
-    if (!any) {
-        lv_obj_t *hint = lv_label_create(priv->coord_panel);
-        lv_label_set_text(hint, "Tap camera to begin");
-        lv_obj_set_style_text_color(hint, lv_color_hex(WIZ_DIV_COLOR), 0);
-        lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_center(hint);
-    }
+    (void)any;  // hint is now shown in step_panel (below op buttons), not here
 }
 
 /// Op-selector button: activate wizard with chosen operation.
@@ -1087,12 +1082,25 @@ static void _wiz_op_btn_cb(lv_event_t *e)
     sidebar_btn_ctx_t *ctx  = (sidebar_btn_ctx_t *)lv_event_get_user_data(e);
     if (!ctx || !ctx->priv) return;
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ctx->priv;
-    if (priv->wiz_state != WIZ_OP_SELECT) return;
+    if (priv->wiz_state != WIZ_OP_SELECT && priv->wiz_state != WIZ_IDLE) return;
 
-    priv->wiz_op       = ctx->op;
-    priv->wiz_step_idx = 1;  // step 0 (pt1) already done
-    // If only 2 steps (pt1 + run), we jump straight to READY
-    priv->wiz_state = (k_op_step_counts[ctx->op] > 2) ? WIZ_COLLECTING : WIZ_READY;
+    priv->wiz_op = ctx->op;
+
+    // Always clear pt2 and zref — they belong to the previous op (if any).
+    priv->wiz_pt2_set  = false;  memset(&priv->wiz_pt2,  0, sizeof(priv->wiz_pt2));
+    priv->wiz_zref_set = false;  memset(&priv->wiz_zref, 0, sizeof(priv->wiz_zref));
+
+    if (priv->wiz_state == WIZ_OP_SELECT) {
+        // pt1 already placed before mode was chosen — count it as step 0 done
+        // and jump straight to step 1 (pt2 / zref / run, depending on op).
+        priv->wiz_step_idx = 1;
+        priv->wiz_state    = (k_op_step_counts[ctx->op] > 2) ? WIZ_COLLECTING : WIZ_READY;
+    } else {
+        // No point placed yet — start collection from step 0.
+        priv->wiz_pt1_set  = false;  memset(&priv->wiz_pt1, 0, sizeof(priv->wiz_pt1));
+        priv->wiz_step_idx = 0;
+        priv->wiz_state    = WIZ_COLLECTING;
+    }
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
     lv_obj_invalidate(priv->overlay);
@@ -1175,11 +1183,6 @@ static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
 
     // --- Op selector (IDLE or OP_SELECT) -----------------------------------
     if (priv->wiz_state == WIZ_IDLE || priv->wiz_state == WIZ_OP_SELECT) {
-        lv_obj_t *hdr = lv_list_add_text(lst,
-            priv->wiz_state == WIZ_IDLE ? "Tap camera" : "Pick operation:");
-        _lst_hdr_style(hdr);
-
-        bool enabled = (priv->wiz_state == WIZ_OP_SELECT);
         for (int i = 0; i < WIZ_OP_COUNT && btn_idx < 8; i++) {
             priv->sidebar_btn_ctxs[btn_idx].priv     = priv;
             priv->sidebar_btn_ctxs[btn_idx].op       = k_op_defs[i].op;
@@ -1187,11 +1190,21 @@ static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
 
             lv_obj_t *btn = lv_list_add_button(lst,
                                 k_op_defs[i].symbol, k_op_defs[i].label);
-            _lst_style(btn, k_op_defs[i].color, enabled);
-            if (enabled)
-                lv_obj_add_event_cb(btn, _wiz_op_btn_cb, LV_EVENT_CLICKED,
-                                    &priv->sidebar_btn_ctxs[btn_idx]);
+            _lst_style(btn, k_op_defs[i].color, true);
+            lv_obj_add_event_cb(btn, _wiz_op_btn_cb, LV_EVENT_CLICKED,
+                                &priv->sidebar_btn_ctxs[btn_idx]);
             btn_idx++;
+        }
+        // "Tap camera to begin" hint — only in IDLE (no point placed yet),
+        // shown below the op buttons, white, max-width 80 px.
+        if (priv->wiz_state == WIZ_IDLE) {
+            lv_obj_t *hint = lv_label_create(priv->step_panel);
+            lv_label_set_text(hint, "Tap camera to begin");
+            lv_obj_set_style_text_color(hint, lv_color_white(), 0);
+            lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_width(hint, 80);
+            lv_obj_set_style_pad_top(hint, WIZ_PANEL_PAD, 0);
         }
         return;
     }
@@ -1202,14 +1215,6 @@ static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
     int step_count               = k_op_step_counts[priv->wiz_op];
     const wiz_step_def_t *steps  = k_op_steps[priv->wiz_op];
     bool running = (priv->wiz_state == WIZ_RUNNING || priv->wiz_state == WIZ_CONFIRM);
-
-    // Op name header
-    const char *op_name = "Op";
-    for (int i = 0; i < WIZ_OP_COUNT; i++)
-        if (k_op_defs[i].op == priv->wiz_op) { op_name = k_op_defs[i].label; break; }
-
-    lv_obj_t *hdr = lv_list_add_text(lst, op_name);
-    _lst_hdr_style(hdr);
 
     for (int i = 0; i < step_count && btn_idx < 8; i++) {
         bool is_run = (steps[i].kind == WIZ_SK_RUN);
@@ -1232,6 +1237,19 @@ static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
         const char *sym = (active && !is_run && !running) ? LV_SYMBOL_RIGHT : NULL;
         lv_obj_t *btn = lv_list_add_button(lst, sym, steps[i].label);
         _lst_style(btn, bg, tappable || (active && !is_run));
+
+        // Blink the active collection step so it's obvious which step is next.
+        if (active && !is_run && !running) {
+            lv_anim_t a;
+            lv_anim_init(&a);
+            lv_anim_set_var(&a, btn);
+            lv_anim_set_exec_cb(&a, _step_blink_cb);
+            lv_anim_set_values(&a, 0, 255);
+            lv_anim_set_duration(&a, 500);
+            lv_anim_set_reverse_duration(&a, 500);
+            lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_start(&a);
+        }
 
         if (!running) {
             if (is_run && active)
@@ -1498,7 +1516,11 @@ static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt)
         int16_t img_x, img_y;
         if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
 
-        if (kind == WIZ_SK_PT2) {
+        if (kind == WIZ_SK_PT1) {
+            priv->wiz_pt1     = make_point(priv, img_x, img_y);
+            priv->wiz_pt1_set = true;
+            priv->wiz_scr_tap = scr_pt;
+        } else if (kind == WIZ_SK_PT2) {
             priv->wiz_pt2     = make_point(priv, img_x, img_y);
             priv->wiz_pt2_set = true;
         } else if (kind == WIZ_SK_ZREF) {
@@ -1576,16 +1598,11 @@ static void overlay_draw_cb(lv_event_t *e)
 
     (void)obj;
 
-    // --- Axis-aligned physical grid (idealized, dashed straight lines). ---
-    // draw_calib_grid is intentionally NOT called here: each lv_draw_line call
-    // allocates a new lv_draw_task_t block from DRAM via lv_malloc_zeroed.  By
-    // the time overlay_draw_cb fires (deep inside lv_refr's child-render
-    // recursion), DRAM is already saturated with draw tasks from all other UI
-    // widgets.  LV_USE_ASSERT_MALLOC=0 in this build, so the NULL returned by
-    // lv_malloc_zeroed is NOT caught — execution continues to
-    // `new_task->area = *coords` and faults (LoadProhibited, reported as
-    // lv_draw_line.c:121 because lv_draw_add_task is inlined into the IRAM
-    // lv_draw_line, which has no debug line-info → ??:? at top of backtrace).
+    // --- Axis-aligned physical grid (idealized straight lines). ---
+    // Previously disabled due to DRAM/draw-task heap exhaustion.  With the
+    // increased LV_MEM_SIZE (105 KB) there is sufficient headroom for the
+    // extra lv_draw_task_t allocations.  draw_calib_grid (actual calibration
+    // offsets) remains disabled — see its doc-comment above draw_axis_grid.
     draw_axis_grid(layer, priv);
 
     // --- Point mode ---
@@ -1696,7 +1713,8 @@ static void overlay_draw_cb(lv_event_t *e)
                 if (is_rect_op)         draw_rectangle(layer, priv, sx1, sy1, sx2, sy2);
                 else if (is_circ_op)    draw_circle(layer, priv, sx1, sy1, sx2, sy2);
                 // Second point: POWER symbol (second corner / circumference)
-                draw_wiz_marker(layer, sx2, sy2, LV_SYMBOL_POWER);
+                bool rect_mode = priv->wiz_op == PROBE_OP_PROBE_RECT || priv->wiz_op == PROBE_OP_PROBE_POCKET;
+                draw_wiz_marker(layer, sx2, sy2, (rect_mode ? LV_SYMBOL_PLUS : LV_SYMBOL_POWER));
             }
         }
 
@@ -1725,8 +1743,10 @@ static void overlay_click_cb(lv_event_t *e)
     lv_indev_get_point(lv_indev_active(), &scr_pt);
 
     // When mode is NONE the overlay drives the probe wizard instead of
-    // the shape-selection logic below.
+    // the shape-selection logic below.  Stop bubbling so parent tileview
+    // does not start swiping when the user is interacting with points.
     if (priv->mode == LV_CAM_POS_MODE_NONE) {
+        lv_event_stop_bubbling(e);
         wiz_handle_click(priv, scr_pt);
         return;
     }
@@ -1735,6 +1755,10 @@ static void overlay_click_cb(lv_event_t *e)
     if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
 
     LOGD(TAG, "Click at image (%d, %d)", img_x, img_y);
+
+    /* Capture clicks for our overlay modes so parent tileview doesn't
+     * start scrolling/swiping while the user is placing/adjusting points. */
+    lv_event_stop_bubbling(e);
 
     switch (priv->mode) {
     case LV_CAM_POS_MODE_POINT: {
@@ -1822,6 +1846,8 @@ static void overlay_press_cb(lv_event_t *e)
 
     // Wizard point-drag in READY state: move the nearest collected point
     if (priv->mode == LV_CAM_POS_MODE_NONE && priv->wiz_state == WIZ_READY) {
+        /* Capture the press so the tileview doesn't interpret this as a swipe. */
+        lv_event_stop_bubbling(e);
         wiz_handle_click(priv, scr_pt);
         return;
     }
@@ -1833,6 +1859,9 @@ static void overlay_press_cb(lv_event_t *e)
     int16_t img_x, img_y;
     if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
 
+    /* User is actively dragging the second point — capture input so the
+     * parent tileview does not start a swipe gesture while dragging. */
+    lv_event_stop_bubbling(e);
     priv->preview_active = true;
     priv->preview_px_x   = img_x;
     priv->preview_px_y   = img_y;
@@ -1935,17 +1964,13 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
     lv_obj_set_flex_grow(cam_area, 1);
     lv_obj_set_height(cam_area, LV_PCT(100));
     lv_obj_clear_flag(cam_area, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_all(cam_area, CAM_INSET_MARGIN_PX, 0);
+    // No padding — the stream fills the area edge-to-edge with no black bars.
 
     // Camera stream — fills cam_area; inner image uses CONTAIN for aspect ratio
     lv_obj_t *stream = lv_cam_stream_create(cam_area);
     lv_obj_set_size(stream, LV_PCT(100), LV_PCT(100));
     lv_obj_set_align(stream, LV_ALIGN_CENTER);
-    lv_obj_set_style_border_width(stream, CAM_BORDER_WIDTH_PX, 0);
-    lv_obj_set_style_border_color(stream, lv_color_hex(CAM_BORDER_COLOR), 0);
-    lv_obj_set_style_border_opa(stream, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(stream, CAM_BORDER_RADIUS_PX, 0);
-    lv_obj_set_style_pad_all(stream, CAM_INNER_PAD_PX, 0);
+    // No border, no padding — transparent container, image fills area cleanly.
 
     lv_obj_t *img_obj = lv_cam_stream_get_image_obj(stream);
     if (img_obj)
