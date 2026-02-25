@@ -24,7 +24,7 @@
 // Logging (reuse whatever macros the project uses)
 // ---------------------------------------------------------------------------
 #if defined(ARDUINO) || defined(ESP32_HW)
-#  include "debug_log.h"
+#  include "debug.h"   /* defines LOGI / LOGW / LOGE / LOGD for ESP32 firmware */
 #else
 #  include <stdio.h>
 #  define LOGI(tag, fmt, ...) printf("[I][" tag "] " fmt "\n", ##__VA_ARGS__)

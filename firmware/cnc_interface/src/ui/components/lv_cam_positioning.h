@@ -23,6 +23,7 @@
 #include "lvgl.h"
 #include "driver/cam_receiver.h"
 #include "machine/machine_interface.h"
+#include "probe/probe_api.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -159,6 +160,33 @@ bool lv_cam_positioning_pixel_to_physical(lv_obj_t *obj,
 
 /// Returns true if the receiver has a valid grid for coordinate mapping.
 bool lv_cam_positioning_has_grid(lv_obj_t *obj);
+
+// ---------------------------------------------------------------------------
+// Probe wizard API
+// ---------------------------------------------------------------------------
+
+/// Return the widget's internal probe_api_ctx_t so callers (e.g. interface.c)
+/// can pass it to mos_probe_handler_fill_callbacks() before calling
+/// lv_cam_positioning_set_probe_cbs().  The pointer is stable for the widget's
+/// lifetime; it must not be freed or re-initialised by the caller.
+probe_api_ctx_t *lv_cam_positioning_get_probe_ctx(lv_obj_t *obj);
+
+/// Connect probe command callbacks so the widget can dispatch machine
+/// operations when the user confirms a probe/move action.
+///
+/// The widget creates and owns the probe_api_ctx_t internally.
+/// Only the four cmd_* callbacks and the caller's user_data are used from
+/// @p cbs; the widget registers its own event (on_status / on_error) handlers.
+///
+/// Call this once after lv_cam_positioning_create(), before the first probe
+/// action is attempted.  Safe to call again to change callbacks at runtime.
+void lv_cam_positioning_set_probe_cbs(lv_obj_t *obj,
+                                       const probe_api_callbacks_t *cbs);
+
+/// Programmatically cancel any active wizard step (dismisses the popover,
+/// instruction bar, or confirmation modal) and returns to idle state.
+/// Calling this while a probe operation is in-flight also cancels the op.
+void lv_cam_positioning_wizard_cancel(lv_obj_t *obj);
 
 #ifdef __cplusplus
 }

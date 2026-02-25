@@ -5,6 +5,8 @@
 
 #include "lv_cam_positioning.h"
 #include "lv_cam_stream.h"
+#include "probe/probe_api.h"
+#include "config/probe_settings.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -39,6 +41,31 @@ static const char *TAG = "cam_pos";
 #define CAM_BORDER_COLOR        0x707070  // Medium gray
 #define CAM_INNER_PAD_PX        5   // Padding inside border around image
 
+// ---------------------------------------------------------------------------
+// Probe wizard styling constants
+// ---------------------------------------------------------------------------
+#define SIDEBAR_W           150    // Right-panel width reserved for wizard UI (px)
+#define WIZ_OP_BTN_H         28    // Height of each op-selector button (px)
+#define WIZ_STEP_BTN_H       26    // Height of each step button (px)
+#define WIZ_PANEL_PAD         4    // Inner padding for sidebar panels (px)
+#define WIZ_STEP_RADIUS       5    // Corner radius on step/op buttons (px)
+
+// Colours — all as 24-bit RGB hex
+#define WIZ_BG_COLOR         0x1E293B  // Slate-900 (dark panel background)
+#define WIZ_TXT_COLOR        0xF1F5F9  // Slate-100 (near-white)
+#define WIZ_XY_COLOR         0x38BDF8  // Sky-400   (coordinate accent)
+#define WIZ_DIV_COLOR        0x334155  // Slate-700 (divider line)
+#define WIZ_BTN_MOVE_COLOR   0x2563EB  // Blue-600  (Move to)
+#define WIZ_BTN_RECT_COLOR   0x059669  // Emerald-600 (Block / Pocket)
+#define WIZ_BTN_CIRC_COLOR   0xD97706  // Amber-600 (Bore / Boss)
+#define WIZ_STEP_DONE_COLOR  0xB45309  // Amber-700 (completed step)
+#define WIZ_STEP_CURR_COLOR  0x16A34A  // Green-600 (active step)
+#define WIZ_STEP_NEXT_COLOR  0x374151  // Slate-700 (future/disabled step)
+#define WIZ_RUN_COLOR        0xDC2626  // Red-600   (Run button)
+#define WIZ_CANCEL_COLOR     0xDC2626  // Red-600   reset button
+#define WIZ_ZREF_DOT_COLOR   0x00FF88  // Vivid teal for Z-ref dot
+#define WIZ_ZREF_BDR_COLOR   0x00CC66  // Teal border for Z-ref dot
+
 // Grid overlay
 #define GRID_LINE_COLOR     0x808080   // Medium gray
 #define GRID_LINE_OPA       LV_OPA_50
@@ -49,6 +76,25 @@ static const char *TAG = "cam_pos";
 #define CALIB_GRID_DOT_COLOR   0xFFFF44   // Yellow
 #define CALIB_GRID_DOT_OPA     LV_OPA_80
 #define CALIB_GRID_DOT_R       2          // dot half-size in screen pixels
+
+// ---------------------------------------------------------------------------
+// Wizard (probe flow) states
+// ---------------------------------------------------------------------------
+typedef enum {
+    WIZ_IDLE       = 0,  ///< No tap yet; sidebar shows op selector
+    WIZ_OP_SELECT  = 1,  ///< Pt1 placed; waiting for op choice in sidebar
+    WIZ_COLLECTING = 2,  ///< Op chosen; collecting remaining points on camera
+    WIZ_READY      = 3,  ///< All points set; Run active; tap/drag to adjust pts
+    WIZ_CONFIRM    = 6,  ///< Confirmation modal open (keep value=6 for compat)
+    WIZ_RUNNING    = 7,  ///< Operation dispatched, waiting for probe_api
+} wiz_state_t;
+
+/// Sidebar button context – used for both op-selector and step buttons.
+typedef struct {
+    void      *priv;         ///< cast to lv_cam_pos_priv_t *
+    probe_op_t op;           ///< used by op-selector buttons
+    int8_t     step_idx;     ///< used by step buttons (-1 = not a step btn)
+} sidebar_btn_ctx_t;
 
 // ---------------------------------------------------------------------------
 // Selection state
@@ -94,6 +140,44 @@ typedef struct {
     void                   *rect_cb_user;
     lv_cam_pos_circle_cb_t  circle_cb;
     void                   *circle_cb_user;
+
+    // --- Probe wizard ---
+    wiz_state_t             wiz_state;         ///< Current wizard FSM state
+    probe_op_t              wiz_op;            ///< Selected operation
+    lv_cam_pos_point_t      wiz_pt1;           ///< First tap (target/corner/center)
+    lv_cam_pos_point_t      wiz_pt2;           ///< Second point (corner2/edge)
+    lv_cam_pos_point_t      wiz_zref;          ///< Z-reference surface point
+    lv_point_t              wiz_scr_tap;       ///< Raw screen coords of first tap (offline fallback)
+    bool                    wiz_pt1_set;       ///< pt1 collected
+    bool                    wiz_pt2_set;       ///< pt2 collected
+    bool                    wiz_zref_set;      ///< zref collected
+    int                     wiz_step_idx;      ///< Currently active step index (0-based)
+    int                     wiz_drag_pt;       ///< Point being dragged: -1=none 0=pt1 1=pt2 2=zref
+    // Sidebar LVGL objects (permanent children of right_panel; contents rebuilt on state change)
+    lv_obj_t               *right_panel;       ///< 80 px right panel container
+    lv_obj_t               *coord_panel;       ///< Coordinate display (top of sidebar)
+    lv_obj_t               *step_panel;        ///< Op selector or step list (below coords)
+    sidebar_btn_ctx_t       sidebar_btn_ctxs[8];  ///< Contexts for sidebar buttons (no heap)
+    lv_obj_t               *wiz_confirm_modal; ///< Confirmation msgbox (parented to screen)
+    // Probe backend
+    probe_api_ctx_t         probe_ctx;
+    bool                    probe_cbs_set;
+    // Command callbacks from external caller (forwarded into probe_ctx)
+    probe_cmd_move_to_cb_t      probe_cmd_move_to;
+    probe_cmd_probe_z_cb_t      probe_cmd_probe_z;
+    probe_cmd_probe_rect_cb_t   probe_cmd_probe_rect;
+    probe_cmd_probe_circle_cb_t probe_cmd_probe_circle;
+    void                       *probe_user_data;
+
+    // Grid-dirty flag + timer -- thread-safe overlay repaint from ESP-NOW task.
+    // on_grid_update() (ESP-NOW FreeRTOS RX task) must NOT call lv_async_call()
+    // or any other LVGL API directly: LVGL has no OS mutex in this build, so
+    // concurrent modification of the timer linked list from a non-LVGL task
+    // races with lv_task_handler() and corrupts the list (NULL-deref crash).
+    // Instead it sets this volatile flag (a plain bool write is atomic on
+    // Xtensa); the lv_timer below polls it every 50 ms from the LVGL task.
+    volatile bool           grid_dirty;
+    lv_timer_t             *grid_timer;   ///< owned by this widget, deleted in on_delete
 } lv_cam_pos_priv_t;
 
 // ---------------------------------------------------------------------------
@@ -116,7 +200,14 @@ static lv_cam_pos_point_t make_point(lv_cam_pos_priv_t *priv,
                                       int16_t px_x, int16_t px_y);
 static float cam_pos_choose_grid_step(float range_x, float range_y);
 static void  draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv);
-static void  draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv);
+
+// Wizard helpers
+static void wiz_reset(lv_cam_pos_priv_t *priv);
+static void wiz_show_confirm(lv_cam_pos_priv_t *priv);
+static void wiz_execute(lv_cam_pos_priv_t *priv);
+static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt);
+static void sidebar_rebuild(lv_cam_pos_priv_t *priv);
+static void sidebar_update_coords(lv_cam_pos_priv_t *priv);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -356,150 +447,164 @@ static void draw_circle(lv_layer_t *layer, lv_cam_pos_priv_t *priv,
     (void)priv;
 }
 
-/// Draw the calibration grid overlay using the actual pixel positions broadcast
-/// by the camera (cam_grid_info_t.px_points, available when the companion sends
-/// the extended compact grid message that includes calibration image dimensions).
-/// Draws green lines between adjacent grid points and yellow dots at each node.
+/// Draw a CNC probe point marker: white crosshair + optional symbol badge.
+/// @param symbol  LVGL symbol string (e.g. LV_SYMBOL_GPS) or NULL for badge-less.
+static void draw_wiz_marker(lv_layer_t *layer, int32_t cx, int32_t cy,
+                             const char *symbol)
+{
+    // --- Crosshair ---
+    const int32_t ARM = 10;   // arm length from center (px)
+    const int32_t GAP =  4;   // half-gap around the center point
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = lv_color_white();
+    ld.width = 2;
+    ld.opa   = LV_OPA_80;
+
+    ld.p1.x = cx - ARM; ld.p1.y = cy;       ld.p2.x = cx - GAP; ld.p2.y = cy;       lv_draw_line(layer, &ld); // left arm
+    ld.p1.x = cx + GAP; ld.p1.y = cy;       ld.p2.x = cx + ARM; ld.p2.y = cy;       lv_draw_line(layer, &ld); // right arm
+    ld.p1.x = cx;       ld.p1.y = cy - ARM; ld.p2.x = cx;       ld.p2.y = cy - GAP; lv_draw_line(layer, &ld); // up arm
+    ld.p1.x = cx;       ld.p1.y = cy + GAP; ld.p2.x = cx;       ld.p2.y = cy + ARM; lv_draw_line(layer, &ld); // down arm
+
+    if (!symbol || symbol[0] == '\0') return;
+
+    // --- Symbol badge (upper-right, just above the top arm end) ---
+    const int32_t BW = 22;                      // badge width
+    const int32_t BH = 20;                      // badge height
+    const int32_t BX = cx + GAP + 2;            // right of center gap
+    const int32_t BY = cy - ARM - BH - 2;       // above top arm
+
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color     = lv_color_hex(WIZ_BG_COLOR);
+    rd.bg_opa       = LV_OPA_90;
+    rd.border_color = lv_color_white();
+    rd.border_width = 1;
+    rd.border_opa   = LV_OPA_60;
+    rd.radius       = 5;
+    lv_area_t badge = { BX, BY, BX + BW - 1, BY + BH - 1 };
+    lv_draw_rect(layer, &rd, &badge);
+
+    lv_draw_label_dsc_t txt;
+    lv_draw_label_dsc_init(&txt);
+    txt.color      = lv_color_hex(WIZ_XY_COLOR);
+    txt.opa        = LV_OPA_COVER;
+    txt.align      = LV_TEXT_ALIGN_CENTER;
+    txt.text       = symbol;
+    txt.text_local = 0;  // ROM string literal — no copy needed
+    lv_area_t tarea = { BX + 1, BY + 2, BX + BW - 2, BY + BH - 2 };
+    lv_draw_label(layer, &txt, &tarea);
+}
+
+/// draw_calib_grid: REMOVED from the overlay draw callback.
+///
+/// Every lv_draw_line call allocates one lv_draw_task_t block (lv_malloc_zeroed)
+/// from DRAM.  overlay_draw_cb fires deep in lv_refr's child-render recursion
+/// after dozens of UI-widget draw tasks have already been added; the DRAM heap
+/// is too tight for even two extra tasks.  LV_USE_ASSERT_MALLOC=0 silences the
+/// NULL check, so the fault becomes a LoadProhibited crash inside the IRAM
+/// lv_draw_line (lv_draw_add_task inlined → ??:? / lv_draw_line.c:121).
+///
+/// The px_points array is still used exclusively for pixel↔physical coordinate
+/// translation in image_to_screen_coords — never for drawing.
+///
+/// If a visual calib-grid indicator is needed in future, render it once into
+/// an lv_canvas that is only invalidated when the grid changes, so zero
+/// draw-task pressure is added during normal frame rendering.
+///
+/// Leaving the function body here (disabled) so the coordinate-translation
+/// path and the idealized-line logic can be referenced if re-enabled.
+///
+/// NOTE: do NOT call this from overlay_draw_cb.
+__attribute__((unused))
 static void draw_calib_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
     if (!priv->receiver) return;
 
-    // --- Step 1: snapshot scalar metadata under the mutex, then release. ---
-    // LVGL's draw functions (lv_draw_line, lv_draw_rect, etc.) allocate from
-    // LVGL's internal pool.  Calling them while holding grid_mutex would invert
-    // the lock order vs. handle_grid_map, which calls CAM_ALLOC_LARGE (system
-    // heap) before taking grid_mutex.  Follow the same snapshot pattern used by
-    // draw_axis_grid: lock → copy scalars → unlock → do all allocations.
+    // Snapshot only the scalar parameters needed for straight-line drawing.
+    // No px_points copy required — idealized lines need only bounds + dimensions.
     cam_receiver_lock_grid(priv->receiver);
     const cam_grid_info_t *g = cam_receiver_get_grid(priv->receiver);
-    if (!g || !g->px_points || g->nx < 1 || g->ny < 1 || g->point_count == 0) {
+    if (!g || g->nx < 2 || g->ny < 2) {
         cam_receiver_unlock_grid(priv->receiver);
         return;
     }
-    uint16_t nx          = g->nx;
-    uint16_t ny          = g->ny;
-    uint16_t point_count = g->point_count;
+    uint16_t nx    = g->nx;
+    uint16_t ny    = g->ny;
+    float    min_x = g->min_x,  max_x = g->max_x;
+    float    min_y = g->min_y,  max_y = g->max_y;
     cam_receiver_unlock_grid(priv->receiver);
 
-    uint16_t img_w = 0, img_h = 0;
-    lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
-    if (img_w == 0 || img_h == 0) return;
+    float phys_w = max_x - min_x;
+    float phys_h = max_y - min_y;
+    if (phys_w <= 0.0f || phys_h <= 0.0f) return;
 
-    // --- Step 2: allocate px_points copy OUTSIDE the mutex. ---
-    // Then re-acquire briefly to memcpy (re-validate in case the grid changed
-    // while we were calling lv_malloc).
-    size_t copy_sz = (size_t)point_count * 2 * sizeof(float);
-    float *px_copy = (float *)lv_malloc(copy_sz);
-    if (!px_copy) return;
+    lv_obj_t *img_obj = lv_cam_stream_get_image_obj(priv->stream);
+    if (!img_obj) return;
+    lv_area_t img_area;
+    lv_obj_get_coords(img_obj, &img_area);
+    int32_t scr_w = (int32_t)lv_area_get_width(&img_area);
+    int32_t scr_h = (int32_t)lv_area_get_height(&img_area);
+    if (scr_w <= 0 || scr_h <= 0) return;
 
-    cam_receiver_lock_grid(priv->receiver);
-    g = cam_receiver_get_grid(priv->receiver);
-    if (!g || !g->px_points ||
-        g->nx != nx || g->ny != ny || g->point_count != point_count) {
-        cam_receiver_unlock_grid(priv->receiver);
-        lv_free(px_copy);
-        return;
-    }
-    lv_memcpy(px_copy, g->px_points, copy_sz);
-    cam_receiver_unlock_grid(priv->receiver);
-    // mutex released — safe to call LVGL drawing functions from here on.
+    // Cap line count per axis so draw-task count is bounded even for dense grids.
+    // At stride=1 a 15×15 grid creates 30 tasks — well within the pool budget
+    // since each task now carries only p1/p2 (no points-array allocation).
+#define CALIB_MAX_DRAW_LINES 16u
+    uint16_t stride_x = (nx > CALIB_MAX_DRAW_LINES) ? (uint16_t)(nx / CALIB_MAX_DRAW_LINES) : 1u;
+    uint16_t stride_y = (ny > CALIB_MAX_DRAW_LINES) ? (uint16_t)(ny / CALIB_MAX_DRAW_LINES) : 1u;
 
     lv_draw_line_dsc_t ldsc;
     lv_draw_line_dsc_init(&ldsc);
-    ldsc.color = lv_color_hex(CALIB_GRID_LINE_COLOR);
-    ldsc.width = 1;
-    ldsc.opa   = CALIB_GRID_LINE_OPA;
+    ldsc.color      = lv_color_hex(CALIB_GRID_LINE_COLOR);
+    ldsc.width      = 1;
+    ldsc.opa        = CALIB_GRID_LINE_OPA;
+    ldsc.dash_width = 6;   // dashed to distinguish from the solid axis grid
+    ldsc.dash_gap   = 6;
+    /* points / point_cnt intentionally left NULL/0: use p1/p2 mode only */
 
-    lv_draw_rect_dsc_t ddsc;
-    lv_draw_rect_dsc_init(&ddsc);
-    ddsc.bg_color = lv_color_hex(CALIB_GRID_DOT_COLOR);
-    ddsc.bg_opa   = CALIB_GRID_DOT_OPA;
-    ddsc.radius   = LV_RADIUS_CIRCLE;
-
-    // --- Step 3: draw using polyline mode. ---
-    // One lv_draw_line call per row / column instead of one per segment.
-    // This reduces LVGL draw-task allocations from O(nx × ny) to O(nx + ny),
-    // preventing pool exhaustion (LV_ASSERT_MALLOC crash) for large grids.
-    // LV_DRAW_LINE_POINT_NONE marks points that could not be mapped to screen
-    // so the renderer creates a gap instead of connecting through them.
-#define CALIB_POLY_MAX 64u
-    lv_point_precise_t pts[CALIB_POLY_MAX];
-
-    // --- Horizontal polylines (one per row) ---
-    uint16_t cols = (nx < CALIB_POLY_MAX) ? nx : (uint16_t)CALIB_POLY_MAX;
-    for (uint16_t j = 0; j < ny; j++) {
-        uint16_t cnt = 0;
-        for (uint16_t i = 0; i < cols; i++) {
-            uint16_t idx = j * nx + i;
-            if (idx >= point_count) {
-                pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
-                pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
-            } else {
-                int16_t px = (int16_t)(px_copy[idx * 2 + 0] * (float)img_w);
-                int16_t py = (int16_t)(px_copy[idx * 2 + 1] * (float)img_h);
-                int32_t sx, sy;
-                if (!image_to_screen_coords(priv, px, py, &sx, &sy)) {
-                    pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
-                    pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
-                } else {
-                    pts[cnt].x = (lv_value_precise_t)sx;
-                    pts[cnt].y = (lv_value_precise_t)sy;
-                }
-            }
-            cnt++;
-        }
-        if (cnt >= 2) {
-            ldsc.points    = pts;
-            ldsc.point_cnt = cnt;
-            lv_draw_line(layer, &ldsc);
-        }
+    // Vertical lines — one per calibration column
+    uint16_t nx1 = nx - 1u;
+    for (uint16_t i = 0; i < nx; i += stride_x) {
+        int32_t scr_x = img_area.x1 +
+                        (int32_t)((float)i / (float)nx1 * (float)scr_w);
+        if (scr_x < img_area.x1 || scr_x > img_area.x2) continue;
+        ldsc.p1.x = (lv_value_precise_t)scr_x;
+        ldsc.p1.y = (lv_value_precise_t)img_area.y1;
+        ldsc.p2.x = (lv_value_precise_t)scr_x;
+        ldsc.p2.y = (lv_value_precise_t)img_area.y2;
+        lv_draw_line(layer, &ldsc);
+    }
+    // Always draw the last vertical line (right boundary)
+    if ((nx - 1u) % stride_x != 0u) {
+        ldsc.p1.x = (lv_value_precise_t)img_area.x2;
+        ldsc.p1.y = (lv_value_precise_t)img_area.y1;
+        ldsc.p2.x = (lv_value_precise_t)img_area.x2;
+        ldsc.p2.y = (lv_value_precise_t)img_area.y2;
+        lv_draw_line(layer, &ldsc);
     }
 
-    // --- Vertical polylines (one per column) ---
-    uint16_t rows = (ny < CALIB_POLY_MAX) ? ny : (uint16_t)CALIB_POLY_MAX;
-    for (uint16_t i = 0; i < nx; i++) {
-        uint16_t cnt = 0;
-        for (uint16_t j = 0; j < rows; j++) {
-            uint16_t idx = j * nx + i;
-            if (idx >= point_count) {
-                pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
-                pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
-            } else {
-                int16_t px = (int16_t)(px_copy[idx * 2 + 0] * (float)img_w);
-                int16_t py = (int16_t)(px_copy[idx * 2 + 1] * (float)img_h);
-                int32_t sx, sy;
-                if (!image_to_screen_coords(priv, px, py, &sx, &sy)) {
-                    pts[cnt].x = LV_DRAW_LINE_POINT_NONE;
-                    pts[cnt].y = LV_DRAW_LINE_POINT_NONE;
-                } else {
-                    pts[cnt].x = (lv_value_precise_t)sx;
-                    pts[cnt].y = (lv_value_precise_t)sy;
-                }
-            }
-            cnt++;
-        }
-        if (cnt >= 2) {
-            ldsc.points    = pts;
-            ldsc.point_cnt = cnt;
-            lv_draw_line(layer, &ldsc);
-        }
+    // Horizontal lines — one per calibration row
+    uint16_t ny1 = ny - 1u;
+    for (uint16_t j = 0; j < ny; j += stride_y) {
+        int32_t scr_y = img_area.y1 +
+                        (int32_t)((float)j / (float)ny1 * (float)scr_h);
+        if (scr_y < img_area.y1 || scr_y > img_area.y2) continue;
+        ldsc.p1.x = (lv_value_precise_t)img_area.x1;
+        ldsc.p1.y = (lv_value_precise_t)scr_y;
+        ldsc.p2.x = (lv_value_precise_t)img_area.x2;
+        ldsc.p2.y = (lv_value_precise_t)scr_y;
+        lv_draw_line(layer, &ldsc);
     }
-#undef CALIB_POLY_MAX
-
-    // --- Dots at each calibration point ---
-    for (uint16_t k = 0; k < point_count; k++) {
-        int16_t px = (int16_t)(px_copy[k * 2 + 0] * (float)img_w);
-        int16_t py = (int16_t)(px_copy[k * 2 + 1] * (float)img_h);
-        int32_t sx, sy;
-        if (!image_to_screen_coords(priv, px, py, &sx, &sy)) continue;
-        lv_area_t dot = {
-            .x1 = sx - CALIB_GRID_DOT_R, .y1 = sy - CALIB_GRID_DOT_R,
-            .x2 = sx + CALIB_GRID_DOT_R, .y2 = sy + CALIB_GRID_DOT_R,
-        };
-        lv_draw_rect(layer, &ddsc, &dot);
+    // Always draw the last horizontal line (bottom boundary)
+    if ((ny - 1u) % stride_y != 0u) {
+        ldsc.p1.x = (lv_value_precise_t)img_area.x1;
+        ldsc.p1.y = (lv_value_precise_t)img_area.y2;
+        ldsc.p2.x = (lv_value_precise_t)img_area.x2;
+        ldsc.p2.y = (lv_value_precise_t)img_area.y2;
+        lv_draw_line(layer, &ldsc);
     }
-
-    lv_free(px_copy);
+#undef CALIB_MAX_DRAW_LINES
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +694,12 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
     line_dsc.color = lv_color_hex(GRID_LINE_COLOR);
     line_dsc.width = 1;
     line_dsc.opa   = GRID_LINE_OPA;
+    // dash_width/dash_gap intentionally NOT set (remain 0 from lv_draw_line_dsc_init).
+    // The LVGL SW renderer allocates lv_malloc(blend_area_w) per draw-task at
+    // render time for dashed lines.  LV_USE_ASSERT_MALLOC=0 silences the NULL
+    // check, so an OOM during dispatch_cb crashes exactly as seen in backtrace
+    // (lv_draw.c:284 → lv_refr.c:945).  The non-dashed path writes pixels
+    // directly into the draw buffer with zero heap allocation.
 
     // Vertical grid lines — constant physical-X values
     float x_first = ceilf(cam_min_x / step) * step;
@@ -618,6 +729,839 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 }
 
 // ---------------------------------------------------------------------------
+// Probe wizard — internal utilities
+// ---------------------------------------------------------------------------
+
+/// Destroy an LVGL object (if valid) and NULL the pointer.
+static void _wiz_del(lv_obj_t **pobj)
+{
+    if (*pobj && lv_obj_is_valid(*pobj)) {
+        lv_obj_delete(*pobj);
+    }
+    *pobj = NULL;
+}
+
+/// Reset wizard to idle state — cancels any running op, clears all points,
+/// rebuilds the sidebar.  Safe to call at any time including from on_delete.
+static void wiz_reset(lv_cam_pos_priv_t *priv)
+{
+    // Null event callbacks before cancelling so probe_api_cancel doesn't
+    // fire into tearing-down UI (avoids re-entrant LVGL + dangling-priv).
+    if (priv->probe_cbs_set) {
+        priv->probe_ctx.callbacks.on_status       = NULL;
+        priv->probe_ctx.callbacks.on_error        = NULL;
+        priv->probe_ctx.callbacks.on_move_done    = NULL;
+        priv->probe_ctx.callbacks.on_rect_done    = NULL;
+        priv->probe_ctx.callbacks.on_circle_done  = NULL;
+        probe_api_cancel(&priv->probe_ctx);
+    }
+
+    _wiz_del(&priv->wiz_confirm_modal);
+
+    priv->wiz_state    = WIZ_IDLE;
+    priv->wiz_op       = PROBE_OP_NONE;
+    priv->wiz_pt1_set  = false;
+    priv->wiz_pt2_set  = false;
+    priv->wiz_zref_set = false;
+    priv->wiz_step_idx = 0;
+    priv->wiz_drag_pt  = -1;
+
+    // Sidebar panels exist as permanent children — just rebuild their contents.
+    if (priv->step_panel  && lv_obj_is_valid(priv->step_panel))  sidebar_rebuild(priv);
+    if (priv->coord_panel && lv_obj_is_valid(priv->coord_panel)) sidebar_update_coords(priv);
+
+    if (priv->overlay && lv_obj_is_valid(priv->overlay))
+        lv_obj_invalidate(priv->overlay);
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — probe_api async result delivery
+// ---------------------------------------------------------------------------
+
+/// Heap-allocated context passed via lv_async_call so that the result
+/// callback is always executed on the LVGL task, regardless of which
+/// FreeRTOS task fires probe_api event callbacks.
+typedef struct {
+    lv_obj_t      *root;      ///< cam_positioning root object (validity guard)
+    probe_status_t status;
+    probe_op_t     op;
+    union {
+        probe_result_move_t   move;
+        probe_result_rect_t   rect;
+        probe_result_circle_t circle;
+    } result;
+    char           error_msg[64];
+} wiz_async_result_t;
+
+static void _result_ok_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    if (mbox && lv_obj_is_valid(mbox)) lv_msgbox_close_async(mbox);  /* async: button is child of mbox */
+}
+
+static void _probe_done_async(void *user_data)
+{
+    wiz_async_result_t *ac = (wiz_async_result_t *)user_data;
+    if (!ac) return;
+
+    if (!ac->root || !lv_obj_is_valid(ac->root)) { free(ac); return; }
+    lv_cam_pos_priv_t *priv = get_priv(ac->root);
+    if (!priv) { free(ac); return; }
+
+    // Operation done — reset sidebar to idle
+    sidebar_rebuild(priv);
+    sidebar_update_coords(priv);
+    priv->wiz_state = WIZ_IDLE;
+    lv_obj_invalidate(priv->overlay);
+
+    // Build result / error text
+    char title_buf[48];
+    char text_buf[192];
+
+    if (ac->status == PROBE_STATUS_DONE) {
+        switch (ac->op) {
+        case PROBE_OP_MOVE_TO:
+            snprintf(title_buf, sizeof(title_buf), "Moved");
+            snprintf(text_buf, sizeof(text_buf),
+                     "X: %.4f\nY: %.4f",
+                     (double)ac->result.move.target_xy.x,
+                     (double)ac->result.move.target_xy.y);
+            break;
+        case PROBE_OP_PROBE_Z:
+            snprintf(title_buf, sizeof(title_buf), "Z Probed");
+            snprintf(text_buf, sizeof(text_buf),
+                     "Z surface: %.4f mm",
+                     (double)ac->result.move.z_surface);
+            break;
+        case PROBE_OP_PROBE_POCKET:
+        case PROBE_OP_PROBE_RECT:
+            snprintf(title_buf, sizeof(title_buf), "Rectangle Probed");
+            snprintf(text_buf, sizeof(text_buf),
+                     "Centre: X %.4f  Y %.4f\nW: %.4f  H: %.4f\nZ: %.4f",
+                     (double)ac->result.rect.center.x,
+                     (double)ac->result.rect.center.y,
+                     (double)ac->result.rect.width,
+                     (double)ac->result.rect.height,
+                     (double)ac->result.rect.z_surface);
+            break;
+        case PROBE_OP_PROBE_BORE:
+        case PROBE_OP_PROBE_BOSS:
+            snprintf(title_buf, sizeof(title_buf), "Circle Probed");
+            snprintf(text_buf, sizeof(text_buf),
+                     "Centre: X %.4f  Y %.4f\nDiameter: %.4f mm\nZ: %.4f",
+                     (double)ac->result.circle.center.x,
+                     (double)ac->result.circle.center.y,
+                     (double)ac->result.circle.diameter,
+                     (double)ac->result.circle.z_surface);
+            break;
+        default:
+            snprintf(title_buf, sizeof(title_buf), "Done");
+            text_buf[0] = '\0';
+            break;
+        }
+    } else {
+        snprintf(title_buf, sizeof(title_buf),
+                 ac->status == PROBE_STATUS_CANCELLED ? "Cancelled" : "Error");
+        snprintf(text_buf, sizeof(text_buf), "%s",
+                 ac->error_msg[0] ? ac->error_msg : "Operation failed.");
+    }
+
+    lv_obj_t *mbox = lv_msgbox_create(lv_screen_active());
+    lv_msgbox_add_title(mbox, title_buf);
+    lv_msgbox_add_text(mbox, text_buf);
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "OK");
+    lv_obj_add_event_cb(ok, _result_ok_cb, LV_EVENT_CLICKED, mbox);
+    lv_obj_center(mbox);
+
+    free(ac);
+}
+
+/// Called by probe_api from (potentially) a non-LVGL task; posts to LVGL thread.
+static void _probe_on_status(probe_api_ctx_t *ctx, probe_status_t status,
+                               void *user_data)
+{
+    if (status != PROBE_STATUS_DONE &&
+        status != PROBE_STATUS_ERROR &&
+        status != PROBE_STATUS_CANCELLED) return;
+
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)user_data;
+    if (!priv) return;
+
+    wiz_async_result_t *ac = (wiz_async_result_t *)calloc(1, sizeof(*ac));
+    if (!ac) return;
+    ac->root   = priv->root;
+    ac->status = status;
+    ac->op     = ctx->op;
+    if (status == PROBE_STATUS_DONE) {
+        switch (ctx->op) {
+        case PROBE_OP_MOVE_TO:
+        case PROBE_OP_PROBE_Z:    ac->result.move   = ctx->result_move;   break;
+        case PROBE_OP_PROBE_POCKET:
+        case PROBE_OP_PROBE_RECT: ac->result.rect   = ctx->result_rect;   break;
+        case PROBE_OP_PROBE_BORE:
+        case PROBE_OP_PROBE_BOSS: ac->result.circle = ctx->result_circle; break;
+        default: break;
+        }
+    }
+    lv_async_call(_probe_done_async, ac);
+}
+
+static void _probe_on_error(probe_api_ctx_t *ctx, probe_status_t status,
+                             const char *message, void *user_data)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)user_data;
+    if (!priv) return;
+
+    wiz_async_result_t *ac = (wiz_async_result_t *)calloc(1, sizeof(*ac));
+    if (!ac) return;
+    ac->root   = priv->root;
+    ac->status = status;
+    ac->op     = ctx->op;
+    if (message) {
+        strncpy(ac->error_msg, message, sizeof(ac->error_msg) - 1);
+    }
+    lv_async_call(_probe_done_async, ac);
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — command callback forwarders
+// (wrap external cmd callbacks so user_data can stay as priv)
+// ---------------------------------------------------------------------------
+static void _fwd_move_to(probe_api_ctx_t *ctx, float x, float y,
+                          float safe_z, void *ud)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ud;
+    if (priv->probe_cmd_move_to)
+        priv->probe_cmd_move_to(ctx, x, y, safe_z, priv->probe_user_data);
+}
+static void _fwd_probe_z(probe_api_ctx_t *ctx, float max_depth, void *ud)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ud;
+    if (priv->probe_cmd_probe_z)
+        priv->probe_cmd_probe_z(ctx, max_depth, priv->probe_user_data);
+}
+static void _fwd_probe_rect(probe_api_ctx_t *ctx,
+                             float cx, float cy, float w, float h,
+                             float sz, float pz, bool inside, void *ud)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ud;
+    if (priv->probe_cmd_probe_rect)
+        priv->probe_cmd_probe_rect(ctx, cx, cy, w, h, sz, pz, inside,
+                                    priv->probe_user_data);
+}
+static void _fwd_probe_circle(probe_api_ctx_t *ctx,
+                               float cx, float cy, float dia,
+                               float sz, float pz, bool inside, void *ud)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ud;
+    if (priv->probe_cmd_probe_circle)
+        priv->probe_cmd_probe_circle(ctx, cx, cy, dia, sz, pz, inside,
+                                      priv->probe_user_data);
+}
+
+/// (Re-)initialise the internal probe_api_ctx_t after probe callbacks change.
+static void _wiz_reinit_probe_ctx(lv_cam_pos_priv_t *priv)
+{
+    probe_api_callbacks_t cbs;
+    memset(&cbs, 0, sizeof(cbs));
+    cbs.cmd_move_to      = _fwd_move_to;
+    cbs.cmd_probe_z      = _fwd_probe_z;
+    cbs.cmd_probe_rect   = _fwd_probe_rect;
+    cbs.cmd_probe_circle = _fwd_probe_circle;
+    cbs.on_status        = _probe_on_status;
+    cbs.on_error         = _probe_on_error;
+    cbs.user_data        = priv;   // priv is the single user_data; forwarders use probe_user_data
+    probe_api_init(&priv->probe_ctx, &cbs);
+    priv->probe_cbs_set = true;
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — step / op definitions
+// ---------------------------------------------------------------------------
+
+typedef enum { WIZ_SK_PT1=0, WIZ_SK_PT2=1, WIZ_SK_ZREF=2, WIZ_SK_RUN=3 } wiz_step_kind_t;
+typedef struct { wiz_step_kind_t kind; const char *label; } wiz_step_def_t;
+typedef struct { probe_op_t op; const char *symbol; const char *label; uint32_t color; } wiz_op_def_t;
+
+static const wiz_step_def_t k_steps_move[2] = {
+    {WIZ_SK_PT1,"Point"  }, {WIZ_SK_RUN,"Run"} };
+static const wiz_step_def_t k_steps_block[4] = {
+    {WIZ_SK_PT1,"Corner1"}, {WIZ_SK_PT2,"Corner2"},
+    {WIZ_SK_ZREF,"Z-Surf"}, {WIZ_SK_RUN,"Run"} };
+static const wiz_step_def_t k_steps_bore[4] = {
+    {WIZ_SK_PT1,"Center" }, {WIZ_SK_PT2,"Edge"   },
+    {WIZ_SK_ZREF,"Z-Surf"}, {WIZ_SK_RUN,"Run"} };
+
+static const wiz_step_def_t * const k_op_steps[] = {
+    [PROBE_OP_NONE]         = NULL,
+    [PROBE_OP_MOVE_TO]      = k_steps_move,
+    [PROBE_OP_PROBE_Z]      = k_steps_move,
+    [PROBE_OP_PROBE_POCKET] = k_steps_block,
+    [PROBE_OP_PROBE_RECT]   = k_steps_block,
+    [PROBE_OP_PROBE_BORE]   = k_steps_bore,
+    [PROBE_OP_PROBE_BOSS]   = k_steps_bore,
+};
+static const int k_op_step_counts[] = {
+    [PROBE_OP_NONE]         = 0,
+    [PROBE_OP_MOVE_TO]      = 2,
+    [PROBE_OP_PROBE_Z]      = 2,
+    [PROBE_OP_PROBE_POCKET] = 4,
+    [PROBE_OP_PROBE_RECT]   = 4,
+    [PROBE_OP_PROBE_BORE]   = 4,
+    [PROBE_OP_PROBE_BOSS]   = 4,
+};
+
+#define WIZ_OP_COUNT 5
+static const wiz_op_def_t k_op_defs[WIZ_OP_COUNT] = {
+    { PROBE_OP_MOVE_TO,      LV_SYMBOL_GPS,     "Move to", WIZ_BTN_MOVE_COLOR },
+    { PROBE_OP_PROBE_RECT,   LV_SYMBOL_EDIT,    "Block",   WIZ_BTN_RECT_COLOR },
+    { PROBE_OP_PROBE_POCKET, LV_SYMBOL_EDIT,    "Pocket",  WIZ_BTN_RECT_COLOR },
+    { PROBE_OP_PROBE_BOSS,   LV_SYMBOL_REFRESH, "Boss",    WIZ_BTN_CIRC_COLOR },
+    { PROBE_OP_PROBE_BORE,   LV_SYMBOL_REFRESH, "Bore",    WIZ_BTN_CIRC_COLOR },
+};
+
+// ---------------------------------------------------------------------------
+// Probe wizard — sidebar management
+// ---------------------------------------------------------------------------
+
+/// Style a button produced by lv_list_add_button() for the sidebar.
+static void _lst_style(lv_obj_t *btn, uint32_t bg_hex, bool enabled)
+{
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg_hex), 0);
+    lv_obj_set_style_bg_opa(btn,   enabled ? LV_OPA_COVER : LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg_hex), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn,   LV_OPA_70, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn,   WIZ_STEP_RADIUS, 0);
+    lv_obj_set_style_text_color(btn, lv_color_white(), 0);
+    /* Tint all child labels (icon + text children from lv_list_add_button) */
+    for (uint32_t ci = 0; ci < lv_obj_get_child_count(btn); ci++)
+        lv_obj_set_style_text_color(lv_obj_get_child(btn, ci), lv_color_white(), 0);
+    if (!enabled) lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    else          lv_obj_add_flag (btn, LV_OBJ_FLAG_CLICKABLE);
+}
+
+/// Rebuild the coord_panel to show currently collected point coordinates.
+static void sidebar_update_coords(lv_cam_pos_priv_t *priv)
+{
+    if (!priv->coord_panel || !lv_obj_is_valid(priv->coord_panel)) return;
+    lv_obj_clean(priv->coord_panel);
+
+    const lv_cam_pos_point_t *pts[3] = {
+        &priv->wiz_pt1, &priv->wiz_pt2, &priv->wiz_zref };
+    const bool set[3] = {
+        priv->wiz_pt1_set, priv->wiz_pt2_set, priv->wiz_zref_set };
+    const char *labels[3] = {"P1","P2","Z "};
+
+    bool any = false;
+    for (int i = 0; i < 3; i++) {
+        if (!set[i]) continue;
+        any = true;
+        char buf[36];
+
+        if (pts[i]->has_physical) {
+            snprintf(buf, sizeof(buf), "%s  X:%.2f  Y:%.2f",
+                     labels[i], (double)pts[i]->phys_x, (double)pts[i]->phys_y);
+        } else {
+            snprintf(buf, sizeof(buf), "%s  X:--  Y:--", labels[i]);
+        }
+        lv_obj_t *lbl = lv_label_create(priv->coord_panel);
+        lv_label_set_text(lbl, buf);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(lbl, LV_PCT(100));
+        lv_obj_set_style_text_color(lbl, lv_color_hex(WIZ_XY_COLOR), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
+    }
+    if (!any) {
+        lv_obj_t *hint = lv_label_create(priv->coord_panel);
+        lv_label_set_text(hint, "Tap camera to begin");
+        lv_obj_set_style_text_color(hint, lv_color_hex(WIZ_DIV_COLOR), 0);
+        lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(hint);
+    }
+}
+
+/// Op-selector button: activate wizard with chosen operation.
+static void _wiz_op_btn_cb(lv_event_t *e)
+{
+    sidebar_btn_ctx_t *ctx  = (sidebar_btn_ctx_t *)lv_event_get_user_data(e);
+    if (!ctx || !ctx->priv) return;
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ctx->priv;
+    if (priv->wiz_state != WIZ_OP_SELECT) return;
+
+    priv->wiz_op       = ctx->op;
+    priv->wiz_step_idx = 1;  // step 0 (pt1) already done
+    // If only 2 steps (pt1 + run), we jump straight to READY
+    priv->wiz_state = (k_op_step_counts[ctx->op] > 2) ? WIZ_COLLECTING : WIZ_READY;
+    sidebar_rebuild(priv);
+    sidebar_update_coords(priv);
+    lv_obj_invalidate(priv->overlay);
+    LOGD(TAG, "Op selected: %d state=%d", ctx->op, priv->wiz_state);
+}
+
+/// Step button: rewind the wizard to collect (or re-collect) an earlier point.
+static void _wiz_step_btn_cb(lv_event_t *e)
+{
+    sidebar_btn_ctx_t *ctx  = (sidebar_btn_ctx_t *)lv_event_get_user_data(e);
+    if (!ctx || !ctx->priv) return;
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)ctx->priv;
+    int k = ctx->step_idx;
+    if (k < 0 || k >= priv->wiz_step_idx) return;  // guard: only past steps
+
+    // Clear collected points from step k forward
+    if (k <= 0) { priv->wiz_pt1_set  = false; memset(&priv->wiz_pt1,  0, sizeof(priv->wiz_pt1));  }
+    if (k <= 1) { priv->wiz_pt2_set  = false; memset(&priv->wiz_pt2,  0, sizeof(priv->wiz_pt2));  }
+    if (k <= 2) { priv->wiz_zref_set = false; memset(&priv->wiz_zref, 0, sizeof(priv->wiz_zref)); }
+
+    priv->wiz_step_idx = k;
+    priv->wiz_state    = WIZ_COLLECTING;
+    sidebar_rebuild(priv);
+    sidebar_update_coords(priv);
+    lv_obj_invalidate(priv->overlay);
+}
+
+/// Reset/cancel button: clear everything and return to idle.
+static void _wiz_reset_btn_cb(lv_event_t *e)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    wiz_reset(priv);
+}
+
+/// Run button: launch the confirmation dialog.
+static void _wiz_run_btn_cb(lv_event_t *e)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    if (priv->wiz_state != WIZ_READY) return;
+    wiz_show_confirm(priv);
+}
+
+/// Create and return an lv_list that fills priv->step_panel.
+/// The list is dark-themed, no scrolling, LV_SIZE_CONTENT height.
+static lv_obj_t *_make_sidebar_list(lv_cam_pos_priv_t *priv)
+{
+    lv_obj_t *lst = lv_list_create(priv->step_panel);
+    lv_obj_set_size(lst, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_clear_flag(lst, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(lst,      lv_color_hex(0x111827), 0);
+    lv_obj_set_style_bg_opa(lst,        LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(lst,  0, 0);
+    lv_obj_set_style_pad_all(lst,       0, 0);
+    lv_obj_set_style_pad_row(lst,       WIZ_PANEL_PAD, 0);
+    return lst;
+}
+
+/// Style the header text row produced by lv_list_add_text().
+static void _lst_hdr_style(lv_obj_t *hdr)
+{
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(0x111827), 0);
+    lv_obj_set_style_bg_opa(hdr,   LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(WIZ_TXT_COLOR), 0);
+    lv_obj_set_style_text_font(hdr,  &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_align(hdr, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_ver(hdr,  2, 0);
+}
+
+/// Rebuild the step_panel content for the current wizard state.
+/// Called after any state change that affects the sidebar.
+static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
+{
+    if (!priv->step_panel || !lv_obj_is_valid(priv->step_panel)) return;
+    lv_obj_clean(priv->step_panel);
+
+    lv_obj_t *lst = _make_sidebar_list(priv);
+    int btn_idx = 0;  // index into sidebar_btn_ctxs[]
+
+    // --- Op selector (IDLE or OP_SELECT) -----------------------------------
+    if (priv->wiz_state == WIZ_IDLE || priv->wiz_state == WIZ_OP_SELECT) {
+        lv_obj_t *hdr = lv_list_add_text(lst,
+            priv->wiz_state == WIZ_IDLE ? "Tap camera" : "Pick operation:");
+        _lst_hdr_style(hdr);
+
+        bool enabled = (priv->wiz_state == WIZ_OP_SELECT);
+        for (int i = 0; i < WIZ_OP_COUNT && btn_idx < 8; i++) {
+            priv->sidebar_btn_ctxs[btn_idx].priv     = priv;
+            priv->sidebar_btn_ctxs[btn_idx].op       = k_op_defs[i].op;
+            priv->sidebar_btn_ctxs[btn_idx].step_idx = -1;
+
+            lv_obj_t *btn = lv_list_add_button(lst,
+                                k_op_defs[i].symbol, k_op_defs[i].label);
+            _lst_style(btn, k_op_defs[i].color, enabled);
+            if (enabled)
+                lv_obj_add_event_cb(btn, _wiz_op_btn_cb, LV_EVENT_CLICKED,
+                                    &priv->sidebar_btn_ctxs[btn_idx]);
+            btn_idx++;
+        }
+        return;
+    }
+
+    // --- Step list (COLLECTING / READY / CONFIRM / RUNNING) -----------------
+    if (priv->wiz_op == PROBE_OP_NONE) return;
+
+    int step_count               = k_op_step_counts[priv->wiz_op];
+    const wiz_step_def_t *steps  = k_op_steps[priv->wiz_op];
+    bool running = (priv->wiz_state == WIZ_RUNNING || priv->wiz_state == WIZ_CONFIRM);
+
+    // Op name header
+    const char *op_name = "Op";
+    for (int i = 0; i < WIZ_OP_COUNT; i++)
+        if (k_op_defs[i].op == priv->wiz_op) { op_name = k_op_defs[i].label; break; }
+
+    lv_obj_t *hdr = lv_list_add_text(lst, op_name);
+    _lst_hdr_style(hdr);
+
+    for (int i = 0; i < step_count && btn_idx < 8; i++) {
+        bool is_run = (steps[i].kind == WIZ_SK_RUN);
+        bool done   = (i < priv->wiz_step_idx);
+        bool active = (i == priv->wiz_step_idx);
+
+        uint32_t bg =
+            running ? (is_run ? WIZ_RUN_COLOR      : WIZ_STEP_DONE_COLOR) :
+            is_run  ? WIZ_RUN_COLOR                                        :
+            done    ? WIZ_STEP_DONE_COLOR                                   :
+            active  ? WIZ_STEP_CURR_COLOR                                   :
+                      WIZ_STEP_NEXT_COLOR;
+
+        bool tappable = !running && (done || (active && is_run));
+
+        priv->sidebar_btn_ctxs[btn_idx].priv     = priv;
+        priv->sidebar_btn_ctxs[btn_idx].op       = PROBE_OP_NONE;
+        priv->sidebar_btn_ctxs[btn_idx].step_idx = (int8_t)i;
+
+        const char *sym = (active && !is_run && !running) ? LV_SYMBOL_RIGHT : NULL;
+        lv_obj_t *btn = lv_list_add_button(lst, sym, steps[i].label);
+        _lst_style(btn, bg, tappable || (active && !is_run));
+
+        if (!running) {
+            if (is_run && active)
+                lv_obj_add_event_cb(btn, _wiz_run_btn_cb, LV_EVENT_CLICKED, priv);
+            else if (done)
+                lv_obj_add_event_cb(btn, _wiz_step_btn_cb, LV_EVENT_CLICKED,
+                                    &priv->sidebar_btn_ctxs[btn_idx]);
+        }
+        btn_idx++;
+    }
+
+    // Reset button at bottom (always shown while in step-list mode)
+    if (btn_idx < 8) {
+        lv_obj_t *rst = lv_list_add_button(lst, LV_SYMBOL_CLOSE, "Reset");
+        _lst_style(rst, WIZ_CANCEL_COLOR, !running);
+        if (!running)
+            lv_obj_add_event_cb(rst, _wiz_reset_btn_cb, LV_EVENT_CLICKED, priv);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — confirmation modal
+// ---------------------------------------------------------------------------
+
+static void _wiz_confirm_ok_cb(lv_event_t *e)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    lv_obj_t *mbox = priv->wiz_confirm_modal;
+    priv->wiz_confirm_modal = NULL;
+    /* Use async close: synchronous lv_msgbox_close() deletes the button's
+     * ancestor while the click event is still being dispatched, causing
+     * a use-after-free and FreeRTOS draw-thread deadlock. */
+    if (mbox && lv_obj_is_valid(mbox)) lv_msgbox_close_async(mbox);
+    wiz_execute(priv);
+}
+
+static void _wiz_confirm_cancel_cb(lv_event_t *e)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    lv_obj_t *mbox = priv->wiz_confirm_modal;
+    priv->wiz_confirm_modal = NULL;
+    if (mbox && lv_obj_is_valid(mbox)) lv_msgbox_close_async(mbox);
+    wiz_reset(priv);
+}
+
+static void wiz_show_confirm(lv_cam_pos_priv_t *priv)
+{
+    // Dismiss any prior modal
+    if (priv->wiz_confirm_modal && lv_obj_is_valid(priv->wiz_confirm_modal)) {
+        lv_msgbox_close(priv->wiz_confirm_modal);
+        priv->wiz_confirm_modal = NULL;
+    }
+
+    const probe_settings_t *cfg = probe_settings_get();
+    char title[64], text[256];
+
+    switch (priv->wiz_op) {
+    case PROBE_OP_MOVE_TO:
+        snprintf(title, sizeof(title), "Move to position");
+        snprintf(text,  sizeof(text),
+                 "X: %.3f  Y: %.3f\nRetract to Z = %.1f mm",
+                 (double)priv->wiz_pt1.phys_x,
+                 (double)priv->wiz_pt1.phys_y,
+                 (double)cfg->safe_z);
+        break;
+    case PROBE_OP_PROBE_Z:
+        snprintf(title, sizeof(title), "Probe Z surface");
+        snprintf(text,  sizeof(text),
+                 "Move to X: %.3f  Y: %.3f\nthen probe Z (max %.1f mm down)",
+                 (double)priv->wiz_pt1.phys_x,
+                 (double)priv->wiz_pt1.phys_y,
+                 (double)cfg->max_z_depth);
+        break;
+    case PROBE_OP_PROBE_POCKET:
+        snprintf(title, sizeof(title), "Probe pocket (inside rect)");
+        snprintf(text,  sizeof(text),
+                 "A: (%.3f, %.3f)\nB: (%.3f, %.3f)\nZ-ref: (%.3f, %.3f)",
+                 (double)priv->wiz_pt1.phys_x,  (double)priv->wiz_pt1.phys_y,
+                 (double)priv->wiz_pt2.phys_x,  (double)priv->wiz_pt2.phys_y,
+                 (double)priv->wiz_zref.phys_x, (double)priv->wiz_zref.phys_y);
+        break;
+    case PROBE_OP_PROBE_RECT:
+        snprintf(title, sizeof(title), "Probe rectangle (outside)");
+        snprintf(text,  sizeof(text),
+                 "A: (%.3f, %.3f)\nB: (%.3f, %.3f)\nZ-ref: (%.3f, %.3f)",
+                 (double)priv->wiz_pt1.phys_x,  (double)priv->wiz_pt1.phys_y,
+                 (double)priv->wiz_pt2.phys_x,  (double)priv->wiz_pt2.phys_y,
+                 (double)priv->wiz_zref.phys_x, (double)priv->wiz_zref.phys_y);
+        break;
+    case PROBE_OP_PROBE_BORE:
+        snprintf(title, sizeof(title), "Probe bore (inside circle)");
+        snprintf(text,  sizeof(text),
+                 "Centre: (%.3f, %.3f)\nEdge:   (%.3f, %.3f)\nZ-ref:  (%.3f, %.3f)",
+                 (double)priv->wiz_pt1.phys_x,  (double)priv->wiz_pt1.phys_y,
+                 (double)priv->wiz_pt2.phys_x,  (double)priv->wiz_pt2.phys_y,
+                 (double)priv->wiz_zref.phys_x, (double)priv->wiz_zref.phys_y);
+        break;
+    case PROBE_OP_PROBE_BOSS:
+        snprintf(title, sizeof(title), "Probe boss (outside circle)");
+        snprintf(text,  sizeof(text),
+                 "Centre: (%.3f, %.3f)\nEdge:   (%.3f, %.3f)\nZ-ref:  (%.3f, %.3f)",
+                 (double)priv->wiz_pt1.phys_x,  (double)priv->wiz_pt1.phys_y,
+                 (double)priv->wiz_pt2.phys_x,  (double)priv->wiz_pt2.phys_y,
+                 (double)priv->wiz_zref.phys_x, (double)priv->wiz_zref.phys_y);
+        break;
+    default:
+        return;
+    }
+
+    priv->wiz_state = WIZ_CONFIRM;
+
+    lv_obj_t *mbox = lv_msgbox_create(lv_screen_active());
+    lv_msgbox_add_title(mbox, title);
+    lv_msgbox_add_text(mbox, text);
+
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "Execute");
+    lv_obj_add_event_cb(ok,   _wiz_confirm_ok_cb,     LV_EVENT_CLICKED, priv);
+    lv_obj_t *ca = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(ca,   _wiz_confirm_cancel_cb, LV_EVENT_CLICKED, priv);
+
+    lv_obj_center(mbox);
+    priv->wiz_confirm_modal = mbox;
+    LOGD(TAG, "Wizard confirm modal shown for op=%d", priv->wiz_op);
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — execute selected operation
+// ---------------------------------------------------------------------------
+
+static void wiz_execute(lv_cam_pos_priv_t *priv)
+{
+    if (!priv->probe_cbs_set) {
+        LOGE(TAG, "Probe callbacks not set — cannot execute op=%d", priv->wiz_op);
+        wiz_reset(priv);
+        return;
+    }
+
+    const probe_settings_t *cfg = probe_settings_get();
+    bool ok = false;
+
+    // Re-register event callbacks (they were nulled by wiz_reset in cancel path,
+    // but here we are in the confirmed-execute path, so probe_ctx is fresh).
+    _wiz_reinit_probe_ctx(priv);
+
+    switch (priv->wiz_op) {
+    case PROBE_OP_MOVE_TO: {
+        probe_api_move_to_params_t p = {
+            .target_xy = { priv->wiz_pt1.phys_x, priv->wiz_pt1.phys_y },
+            .safe_z    = cfg->safe_z,
+        };
+        ok = probe_api_move_to(&priv->probe_ctx, &p);
+        break;
+    }
+    case PROBE_OP_PROBE_Z: {
+        probe_api_probe_z_params_t p = {
+            .target_xy = { priv->wiz_pt1.phys_x, priv->wiz_pt1.phys_y },
+            .safe_z    = cfg->safe_z,
+            .max_depth = cfg->max_z_depth,
+        };
+        ok = probe_api_probe_z(&priv->probe_ctx, &p);
+        break;
+    }
+    case PROBE_OP_PROBE_POCKET: {
+        probe_api_probe_pocket_params_t p = {
+            .corner_a       = { priv->wiz_pt1.phys_x,  priv->wiz_pt1.phys_y  },
+            .corner_b       = { priv->wiz_pt2.phys_x,  priv->wiz_pt2.phys_y  },
+            .z_probe_xy     = { priv->wiz_zref.phys_x, priv->wiz_zref.phys_y },
+            .safe_z         = cfg->safe_z,
+            .max_z_depth    = cfg->max_z_depth,
+            .xy_probe_depth = cfg->xy_probe_depth,
+        };
+        ok = probe_api_probe_pocket(&priv->probe_ctx, &p);
+        break;
+    }
+    case PROBE_OP_PROBE_RECT: {
+        probe_api_probe_rect_params_t p = {
+            .corner_a       = { priv->wiz_pt1.phys_x,  priv->wiz_pt1.phys_y  },
+            .corner_b       = { priv->wiz_pt2.phys_x,  priv->wiz_pt2.phys_y  },
+            .z_probe_xy     = { priv->wiz_zref.phys_x, priv->wiz_zref.phys_y },
+            .safe_z         = cfg->safe_z,
+            .max_z_depth    = cfg->max_z_depth,
+            .xy_probe_depth = cfg->xy_probe_depth,
+        };
+        ok = probe_api_probe_rect(&priv->probe_ctx, &p);
+        break;
+    }
+    case PROBE_OP_PROBE_BORE: {
+        probe_api_probe_bore_params_t p = {
+            .center         = { priv->wiz_pt1.phys_x,  priv->wiz_pt1.phys_y  },
+            .edge           = { priv->wiz_pt2.phys_x,  priv->wiz_pt2.phys_y  },
+            .z_probe_xy     = { priv->wiz_zref.phys_x, priv->wiz_zref.phys_y },
+            .safe_z         = cfg->safe_z,
+            .max_z_depth    = cfg->max_z_depth,
+            .xy_probe_depth = cfg->xy_probe_depth,
+        };
+        ok = probe_api_probe_bore(&priv->probe_ctx, &p);
+        break;
+    }
+    case PROBE_OP_PROBE_BOSS: {
+        probe_api_probe_boss_params_t p = {
+            .center         = { priv->wiz_pt1.phys_x,  priv->wiz_pt1.phys_y  },
+            .edge           = { priv->wiz_pt2.phys_x,  priv->wiz_pt2.phys_y  },
+            .z_probe_xy     = { priv->wiz_zref.phys_x, priv->wiz_zref.phys_y },
+            .safe_z         = cfg->safe_z,
+            .max_z_depth    = cfg->max_z_depth,
+            .xy_probe_depth = cfg->xy_probe_depth,
+        };
+        ok = probe_api_probe_boss(&priv->probe_ctx, &p);
+        break;
+    }
+    default:
+        wiz_reset(priv);
+        return;
+    }
+
+    if (!ok) {
+        LOGE(TAG, "probe_api returned false for op=%d (already running?)",
+             priv->wiz_op);
+        wiz_reset(priv);
+        return;
+    }
+
+    priv->wiz_state = WIZ_RUNNING;
+    sidebar_rebuild(priv);
+    lv_obj_invalidate(priv->overlay);
+    LOGI(TAG, "Wizard executing op=%d", priv->wiz_op);
+}
+
+// ---------------------------------------------------------------------------
+// Probe wizard — click handler
+// ---------------------------------------------------------------------------
+
+static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt)
+{
+    switch (priv->wiz_state) {
+
+    case WIZ_IDLE: {
+        // First tap → record pt1, advance to op-selection.
+        // If image coords are unavailable (camera offline / no grid) we store a
+        // zeroed point; the operation will use the machine's current position.
+        int16_t img_x = 0, img_y = 0;
+        bool has_grid = pixel_to_image_coords(priv, scr_pt, &img_x, &img_y);
+        priv->wiz_pt1      = has_grid ? make_point(priv, img_x, img_y)
+                                      : (lv_cam_pos_point_t){0};
+        priv->wiz_scr_tap  = scr_pt;
+        priv->wiz_pt1_set  = true;
+        priv->wiz_step_idx = 0;   // pt1 step just completed; op still pending
+        priv->wiz_state    = WIZ_OP_SELECT;
+        sidebar_rebuild(priv);
+        sidebar_update_coords(priv);
+        lv_obj_invalidate(priv->overlay);
+        break;
+    }
+
+    case WIZ_COLLECTING: {
+        // Determine what kind of point the current step expects.
+        const wiz_step_def_t *steps = k_op_steps[priv->wiz_op];
+        int n = k_op_step_counts[priv->wiz_op];
+        if (priv->wiz_step_idx < 0 || priv->wiz_step_idx >= n) break;
+
+        wiz_step_kind_t kind = steps[priv->wiz_step_idx].kind;
+        int16_t img_x, img_y;
+        if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
+
+        if (kind == WIZ_SK_PT2) {
+            priv->wiz_pt2     = make_point(priv, img_x, img_y);
+            priv->wiz_pt2_set = true;
+        } else if (kind == WIZ_SK_ZREF) {
+            priv->wiz_zref     = make_point(priv, img_x, img_y);
+            priv->wiz_zref_set = true;
+        }
+
+        priv->wiz_step_idx++;
+
+        // If the next step is RUN (last step in sequence), transition to READY.
+        if (priv->wiz_step_idx == n - 1)
+            priv->wiz_state = WIZ_READY;
+
+        sidebar_rebuild(priv);
+        sidebar_update_coords(priv);
+        lv_obj_invalidate(priv->overlay);
+        break;
+    }
+
+    case WIZ_READY: {
+        // Move the nearest collected point to the tapped position.
+        int16_t img_x, img_y;
+        if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
+
+        // Find the closest set point (in screen space).
+        int32_t best_d2 = INT32_MAX;
+        int     best_pt = -1;
+        typedef struct { lv_cam_pos_point_t *pt; bool set; } pt_entry_t;
+        pt_entry_t pts[3] = {
+            { &priv->wiz_pt1,  priv->wiz_pt1_set  },
+            { &priv->wiz_pt2,  priv->wiz_pt2_set  },
+            { &priv->wiz_zref, priv->wiz_zref_set },
+        };
+        for (int i = 0; i < 3; i++) {
+            if (!pts[i].set) continue;
+            int32_t sx, sy;
+            if (!image_to_screen_coords(priv, pts[i].pt->px_x, pts[i].pt->px_y, &sx, &sy))
+                continue;
+            int32_t dx = sx - scr_pt.x, dy = sy - scr_pt.y;
+            int32_t d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) { best_d2 = d2; best_pt = i; }
+        }
+
+        if (best_pt >= 0)
+            *pts[best_pt].pt = make_point(priv, img_x, img_y);
+
+        sidebar_update_coords(priv);
+        lv_obj_invalidate(priv->overlay);
+        break;
+    }
+
+    case WIZ_OP_SELECT:
+    case WIZ_CONFIRM:
+    case WIZ_RUNNING:
+        // UI is managed via sidebar/modal — ignore bare overlay taps.
+        break;
+
+    default:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Overlay draw event — renders shapes
 // ---------------------------------------------------------------------------
 
@@ -632,11 +1576,17 @@ static void overlay_draw_cb(lv_event_t *e)
 
     (void)obj;
 
-    // --- Axis-aligned physical grid (drawn first, below shape overlays) ---
+    // --- Axis-aligned physical grid (idealized, dashed straight lines). ---
+    // draw_calib_grid is intentionally NOT called here: each lv_draw_line call
+    // allocates a new lv_draw_task_t block from DRAM via lv_malloc_zeroed.  By
+    // the time overlay_draw_cb fires (deep inside lv_refr's child-render
+    // recursion), DRAM is already saturated with draw tasks from all other UI
+    // widgets.  LV_USE_ASSERT_MALLOC=0 in this build, so the NULL returned by
+    // lv_malloc_zeroed is NOT caught — execution continues to
+    // `new_task->area = *coords` and faults (LoadProhibited, reported as
+    // lv_draw_line.c:121 because lv_draw_add_task is inlined into the IRAM
+    // lv_draw_line, which has no debug line-info → ??:? at top of backtrace).
     draw_axis_grid(layer, priv);
-
-    // --- Calibration grid from camera (drawn over axis grid) ---
-    draw_calib_grid(layer, priv);
 
     // --- Point mode ---
     if (priv->mode == LV_CAM_POS_MODE_POINT && priv->point_valid) {
@@ -702,6 +1652,64 @@ static void overlay_draw_cb(lv_event_t *e)
             }
         }
     }
+
+    // --- Wizard overlay markers (mode == NONE, first tap onwards) ---
+    // Shown from WIZ_OP_SELECT upwards so the tap point is visible immediately.
+    // Symbol badges appear once the user picks an operation:
+    //   pt1 → GPS (Move), DOWNLOAD (ProbeZ), PLUS (corner/center of shapes)
+    //   pt2 → POWER (second corner / circumference point)
+    //   zref → DOWNLOAD
+    if (priv->mode == LV_CAM_POS_MODE_NONE && priv->wiz_state >= WIZ_OP_SELECT) {
+        bool is_rect_op = (priv->wiz_op == PROBE_OP_PROBE_POCKET ||
+                           priv->wiz_op == PROBE_OP_PROBE_RECT);
+        bool is_circ_op = (priv->wiz_op == PROBE_OP_PROBE_BORE  ||
+                           priv->wiz_op == PROBE_OP_PROBE_BOSS);
+
+        // pt1 symbol: none until op selected, then depends on op
+        const char *sym1 = NULL;
+        if (priv->wiz_state > WIZ_OP_SELECT) {
+            switch (priv->wiz_op) {
+                case PROBE_OP_MOVE_TO:  sym1 = LV_SYMBOL_GPS;      break;
+                case PROBE_OP_PROBE_Z:  sym1 = LV_SYMBOL_DOWNLOAD; break;
+                default:                sym1 = LV_SYMBOL_PLUS;     break; // corner/center
+            }
+        }
+
+        // Resolve pt1 to screen coords; fall back to the raw screen tap if
+        // image coords are unavailable (camera offline, no grid).
+        int32_t sx1 = priv->wiz_scr_tap.x, sy1 = priv->wiz_scr_tap.y;
+        {
+            int32_t mx, my;
+            if (image_to_screen_coords(priv,
+                    priv->wiz_pt1.px_x, priv->wiz_pt1.px_y, &mx, &my)) {
+                sx1 = mx; sy1 = my;
+            }
+        }
+        draw_wiz_marker(layer, sx1, sy1, sym1);
+
+        // pt2 marker + shape overlay (shown once wiz_pt2 is collected)
+        if (priv->wiz_pt2_set) {
+            int32_t sx2, sy2;
+            if (image_to_screen_coords(priv,
+                    priv->wiz_pt2.px_x, priv->wiz_pt2.px_y, &sx2, &sy2)) {
+                // Shape outline for context
+                if (is_rect_op)         draw_rectangle(layer, priv, sx1, sy1, sx2, sy2);
+                else if (is_circ_op)    draw_circle(layer, priv, sx1, sy1, sx2, sy2);
+                // Second point: POWER symbol (second corner / circumference)
+                draw_wiz_marker(layer, sx2, sy2, LV_SYMBOL_POWER);
+            }
+        }
+
+        // Z-ref marker: DOWNLOAD symbol
+        if (priv->wiz_zref_set &&
+                (priv->wiz_zref.px_x != 0 || priv->wiz_zref.px_y != 0)) {
+            int32_t szx, szy;
+            if (image_to_screen_coords(priv,
+                    priv->wiz_zref.px_x, priv->wiz_zref.px_y, &szx, &szy)) {
+                draw_wiz_marker(layer, szx, szy, LV_SYMBOL_DOWNLOAD);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -711,10 +1719,17 @@ static void overlay_draw_cb(lv_event_t *e)
 static void overlay_click_cb(lv_event_t *e)
 {
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
-    if (!priv || priv->mode == LV_CAM_POS_MODE_NONE) return;
+    if (!priv) return;
 
     lv_point_t scr_pt;
     lv_indev_get_point(lv_indev_active(), &scr_pt);
+
+    // When mode is NONE the overlay drives the probe wizard instead of
+    // the shape-selection logic below.
+    if (priv->mode == LV_CAM_POS_MODE_NONE) {
+        wiz_handle_click(priv, scr_pt);
+        return;
+    }
 
     int16_t img_x, img_y;
     if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
@@ -794,17 +1809,26 @@ static void overlay_click_cb(lv_event_t *e)
     }
 }
 
-/// While dragging / moving after first click, update the preview.
+/// While dragging / pressing anywhere on the overlay:
+/// • shape selection modes: update the rubber-band / preview for the 2nd point.
+/// • wizard READY state: move the nearest collected point in real-time (drag to adjust).
 static void overlay_press_cb(lv_event_t *e)
 {
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
     if (!priv) return;
-    if (priv->sel_state != SEL_FIRST_POINT) return;
-    if (priv->mode != LV_CAM_POS_MODE_RECTANGLE &&
-        priv->mode != LV_CAM_POS_MODE_CIRCLE) return;
 
     lv_point_t scr_pt;
     lv_indev_get_point(lv_indev_active(), &scr_pt);
+
+    // Wizard point-drag in READY state: move the nearest collected point
+    if (priv->mode == LV_CAM_POS_MODE_NONE && priv->wiz_state == WIZ_READY) {
+        wiz_handle_click(priv, scr_pt);
+        return;
+    }
+
+    if (priv->sel_state != SEL_FIRST_POINT) return;
+    if (priv->mode != LV_CAM_POS_MODE_RECTANGLE &&
+        priv->mode != LV_CAM_POS_MODE_CIRCLE) return;
 
     int16_t img_x, img_y;
     if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
@@ -820,25 +1844,31 @@ static void overlay_press_cb(lv_event_t *e)
 // ---------------------------------------------------------------------------
 
 // Async trampoline: runs on the LVGL task after lv_async_call() schedules it.
-// on_grid_update is called from the cam-receiver transport-RX FreeRTOS task,
-// so it must never touch LVGL objects directly.  Instead it queues this
-// function which runs safely inside lv_timer_handler().
-static void grid_update_async_cb(void *user_data)
-{
-    lv_obj_t *overlay = (lv_obj_t *)user_data;
-    if (lv_obj_is_valid(overlay)) {
-        lv_obj_invalidate(overlay);
-    }
-}
-
+// on_grid_update is called from the cam-receiver transport-RX FreeRTOS task.
+// It MUST NOT call any LVGL API (including lv_async_call / lv_timer_create):
+// LVGL has no OS-level mutex in this build, so mutating the timer linked list
+// from a non-LVGL task races with lv_task_handler() and causes a NULL-deref
+// crash inside lv_ll_ins_head (backtrace: lv_async.c:54).
+//
+// Safe pattern: set a volatile bool flag here; the widget-owned lv_timer
+// (grid_dirty_timer_cb, 50 ms, LVGL task) checks and clears it.
 static void on_grid_update(const cam_grid_info_t *grid, void *user_data)
 {
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)user_data;
-    if (!priv || !priv->overlay) return;
+    if (!priv) return;
     (void)grid;
-    // Post the invalidation to the LVGL thread — never call lv_obj_invalidate()
-    // directly from a FreeRTOS task; it is not thread-safe.
-    lv_async_call(grid_update_async_cb, priv->overlay);
+    priv->grid_dirty = true;   // atomic on Xtensa (single-byte aligned store)
+}
+
+static void grid_dirty_timer_cb(lv_timer_t *t)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_timer_get_user_data(t);
+    if (!priv) return;
+    if (!priv->grid_dirty) return;
+    priv->grid_dirty = false;
+    if (priv->overlay && lv_obj_is_valid(priv->overlay)) {
+        lv_obj_invalidate(priv->overlay);
+    }
 }
 
 static void on_delete(lv_event_t *e)
@@ -847,15 +1877,24 @@ static void on_delete(lv_event_t *e)
     lv_cam_pos_priv_t *priv = get_priv(obj);
     if (!priv) return;
 
+    // Stop the grid-dirty poll timer before deregistering the callback so
+    // there is no window where grid_dirty_timer_cb runs after priv is freed.
+    if (priv->grid_timer) {
+        lv_timer_delete(priv->grid_timer);
+        priv->grid_timer = NULL;
+    }
+
     // Deregister grid callback so the receiver won't call into freed memory.
     if (priv->receiver) {
         cam_receiver_remove_grid_cb(priv->receiver, on_grid_update);
     }
 
+    // Tear down wizard UI and cancel any running probe op.
+    // wiz_reset nulls the probe event callbacks before cancelling so that
+    // probe_api_cancel does not fire into already-freed memory.
+    wiz_reset(priv);
+
     // Remove all callbacks from the overlay that hold `priv` as raw user_data.
-    // LVGL fires LV_EVENT_DELETE on the root before deleting children; if any
-    // queued draw or input event fires on the overlay after we free `priv` it
-    // would dereference freed memory.  Removing the callbacks here prevents that.
     if (priv->overlay && lv_obj_is_valid(priv->overlay)) {
         lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_draw_cb,  priv);
         lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_click_cb, priv);
@@ -874,52 +1913,59 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
 {
     lv_cam_pos_priv_t *priv = calloc(1, sizeof(*priv));
     if (!priv) return NULL;
+    priv->wiz_drag_pt = -1;  // calloc gives 0, which must not default to "pt1"
 
-    // Root container
+    // Root container — fills parent, flex row: [cam_area | right_panel]
     lv_obj_t *root = lv_obj_create(parent);
     lv_obj_remove_style_all(root);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(root, 0, 0);
+    lv_obj_set_layout(root, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(root, LV_FLEX_FLOW_ROW);
     lv_obj_set_user_data(root, priv);
     lv_obj_add_event_cb(root, on_delete, LV_EVENT_DELETE, NULL);
-
     priv->root = root;
 
-    // Embedded camera stream widget, inset 5 px from the root edges.
-    // We achieve this by giving the root container a 5 px content-padding so
-    // that children sized at LV_PCT(100) are already inset.
-    lv_obj_set_style_pad_all(root, CAM_INSET_MARGIN_PX, 0);
+    // -----------------------------------------------------------------------
+    // Camera area — grows to fill all space left of the sidebar
+    // -----------------------------------------------------------------------
+    lv_obj_t *cam_area = lv_obj_create(root);
+    lv_obj_remove_style_all(cam_area);
+    lv_obj_set_flex_grow(cam_area, 1);
+    lv_obj_set_height(cam_area, LV_PCT(100));
+    lv_obj_clear_flag(cam_area, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(cam_area, CAM_INSET_MARGIN_PX, 0);
 
-    lv_obj_t *stream = lv_cam_stream_create(root);
+    // Camera stream — fills cam_area; inner image uses CONTAIN for aspect ratio
+    lv_obj_t *stream = lv_cam_stream_create(cam_area);
     lv_obj_set_size(stream, LV_PCT(100), LV_PCT(100));
     lv_obj_set_align(stream, LV_ALIGN_CENTER);
-
-    // 5 px rounded border in medium gray + 5 px inner padding
     lv_obj_set_style_border_width(stream, CAM_BORDER_WIDTH_PX, 0);
     lv_obj_set_style_border_color(stream, lv_color_hex(CAM_BORDER_COLOR), 0);
     lv_obj_set_style_border_opa(stream, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(stream, CAM_BORDER_RADIUS_PX, 0);
-    lv_obj_set_style_pad_all(stream, CAM_INNER_PAD_PX, 0);  // space between border and image
+    lv_obj_set_style_pad_all(stream, CAM_INNER_PAD_PX, 0);
+
+    lv_obj_t *img_obj = lv_cam_stream_get_image_obj(stream);
+    if (img_obj)
+        lv_image_set_inner_align(img_obj, LV_IMAGE_ALIGN_CONTAIN);
 
     priv->stream = stream;
 
-    // If the stream was auto-attached to the default receiver, propagate it
-    // so priv->receiver is consistent without requiring an explicit set_receiver
-    // call from the parent.
+    // Propagate default receiver if already auto-attached
     cam_receiver_t *default_recv = lv_cam_stream_get_receiver(stream);
-    if (default_recv) {
+    if (default_recv)
         priv->receiver = default_recv;
-    }
 
-    // Transparent overlay for touch events + custom draw
-    lv_obj_t *overlay = lv_obj_create(root);
+    // Transparent overlay — same size as cam_area, above stream for events/draw
+    lv_obj_t *overlay = lv_obj_create(cam_area);
     lv_obj_remove_style_all(overlay);
     lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
     lv_obj_set_align(overlay, LV_ALIGN_CENTER);
     lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
 
-    // Register draw + input events
     lv_obj_add_event_cb(overlay, overlay_draw_cb,
                          LV_EVENT_DRAW_MAIN_END, priv);
     lv_obj_add_event_cb(overlay, overlay_click_cb,
@@ -928,11 +1974,58 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
                          LV_EVENT_PRESSING, priv);
     priv->overlay = overlay;
 
-    // Register grid-update callback so the overlay redraws when new calibration
-    // data arrives (the overlay ptr must be set first, hence done here).
-    if (priv->receiver) {
+    // Register grid-update callback (overlay ptr must be set first)
+    if (priv->receiver)
         cam_receiver_add_grid_cb(priv->receiver, on_grid_update, priv);
+
+    // Create the grid-dirty poll timer.  Runs in the LVGL task every 50 ms;
+    // calls lv_obj_invalidate only when on_grid_update set the flag.
+    priv->grid_timer = lv_timer_create(grid_dirty_timer_cb, 50, priv);
+    if (priv->grid_timer) {
+        lv_timer_set_repeat_count(priv->grid_timer, -1); // repeat forever
     }
+
+    // -----------------------------------------------------------------------
+    // Right sidebar — fixed SIDEBAR_W width, flex column
+    // -----------------------------------------------------------------------
+    lv_obj_t *panel = lv_obj_create(root);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, SIDEBAR_W, LV_PCT(100));
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x111827), 0);  // slate-900
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(panel, WIZ_PANEL_PAD, 0);
+    lv_obj_set_style_pad_row(panel, WIZ_PANEL_PAD, 0);
+    lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    priv->right_panel = panel;
+
+    // Coordinate readout panel (auto-height, content-driven)
+    lv_obj_t *coord_panel = lv_obj_create(panel);
+    lv_obj_remove_style_all(coord_panel);
+    lv_obj_set_size(coord_panel, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_clear_flag(coord_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(coord_panel, 0, 0);
+    lv_obj_set_style_pad_row(coord_panel, 2, 0);
+    lv_obj_set_layout(coord_panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(coord_panel, LV_FLEX_FLOW_COLUMN);
+    priv->coord_panel = coord_panel;
+
+    // Step list panel (takes remaining vertical space)
+    lv_obj_t *step_panel = lv_obj_create(panel);
+    lv_obj_remove_style_all(step_panel);
+    lv_obj_set_flex_grow(step_panel, 1);
+    lv_obj_set_width(step_panel, LV_PCT(100));
+    lv_obj_clear_flag(step_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(step_panel, 0, 0);
+    lv_obj_set_style_pad_row(step_panel, WIZ_PANEL_PAD, 0);
+    lv_obj_set_layout(step_panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(step_panel, LV_FLEX_FLOW_COLUMN);
+    priv->step_panel = step_panel;
+
+    // Initial sidebar render
+    sidebar_rebuild(priv);
+    sidebar_update_coords(priv);
 
     LOGI(TAG, "cam_positioning widget created");
     return root;
@@ -1118,4 +2211,42 @@ bool lv_cam_positioning_has_grid(lv_obj_t *obj)
     lv_cam_pos_priv_t *priv = get_priv(obj);
     if (!priv || !priv->receiver) return false;
     return cam_receiver_get_grid(priv->receiver) != NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Public probe wizard API
+// ---------------------------------------------------------------------------
+
+probe_api_ctx_t *lv_cam_positioning_get_probe_ctx(lv_obj_t *obj)
+{
+    lv_cam_pos_priv_t *priv = get_priv(obj);
+    if (!priv) return NULL;
+    return &priv->probe_ctx;
+}
+
+void lv_cam_positioning_set_probe_cbs(lv_obj_t *obj,
+                                       const probe_api_callbacks_t *cbs)
+{
+    lv_cam_pos_priv_t *priv = get_priv(obj);
+    if (!priv || !cbs) return;
+
+    // Store the caller's command callbacks and user_data.
+    priv->probe_cmd_move_to      = cbs->cmd_move_to;
+    priv->probe_cmd_probe_z      = cbs->cmd_probe_z;
+    priv->probe_cmd_probe_rect   = cbs->cmd_probe_rect;
+    priv->probe_cmd_probe_circle = cbs->cmd_probe_circle;
+    priv->probe_user_data        = cbs->user_data;
+
+    // Initialise the internal probe_api context with forwarding wrappers for
+    // the cmd callbacks and widget-internal wrappers for the event callbacks.
+    _wiz_reinit_probe_ctx(priv);
+
+    LOGI(TAG, "Probe callbacks registered");
+}
+
+void lv_cam_positioning_wizard_cancel(lv_obj_t *obj)
+{
+    lv_cam_pos_priv_t *priv = get_priv(obj);
+    if (!priv) return;
+    wiz_reset(priv);
 }

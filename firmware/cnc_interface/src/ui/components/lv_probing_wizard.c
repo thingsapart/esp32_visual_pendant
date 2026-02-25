@@ -1305,9 +1305,11 @@ static void draw_event_cb(lv_event_t * e) {
     lv_obj_get_coords(obj, &canvas_area);
 
     int32_t min_dim = LV_MIN(lv_area_get_width(&canvas_area), lv_area_get_height(&canvas_area));
+    if(min_dim <= 0) return;   // Widget not yet laid out — skip, avoids degenerate draw areas
     int32_t pad = (min_dim * (PROBING_WIZARD_DASH_LINE_LEN_PCT + PROBING_WIZARD_PAD_PCT)) / 100;
     lv_area_t draw_area = canvas_area;
     lv_area_increase(&draw_area, -pad, -pad);
+    if(lv_area_get_width(&draw_area) <= 0 || lv_area_get_height(&draw_area) <= 0) return;
 
     switch(wiz->mode) {
         case LV_PROBING_WIZARD_MODE_RECTANGLE:
@@ -1338,6 +1340,7 @@ static void draw_rectangle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, 
 
     lv_area_t square_area;
     lv_coord_t side = LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area));
+    if(side < 10) return;   // Too small: border_width=2 + radius=5 needs side>=10 to avoid inverted inner_area crash in lv_draw_sw_border
     lv_area_set_width(&square_area, side);
     lv_area_set_height(&square_area, side);
     lv_area_align(draw_area, &square_area, LV_ALIGN_CENTER, 0, 0);
@@ -1463,6 +1466,7 @@ static void draw_circle_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
     lv_point_t center = {(draw_area->x1 + draw_area->x2) / 2, (draw_area->y1 + draw_area->y2) / 2};
     arc_dsc.center = center;
     int32_t radius = (LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area))) / 2;
+    if(radius <= 0) return;   // Degenerate draw_area
     arc_dsc.radius = radius;
     arc_dsc.start_angle = 0; arc_dsc.end_angle = 360;
     lv_draw_arc(layer, &arc_dsc);
@@ -1589,6 +1593,8 @@ static void draw_corner_probe(lv_probing_wizard_t * wiz, lv_layer_t * layer, lv_
     uint32_t mask = wiz->current_action ? wiz->current_action->highlight_mask : HIGHLIGHT_NONE;
 
     if (wiz->corner_type == LV_PROBING_CORNER_NONE) {
+        lv_coord_t min_dim = LV_MIN(lv_area_get_width(draw_area), lv_area_get_height(draw_area));
+        if(min_dim < 10) return;  // Too small: border_width=2 + radius=5 needs min_dim>=10 to avoid inverted inner_area crash
         lv_draw_rect_dsc_t rect_dsc;
         lv_draw_rect_dsc_init(&rect_dsc);
         rect_dsc.border_width = 2;

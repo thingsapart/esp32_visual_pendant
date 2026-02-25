@@ -2011,7 +2011,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_t* cam_positioning_224 = lv_cam_positioning_create(obj_223);
 
     obj_registry_add("cam_positioning", cam_positioning_224);
-    lv_cam_positioning_set_mode(cam_positioning_224, LV_CAM_POS_MODE_POINT);
+    lv_cam_positioning_set_mode(cam_positioning_224, LV_CAM_POS_MODE_NONE);
 
 
 

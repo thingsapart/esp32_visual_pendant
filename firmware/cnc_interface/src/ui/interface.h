@@ -7,6 +7,7 @@ extern "C" {
 
 #include "lvgl.h"
 #include "machine/machine_interface.h"
+#include "probe/mos_probe_handler.h"
 
 #ifdef DWC_MACHINE_MODE
 #include "config/dwc_settings.h"
@@ -41,6 +42,8 @@ typedef struct {
   lv_obj_t *current_msgbox;  // Currently shown RRF machine modal, or NULL.
   char log_message_buf[256];  // Latest log/error message pending display as toast.
   lv_obj_t *toast_bar;        // Currently visible toast bar, or NULL.
+
+  mos_probe_handler_t probe_handler;  ///< MOS back-end for cam_positioning probe wizard
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow

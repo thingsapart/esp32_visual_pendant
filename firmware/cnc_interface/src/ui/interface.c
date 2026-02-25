@@ -347,6 +347,15 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   lv_obj_t* cam_pos = obj_registry_get("cam_positioning");
   if (cam_pos) {
       lv_cam_positioning_set_machine(cam_pos, machine);
+
+      // Wire the MOS probe back-end so the wizard's Execute button can issue
+      // G-code and receive results via the machine log / state callbacks.
+      mos_probe_handler_init(&interface->probe_handler, machine);
+      probe_api_callbacks_t probe_cbs;
+      memset(&probe_cbs, 0, sizeof(probe_cbs));
+      probe_api_ctx_t *probe_ctx = lv_cam_positioning_get_probe_ctx(cam_pos);
+      mos_probe_handler_fill_callbacks(&interface->probe_handler, probe_ctx, &probe_cbs);
+      lv_cam_positioning_set_probe_cbs(cam_pos, &probe_cbs);
   }
 
   // Set initial overlay text (will be overwritten by data bindings as state arrives)
@@ -405,6 +414,11 @@ void interface_tick(interface_t *interface) {
           "machine.overlay_status_text",
           (binding_value_t){.type = BINDING_TYPE_STRING,
                             .as.s_val = "Connecting to hub..."});
+      // Status label also reflects the disconnected state.
+      data_binding_notify_state_changed(
+          "machine.status_text",
+          (binding_value_t){.type = BINDING_TYPE_STRING,
+                            .as.s_val = "-xxx-"});
     }
     data_binding_notify_state_changed(
         "machine.connection_status",
@@ -430,11 +444,16 @@ void interface_tick(interface_t *interface) {
           "machine.connection_status",
           (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = true});
     }
+    // Show "-xxx-" when the machine controller is unreachable (WAITING_FOR_MACHINE
+    // or any state where the connection is considered down), so the label is never
+    // misleadingly stuck at "IDLE" while actually disconnected.
+    bool machine_reachable = machine->is_connected(machine) && !waiting;
     data_binding_notify_state_changed(
         "machine.status_text",
         (binding_value_t){.type = BINDING_TYPE_STRING,
-                          .as.s_val =
-                              machine_status_to_string(machine->machine_status)});
+                          .as.s_val = machine_reachable
+                              ? machine_status_to_string(machine->machine_status)
+                              : "-xxx-"});
     data_binding_notify_state_changed(
         "machine.program_is_running",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
