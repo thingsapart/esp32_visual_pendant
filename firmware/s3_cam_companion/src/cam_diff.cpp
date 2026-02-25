@@ -38,11 +38,7 @@ struct cam_diff_ctx {
     bool      invert_colors;
 
     // Temporary tile pixel buffer for JPEG encoding (internal RAM for speed).
-    // Stored as BGR888 (3 bytes/pixel) so that fmt2jpg(RGB888) receives
-    // properly bit-replicated channels — avoids the chroma asymmetry caused
-    // by the simple left-shift truncation in fmt2jpg(RGB565) that makes
-    // near-white highlights encode as (248,252,248) instead of (255,255,255).
-    uint8_t *tile_buf;
+    uint16_t *tile_buf;
 
     cam_diff_result_t result;
 };
@@ -75,13 +71,12 @@ cam_diff_t cam_diff_create(uint16_t img_w, uint16_t img_h,
     memset(ctx->prev_frame, 0, frame_bytes);
 
     // Tile buffer for extracting tile pixels (internal RAM preferred for speed).
-    // 3 bytes per pixel: BGR888 for fmt2jpg(PIXFORMAT_RGB888).
-    size_t tile_bytes = (size_t)ctx->tile_w * ctx->tile_h * 3;
-    ctx->tile_buf = (uint8_t *)heap_caps_malloc(tile_bytes,
+    size_t tile_bytes = (size_t)ctx->tile_w * ctx->tile_h * sizeof(uint16_t);
+    ctx->tile_buf = (uint16_t *)heap_caps_malloc(tile_bytes,
                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!ctx->tile_buf) {
         // Fallback to PSRAM.
-        ctx->tile_buf = (uint8_t *)heap_caps_malloc(tile_bytes, MALLOC_CAP_SPIRAM);
+        ctx->tile_buf = (uint16_t *)heap_caps_malloc(tile_bytes, MALLOC_CAP_SPIRAM);
     }
     if (!ctx->tile_buf) {
         ESP_LOGE(TAG, "Failed to alloc tile_buf");
@@ -198,62 +193,29 @@ static uint32_t tile_mean_sad(const uint16_t *cur, const uint16_t *prev,
 }
 
 // ---------------------------------------------------------------------------
-// Extract tile pixels into a contiguous BGR888 buffer for JPEG encoding.
-//
-// Converts big-endian RGB565 (camera DMA byte order) to BGR888 using the
-// SAME left-shift expansion that fmt2jpg(PIXFORMAT_RGB565) uses:
-//   R8 = R5 << 3   (0-padded to 8 bits)
-//   G8 = G6 << 2   (0-padded to 8 bits)
-//   B8 = B5 << 3   (0-padded to 8 bits)
-//
-// This is intentional.  The alternative (bit-replication) breaks the
-// natural colour neutrality of the sensor output: for a neutral highlight
-// where the sensor outputs R5=31, G6=62, B5=31 (the natural "equal"
-// relationship R5<<3 == G6<<2 == 248) bit-replication would give
-// R8=B8=255 vs G8=251, introducing a purple tinge.  Left-shifting
-// preserves R8 == G8 == B8 == 248 — neutral and consistent with what
-// fmt2jpg(RGB565) and the non-enhanced direct-copy path produce.
-//
-// fmt2jpg(PIXFORMAT_RGB888) reverses the byte triplet internally (BGR→RGB)
-// before passing to the JPEG encoder, so we write in BGR order here.
-//
-// If swap_rb is true the R and B slots are exchanged (for BGR-order displays).
-// If invert_colors is true each channel byte is XOR-inverted.
-// swap_bytes is not applicable to the RGB888 path.
+// Extract tile pixels into a contiguous buffer for JPEG encoding.
+// If swap_rb is true, swaps R↔B channels so the output is BGR565 (for LCDs
+// that expect BGR channel order, e.g. ST7796 on WT32-SC01-Plus).
+// If swap_bytes is true, each 16-bit RGB565 word is byte-swapped
+// (useful when the pendant uses LV_COLOR_16_SWAP).
 // ---------------------------------------------------------------------------
 static void extract_tile(const uint16_t *frame, uint16_t img_w,
                          uint16_t tx, uint16_t ty,
                          uint16_t tw, uint16_t th,
-                         uint8_t *out, bool swap_rb, bool invert_colors) {
+                         uint16_t *out, bool swap_rb, bool swap_bytes,
+                         bool invert_colors) {
     for (uint16_t y = 0; y < th; y++) {
         const uint16_t *src = &frame[(ty + y) * img_w + tx];
-        uint8_t        *dst = &out[(size_t)y * tw * 3];
-        for (uint16_t x = 0; x < tw; x++) {
-            // Camera frame is big-endian RGB565; bswap16 gives standard layout.
-            uint16_t px = bswap16(src[x]);
-            uint8_t r5 = (px >> 11) & 0x1Fu;
-            uint8_t g6 = (px >>  5) & 0x3Fu;
-            uint8_t b5 = (px      ) & 0x1Fu;
-
-            // Left-shift expansion (matches fmt2jpg(PIXFORMAT_RGB565) behaviour).
-            // Preserves R5<<3 == G6<<2 == B5<<3 channel neutrality for grays.
-            uint8_t r8 = (uint8_t)(r5 << 3);
-            uint8_t g8 = (uint8_t)(g6 << 2);
-            uint8_t b8 = (uint8_t)(b5 << 3);
-
-            if (invert_colors) { r8 ^= 0xFFu; g8 ^= 0xFFu; b8 ^= 0xFFu; }
-
-            // fmt2jpg(PIXFORMAT_RGB888) expects BGR byte order.
-            if (!swap_rb) {
-                dst[x * 3    ] = b8;
-                dst[x * 3 + 1] = g8;
-                dst[x * 3 + 2] = r8;
-            } else {
-                // Swap R↔B so the JPEG encodes R in the B channel and vice-versa,
-                // matching BGR-order displays after decode.
-                dst[x * 3    ] = r8;
-                dst[x * 3 + 1] = g8;
-                dst[x * 3 + 2] = b8;
+        uint16_t       *dst = &out[y * tw];
+        if (!swap_rb && !swap_bytes && !invert_colors) {
+            memcpy(dst, src, tw * sizeof(uint16_t));
+        } else {
+            for (uint16_t x = 0; x < tw; x++) {
+                uint16_t px = src[x];
+                if (swap_bytes)    px = bswap16(px);
+                if (swap_rb)       px = swap_rb565(px);
+                if (invert_colors) px ^= 0xFFFFu;
+                dst[x] = px;
             }
         }
     }
@@ -309,31 +271,21 @@ void cam_diff_process(cam_diff_t ctx,
                 r->changed_bitmap[tile_idx / 8] |= (1 << (tile_idx % 8));
                 r->num_changed++;
 
-                // Extract tile pixels as BGR888 with proper bit-replication.
+                // Extract tile pixels (with optional R↔B swap for BGR displays).
                 extract_tile(warped_frame, img_w, px, py,
                              ctx->tile_w, ctx->tile_h, ctx->tile_buf,
-                             ctx->swap_rb, ctx->invert_colors);
+                             ctx->swap_rb, ctx->swap_bytes, ctx->invert_colors);
 
                 // JPEG-encode the tile.
                 uint8_t *jpeg_out = NULL;
                 size_t   jpeg_len = 0;
-                bool ok = fmt2jpg(ctx->tile_buf,
-                                  ctx->tile_w * ctx->tile_h * 3,
+                bool ok = fmt2jpg((uint8_t *)ctx->tile_buf,
+                                  ctx->tile_w * ctx->tile_h * 2,
                                   ctx->tile_w, ctx->tile_h,
-                                  PIXFORMAT_RGB888,
+                                  PIXFORMAT_RGB565,
                                   jpeg_quality,
                                   &jpeg_out, &jpeg_len);
                 if (ok && jpeg_out) {
-                    // Move the JPEG buffer from internal RAM to PSRAM to avoid
-                    // exhausting the limited ~120 KB internal heap when all 48
-                    // tiles are encoded in a keyframe.
-                    uint8_t *psram_buf = (uint8_t *)heap_caps_malloc(
-                        jpeg_len, MALLOC_CAP_SPIRAM);
-                    if (psram_buf) {
-                        memcpy(psram_buf, jpeg_out, jpeg_len);
-                        free(jpeg_out);
-                        jpeg_out = psram_buf;
-                    }
                     r->tiles[tile_idx].jpeg_buf = jpeg_out;
                     r->tiles[tile_idx].jpeg_len = jpeg_len;
                 } else {
@@ -393,7 +345,7 @@ void cam_diff_free_tiles(cam_diff_t ctx) {
     if (!ctx) return;
     for (int i = 0; i < CAM_MAX_TILES; i++) {
         if (ctx->result.tiles[i].jpeg_buf) {
-            heap_caps_free(ctx->result.tiles[i].jpeg_buf);
+            free(ctx->result.tiles[i].jpeg_buf);
             ctx->result.tiles[i].jpeg_buf = NULL;
             ctx->result.tiles[i].jpeg_len = 0;
         }

@@ -152,6 +152,8 @@ void cam_settings_erase(void) {
 // Apply incoming config command
 // ---------------------------------------------------------------------------
 void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
+    // NB: Disabling applying for now, just swap_*.
+
     // NOTE: resolution, output_width, output_height are companion-local
     // settings configured exclusively via the web UI.  The pendant's config
     // command must NOT overwrite them — they control capture hardware and the
@@ -159,6 +161,7 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     // s->resolution is left untouched.
     // s->output_width / output_height are left untouched.
 
+    /*
     s->jpeg_quality      = cfg->jpeg_quality;
     s->tiles_x           = cfg->tiles_x;
     s->tiles_y           = cfg->tiles_y;
@@ -170,12 +173,15 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     s->agc_enable        = cfg->agc_enable;
     s->aec_value         = cfg->aec_value;
     s->agc_gain          = cfg->agc_gain;
+    */
+
     s->swap_rb           = cfg->swap_rb ? true : false;
     s->swap_bytes        = cfg->swap_bytes ? true : false;
     s->invert_colors     = cfg->invert_colors ? true : false;
 
     // Extended sensor settings — only apply if the sender included them
     // (backward-compatible: old senders send a shorter SET_CONFIG).
+    /*
     s->ae_level          = cfg->ae_level;
     s->gainceiling       = cfg->gainceiling;
     s->bpc               = cfg->bpc;
@@ -190,8 +196,10 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     s->denoise           = cfg->denoise;
     s->aec2              = cfg->aec2;
     s->wb_mode           = cfg->wb_mode;
+    */
 
     // Copy homography if non-zero
+    /*
     bool all_zero = true;
     for (int i = 0; i < 9; i++) {
         if (cfg->homography[i] != 0.0f) { all_zero = false; break; }
@@ -199,6 +207,7 @@ void cam_settings_apply_config(cam_settings_t *s, const cam_config_cmd_t *cfg) {
     if (!all_zero) {
         memcpy(s->homography, cfg->homography, sizeof(s->homography));
     }
+    */
 
     cam_settings_save(s);
     ESP_LOGI(TAG, "Config applied: res=%d q=%d tiles=%dx%d",

@@ -424,7 +424,7 @@ void setup() {
   BaseType_t create_res = xTaskCreateWithCaps(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 13,    // Reduced stack size for runtime loop
+      1024 * 12,    // Reduced stack size for runtime loop
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
@@ -434,7 +434,7 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 13,    // Reduced stack size for runtime loop
+      1024 * 12,    // Reduced stack size for runtime loop
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the

@@ -74,7 +74,7 @@
 #ifdef ESP32P4_HW
     #define LV_MEM_SIZE (105 * 1024U)          /**< [bytes] */
 #else
-    #define LV_MEM_SIZE (105 * 1024U)          /**< [bytes] */
+    #define LV_MEM_SIZE (100 * 1024U)          /**< [bytes] */
 #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
@@ -546,8 +546,14 @@
 /** Attribute to mark large constant arrays, for example for font bitmaps */
 #define LV_ATTRIBUTE_LARGE_CONST
 
-/** Compiler prefix for a large array declaration in RAM */
+/** Compiler prefix for a large array declaration in RAM.
+ *  On ESP32 targets with PSRAM, redirect the LVGL builtin memory pool to
+ *  PSRAM so it doesn't eat ~105 KB of scarce internal SRAM. */
+#ifdef BOARD_HAS_PSRAM
+#define LV_ATTRIBUTE_LARGE_RAM_ARRAY __attribute__((section(".ext_ram.bss")))
+#else
 #define LV_ATTRIBUTE_LARGE_RAM_ARRAY
+#endif
 
 /** Place performance critical functions into a faster memory (e.g RAM) */
 #ifdef ESP32P4_HW

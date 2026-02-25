@@ -163,7 +163,7 @@ bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
     freertos_task_prio = DEFAULT_TASK_PRIORITY;
   }
   if (freertos_task_stack_size < 0) {
-    freertos_task_prio = DEFAULT_TASK_STACK_SIZE;
+    freertos_task_stack_size = DEFAULT_TASK_STACK_SIZE;
   }
   // TODO: consider moving to higher up so it is clear the queue is owned by
   // higher level processing
@@ -171,8 +171,8 @@ bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
 #else
   gcode_queue_init(queue);
 #endif
-  if (queue == NULL) {
-    LOGE(TAG, "Failed to create serial send notification queue!");
+  if (*queue == NULL) {
+    LOGE(TAG, "Failed to create serial send notification queue (OOM?)!");
     return false;
   }
 
@@ -213,8 +213,9 @@ bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
 #ifdef ESP32_HW
     // TODO: if we move up the create we would want to move up the delete too so
     // we then manage it fully there.
-    vQueueDelete(*queue);         // Clean up queue
-    *machine_task_handle = NULL;  // Ensure handle is NULL on failure
+    if (*queue != NULL) vQueueDelete(*queue);  // Clean up queue (guard: xQueueCreate may have failed)
+    *queue = NULL;
+    if (machine_task_handle != NULL) *machine_task_handle = NULL;  // Ensure handle is NULL on failure
 #endif
     free(args);
     return false;

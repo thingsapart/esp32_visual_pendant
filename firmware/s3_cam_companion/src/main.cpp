@@ -92,6 +92,7 @@ static uint32_t g_last_frame_ms   = 0;
 static uint32_t g_frames_sent     = 0;
 static uint32_t g_fps_timer_ms    = 0;
 static uint8_t  g_fps_x10        = 0;
+static bool     g_logged_color_probe = false;
 
 // Streaming session state:
 //   g_streaming = true  → pendant has sent STREAM_START; accept REQUEST_FRAME
@@ -109,6 +110,46 @@ static bool g_boot_hold_armed = false;  // true while a hold is being measured
 // ISR for BOOT button (minimal work)
 static void IRAM_ATTR boot_isr(void) {
     g_boot_pressed = true;
+}
+
+static inline uint16_t bswap16_local(uint16_t v) {
+    return (uint16_t)((v << 8) | (v >> 8));
+}
+
+static inline void rgb565_unpack(uint16_t px, bool bswap,
+                                 uint8_t *r5, uint8_t *g6, uint8_t *b5) {
+    if (bswap) px = bswap16_local(px);
+    *r5 = (uint8_t)((px >> 11) & 0x1F);
+    *g6 = (uint8_t)((px >> 5) & 0x3F);
+    *b5 = (uint8_t)(px & 0x1F);
+}
+
+static void log_resize_color_probe(const uint16_t *raw, uint16_t raw_w, uint16_t raw_h,
+                                   const uint16_t *warped, uint16_t out_w, uint16_t out_h) {
+    if (!raw || !warped || raw_w == 0 || raw_h == 0 || out_w == 0 || out_h == 0) return;
+
+    uint16_t raw_x = raw_w / 2;
+    uint16_t raw_y = raw_h / 2;
+    uint16_t out_x = out_w / 2;
+    uint16_t out_y = out_h / 2;
+
+    uint16_t raw_px = raw[(size_t)raw_y * raw_w + raw_x];
+    uint16_t out_px = warped[(size_t)out_y * out_w + out_x];
+
+    uint8_t rr_n, rg_n, rb_n, rr_s, rg_s, rb_s;
+    uint8_t or_n, og_n, ob_n, or_s, og_s, ob_s;
+    rgb565_unpack(raw_px, false, &rr_n, &rg_n, &rb_n);
+    rgb565_unpack(raw_px, true,  &rr_s, &rg_s, &rb_s);
+    rgb565_unpack(out_px, false, &or_n, &og_n, &ob_n);
+    rgb565_unpack(out_px, true,  &or_s, &og_s, &ob_s);
+
+    ESP_LOGI(TAG,
+             "Resize color probe RAW(%ux%u)[%u,%u]=0x%04X native=%u/%u/%u bswap=%u/%u/%u | "
+             "OUT(%ux%u)[%u,%u]=0x%04X native=%u/%u/%u bswap=%u/%u/%u",
+             raw_w, raw_h, raw_x, raw_y, raw_px,
+             rr_n, rg_n, rb_n, rr_s, rg_s, rb_s,
+             out_w, out_h, out_x, out_y, out_px,
+             or_n, og_n, ob_n, or_s, og_s, ob_s);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,8 +242,44 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
     }
     case CAM_CMD_SET_CONFIG: {
         if (len >= (int)sizeof(cam_config_cmd_t)) {
+            bool old_swap_rb       = g_settings.swap_rb;
+            bool old_swap_bytes    = g_settings.swap_bytes;
+            bool old_invert_colors = g_settings.invert_colors;
+            uint8_t old_tiles_x    = g_settings.tiles_x;
+            uint8_t old_tiles_y    = g_settings.tiles_y;
+            uint8_t old_jpeg_q    = g_settings.jpeg_quality;
+            float old_h[9];
+            memcpy(old_h, g_settings.homography, sizeof(old_h));
+
             const cam_config_cmd_t *cfg = (const cam_config_cmd_t *)data;
+
             cam_settings_apply_config(&g_settings, cfg);
+
+            bool color_space_changed =
+                (old_swap_rb != g_settings.swap_rb) ||
+                (old_swap_bytes != g_settings.swap_bytes) ||
+                (old_invert_colors != g_settings.invert_colors);
+            bool tile_grid_changed =
+                (old_tiles_x != g_settings.tiles_x) ||
+                (old_tiles_y != g_settings.tiles_y);
+            bool homography_changed =
+                (memcmp(old_h, g_settings.homography, sizeof(old_h)) != 0);
+
+            // Any config change should be followed by a keyframe so the pendant
+            // does not blend DIFF tiles from old/new colour spaces.
+            g_force_keyframe = true;
+
+            // Rebuild pipeline in the main loop for changes that alter transform
+            // or diff geometry/state (must not allocate from WiFi callback).
+            if (color_space_changed || tile_grid_changed || homography_changed) {
+                g_pipeline_dirty = true;
+                ESP_LOGI(TAG,
+                         "Config affects pipeline (color=%d grid=%d H=%d) -> rebuild + keyframe",
+                         color_space_changed,
+                         tile_grid_changed,
+                         homography_changed);
+            }
+
             // Propagate swap_rb to the diff engine immediately.
             if (g_diff) cam_diff_set_swap_rb(g_diff, g_settings.swap_rb);
             // Propagate byte-swap preference as well.
@@ -252,6 +329,7 @@ static bool allocate_buffers(uint16_t out_w, uint16_t out_h) {
 
 // Forward declaration (defined below).
 static bool setup_pipeline(void);
+static bool setup_pipeline_with_capture_dims(uint16_t cap_w, uint16_t cap_h);
 
 // ---------------------------------------------------------------------------
 // Resolution fallback ladder (highest to lowest).
@@ -322,6 +400,18 @@ static bool setup_pipeline(void) {
     uint16_t cap_w, cap_h;
     cam_capture_get_resolution(&cap_w, &cap_h);
 
+    return setup_pipeline_with_capture_dims(cap_w, cap_h);
+}
+
+static bool setup_pipeline_with_capture_dims(uint16_t cap_w, uint16_t cap_h) {
+    if (cap_w == 0 || cap_h == 0) {
+        ESP_LOGE(TAG, "Invalid capture dimensions for pipeline: %ux%u", cap_w, cap_h);
+        return false;
+    }
+
+    // Re-emit one-shot resize probe after every pipeline rebuild.
+    g_logged_color_probe = false;
+
     // Determine output dimensions.  Priority:
     //  1. Last client handshake with a non-"don't-care" resolution
     //  2. WebUI default (output_width/output_height > 0)
@@ -381,10 +471,33 @@ static void process_frame(void) {
         return;
     }
 
+    uint16_t src_w = 0, src_h = 0;
+    cam_transform_get_src_size(g_transform, &src_w, &src_h);
+    if (fw != src_w || fh != src_h) {
+        ESP_LOGW(TAG,
+                 "Capture size mismatch: transform src=%ux%u, camera fb=%ux%u; rebuilding pipeline",
+                 src_w, src_h, fw, fh);
+        if (!setup_pipeline_with_capture_dims(fw, fh)) {
+            ESP_LOGE(TAG, "Pipeline rebuild failed for actual capture size %ux%u", fw, fh);
+            cam_capture_release();
+            cam_led_set(CAM_LED_ERROR);
+            return;
+        }
+        g_force_keyframe = true;
+    }
+
     // 2. Apply perspective transform (capture → output dimensions).
+    uint16_t out_w = 0, out_h = 0;
+    cam_transform_get_size(g_transform, &out_w, &out_h);
     cam_transform_apply(g_transform,
                         (const uint16_t *)raw_buf,
                         g_warped_buf);
+
+    if (!g_logged_color_probe && (fw != out_w || fh != out_h)) {
+        log_resize_color_probe((const uint16_t *)raw_buf, fw, fh,
+                               g_warped_buf, out_w, out_h);
+        g_logged_color_probe = true;
+    }
 
     // Tick the AEC re-lock cycle now that the frame has been consumed.
     // If the frame was taken during a re-sample unlock we force a keyframe
@@ -424,8 +537,8 @@ static void process_frame(void) {
 
     // 3. Diff against previous frame.
     //    Use the output (warped) dimensions, NOT the capture dimensions.
-    uint16_t diff_w, diff_h;
-    cam_transform_get_size(g_transform, &diff_w, &diff_h);
+    uint16_t diff_w = out_w;
+    uint16_t diff_h = out_h;
 
     bool keyframe = g_force_keyframe || ae_resampled ||
                     (g_settings.keyframe_interval > 0 &&
@@ -511,6 +624,14 @@ void setup() {
     Serial.flush();
     ESP_LOGI(TAG, "=== CNC Camera Companion ===");
     ESP_LOGI(TAG, "Build: " __DATE__ " " __TIME__);
+    ESP_LOGI(TAG,
+             "Enh flags: ENH=%d BIL=%d AREA=%d TEMP=%d RGB888=%d AB=%d",
+             CAM_ENHANCED_PROCESSING,
+             CAM_ENH_BILINEAR,
+             CAM_ENH_AREA_AVERAGE,
+             CAM_ENH_TEMPORAL_DENOISE,
+             CAM_ENH_RGB888_CAPTURE,
+             CAM_ENH_ANTI_BANDING);
 
     // Reduce global verbosity to INFO to avoid low-level HAL spam (RMT, etc.)
     esp_log_level_set("*", ESP_LOG_INFO);
