@@ -234,26 +234,33 @@ void cam_settings_compute_homography(cam_settings_t *s,
         return;
     }
 
-    // Use pixel coordinates in [0..w-1], [0..h-1].
-    const float max_x = (float)(img_w - 1);
-    const float max_y = (float)(img_h - 1);
+    // src: use capture pixel coordinates in [0..src_w-1], [0..src_h-1]
+    const float src_max_x = (float)(img_w - 1);
+    const float src_max_y = (float)(img_h - 1);
+
+    // Destination (output) dimensions: prefer explicit output size in
+    // settings if set, otherwise fall back to the provided img_w/img_h.
+    uint16_t dst_w = (s->output_width > 0) ? s->output_width : img_w;
+    uint16_t dst_h = (s->output_height > 0) ? s->output_height : img_h;
+    const float dst_max_x = (float)(dst_w - 1);
+    const float dst_max_y = (float)(dst_h - 1);
 
     // Source points (pixel coordinates from normalized calibration corners).
     float sx[4], sy[4];
     for (int i = 0; i < 4; i++) {
-        sx[i] = s->cal_src[i][0] * max_x;
-        sy[i] = s->cal_src[i][1] * max_y;
+        sx[i] = s->cal_src[i][0] * src_max_x;
+        sy[i] = s->cal_src[i][1] * src_max_y;
     }
 
     // Destination corners — the selected work-area corners land at the
-    // margin-inset positions so that image_margin_* pixels of extra image
-    // appear around the work area in the output.
+    // margin-inset positions in the output image so that image_margin_*
+    // pixels of extra image appear around the work area.
     const float ml = (float)s->image_margin_left;
     const float mt = (float)s->image_margin_top;
     const float mr = (float)s->image_margin_right;
     const float mb = (float)s->image_margin_bottom;
-    const float dx[4] = {ml, max_x - mr, max_x - mr, ml};        // TL, TR, BR, BL
-    const float dy[4] = {mt, mt, max_y - mb, max_y - mb};
+    const float dx[4] = {ml, dst_max_x - mr, dst_max_x - mr, ml};        // TL, TR, BR, BL
+    const float dy[4] = {mt, mt, dst_max_y - mb, dst_max_y - mb};
 
     // Solve A * h = b for h=[h0..h7], with h8 fixed to 1.
     // Equations:

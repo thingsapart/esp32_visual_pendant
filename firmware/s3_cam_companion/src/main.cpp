@@ -505,32 +505,16 @@ static void process_frame(void) {
     bool ae_resampled = cam_capture_tick_ae();
     cam_capture_release();
 
-    // 2b. Temporal denoise — EMA blend with previous warped frame.
+    // 2b. Temporal denoise — implementation removed (stubbed).
+    // The previous enhanced temporal-denoise implementation was cleared
+    // to allow a clean reimplementation. Keep the previous-frame buffer
+    // updated so future work can reuse it without changing configs.
 #if CAM_ENH_TEMPORAL_DENOISE
-    uint16_t out_w, out_h;
-    cam_transform_get_size(g_transform, &out_w, &out_h);
-    size_t px_count = (size_t)out_w * out_h;
-
-    if (g_temporal_prev && g_temporal_valid) {
-        // Blend: out[i] = (ALPHA * cur + INV * prev) >> 8
-        // Camera outputs big-endian RGB565; byte-swap for correct channel
-        // decomposition on the little-endian ESP32, then swap back.
-        for (size_t i = 0; i < px_count; i++) {
-            uint16_t cur  = __builtin_bswap16(g_warped_buf[i]);
-            uint16_t prev = __builtin_bswap16(g_temporal_prev[i]);
-            // Decompose RGB565
-            uint32_t cr = (cur >> 11) & 0x1F, cg = (cur >> 5) & 0x3F, cb = cur & 0x1F;
-            uint32_t pr = (prev >> 11) & 0x1F, pg = (prev >> 5) & 0x3F, pb = prev & 0x1F;
-            uint32_t r = (TEMPORAL_ALPHA * cr + TEMPORAL_INV * pr + 128u) >> 8;
-            uint32_t g = (TEMPORAL_ALPHA * cg + TEMPORAL_INV * pg + 128u) >> 8;
-            uint32_t b = (TEMPORAL_ALPHA * cb + TEMPORAL_INV * pb + 128u) >> 8;
-            g_warped_buf[i] = __builtin_bswap16((uint16_t)((r << 11) | (g << 5) | b));
-        }
-    }
-
-    // Store current frame as the new "previous".
+    uint16_t _out_w_tmp = 0, _out_h_tmp = 0;
+    cam_transform_get_size(g_transform, &_out_w_tmp, &_out_h_tmp);
+    size_t _px_count_tmp = (size_t)_out_w_tmp * _out_h_tmp;
     if (g_temporal_prev) {
-        memcpy(g_temporal_prev, g_warped_buf, px_count * sizeof(uint16_t));
+        memcpy(g_temporal_prev, g_warped_buf, _px_count_tmp * sizeof(uint16_t));
         g_temporal_valid = true;
     }
 #endif // CAM_ENH_TEMPORAL_DENOISE

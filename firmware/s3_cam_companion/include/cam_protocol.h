@@ -287,7 +287,7 @@ typedef struct __attribute__((packed)) {
 #if CAM_ENHANCED_PROCESSING
 // Sub-feature toggles:  set to 0 individually to disable a specific feature.
 #ifndef CAM_ENH_BILINEAR
-#define CAM_ENH_BILINEAR             0  // Fixed-point bilinear interp in homography LUT
+#define CAM_ENH_BILINEAR             1  // Fixed-point bilinear interp in homography LUT
 #endif
 #ifndef CAM_ENH_AREA_AVERAGE
 #define CAM_ENH_AREA_AVERAGE         0  // Adaptive area averaging for minification
