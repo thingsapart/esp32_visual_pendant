@@ -277,6 +277,7 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
             if (g_diff) cam_diff_set_swap_rb(g_diff, g_settings.swap_rb);
             // Propagate byte-swap preference as well.
             if (g_diff) cam_diff_set_swap_bytes(g_diff, g_settings.swap_bytes);
+            if (g_transform) cam_transform_set_swap_bytes(g_transform, g_settings.swap_bytes);
             // Propagate colour-inversion preference.
             if (g_diff) cam_diff_set_invert_colors(g_diff, g_settings.invert_colors);
             ESP_LOGI(TAG, "Config received: swap_rb=%d swap_bytes=%d invert=%d -> applied swap_rb=%d swap_bytes=%d invert=%d",
@@ -424,6 +425,10 @@ static bool setup_pipeline_with_capture_dims(uint16_t cap_w, uint16_t cap_h) {
     if (g_transform) cam_transform_destroy(g_transform);
     g_transform = cam_transform_create(cap_w, cap_h, out_w, out_h, g_settings.homography);
     if (!g_transform) return false;
+
+    // Inform the transform about byte order so bilinear interpolation
+    // extracts RGB565 channels correctly (no effect on nearest-neighbour).
+    cam_transform_set_swap_bytes(g_transform, g_settings.swap_bytes);
 
     // Diff engine works on the output (warped) frame dimensions.
     if (g_diff) cam_diff_destroy(g_diff);

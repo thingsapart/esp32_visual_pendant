@@ -55,6 +55,13 @@ void cam_transform_get_src_size(cam_transform_t ctx,
 // Check if the transform is an identity (no-op).
 bool cam_transform_is_identity(cam_transform_t ctx);
 
+// Inform the transform about the byte order of source pixels.
+// When swap_bytes is true, source RGB565 pixels are byte-swapped relative to
+// the standard layout (RRRRRGGG_GGGBBBBB).  This only matters for bilinear
+// interpolation which must extract individual R/G/B channels; nearest-neighbour
+// simply copies raw pixel values and is byte-order agnostic.
+void cam_transform_set_swap_bytes(cam_transform_t ctx, bool swap);
+
 #ifdef __cplusplus
 }
 #endif
