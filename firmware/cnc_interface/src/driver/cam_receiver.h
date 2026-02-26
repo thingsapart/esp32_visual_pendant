@@ -228,6 +228,31 @@ bool cam_receiver_is_streaming(cam_receiver_t *self);
 /// Returns true if a reconnect beacon was transmitted this tick.
 bool cam_receiver_tick(cam_receiver_t *self);
 
+// ---------------------------------------------------------------------------
+// Zoom / crop control
+// ---------------------------------------------------------------------------
+
+/// Ask the camera to crop its output to the window centred at (center_x,
+/// center_y) with the given pixel dimensions (in the CURRENT output frame).
+/// The camera will compose a crop+scale homography with the stored calibration
+/// homography, rebuild its transform LUT, force a keyframe, and re-send the
+/// calibration grid adjusted for the zoom view.
+///
+/// This function also sends a force-keyframe request so the caller does not
+/// need to do so separately.
+///
+/// Returns 0 on success, negative on send failure.
+int cam_receiver_set_zoom(cam_receiver_t *self,
+                           uint16_t center_x, uint16_t center_y,
+                           uint16_t zoom_w,   uint16_t zoom_h);
+
+/// Restore the normal (un-zoomed) camera output.
+/// The camera will revert to the original calibration homography, rebuild
+/// the LUT, force a keyframe, and re-send the original calibration grid.
+///
+/// Returns 0 on success, negative on send failure.
+int cam_receiver_clear_zoom(cam_receiver_t *self);
+
 #ifdef __cplusplus
 }
 #endif

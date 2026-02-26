@@ -94,6 +94,19 @@ static bool     g_streaming        = false;
 static uint32_t g_last_request_ms  = 0;  // millis() of last received frame request
 static uint8_t  g_grid_send_count  = 0;  // # of grid packets sent this session; reset on STREAM_START
 
+// ---------------------------------------------------------------------------
+// Zoom / crop state
+// ---------------------------------------------------------------------------
+// When active, the pipeline composes an extra crop+scale homography Z on top
+// of the stored calibration H.  The combined H_zoom = Z · H is used to build
+// the transform LUT, and the grid-map sent to the pendant is recalculated to
+// reflect the new pixel ↔ physical mapping in the zoomed view.
+static bool     g_zoom_active  = false;
+static uint16_t g_zoom_cx      = 0;  // zoom window centre X (output pixels)
+static uint16_t g_zoom_cy      = 0;  // zoom window centre Y (output pixels)
+static uint16_t g_zoom_w       = 0;  // zoom window width   (output pixels)
+static uint16_t g_zoom_h       = 0;  // zoom window height  (output pixels)
+
 // BOOT button press flag (set from ISR on FALLING edge)
 static volatile bool g_boot_pressed = false;
 static uint32_t g_last_boot_press_ms = 0;  // millis() when debounced press started
@@ -165,6 +178,16 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         g_last_request_ms = millis();
         g_grid_send_count = 0;  // New session — resend grid to pendant
 
+        // A new session starts from a clean state: any zoom the previous
+        // pendant requested must be discarded so the camera streams the
+        // full (unzoomed) view until the new pendant asks again.
+        if (g_zoom_active) {
+            g_zoom_active = false;
+            g_zoom_cx = g_zoom_cy = g_zoom_w = g_zoom_h = 0;
+            g_pipeline_dirty = true;
+            ESP_LOGI(TAG, "Zoom cleared on new session");
+        }
+
         // Parse desired output resolution from extended STREAM_START (v2).
         if (len >= (int)sizeof(cam_stream_start_cmd_t)) {
             const cam_stream_start_cmd_t *cmd = (const cam_stream_start_cmd_t *)data;
@@ -210,6 +233,14 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
         // Force a keyframe when streaming resumes so the pendant gets a clean
         // baseline (avoids displaying stale diff fragments from prior session).
         g_force_keyframe  = true;
+        // Clear any active zoom so the pipeline is in a clean state for the
+        // next connection (the next STREAM_START will rebuild if needed).
+        if (g_zoom_active) {
+            g_zoom_active = false;
+            g_zoom_cx = g_zoom_cy = g_zoom_w = g_zoom_h = 0;
+            g_pipeline_dirty = true;
+            ESP_LOGI(TAG, "Zoom cleared on STREAM_STOP");
+        }
         cam_led_set(CAM_LED_NO_PEER);
         break;
     }
@@ -289,6 +320,46 @@ static void on_espnow_recv(const uint8_t *mac, const uint8_t *data, int len) {
     case CAM_CMD_FORCE_KEYFRAME:
         g_force_keyframe = true;
         break;
+    case CAM_CMD_SET_ZOOM: {
+        if (len >= (int)sizeof(cam_set_zoom_cmd_t)) {
+            const cam_set_zoom_cmd_t *cmd = (const cam_set_zoom_cmd_t *)data;
+            // Validate against current output dimensions
+            uint16_t cur_w = 0, cur_h = 0;
+            if (g_transform) cam_transform_get_size(g_transform, &cur_w, &cur_h);
+            if (cur_w == 0 || cur_h == 0) {
+                // Pipeline not yet ready — use webui defaults as fallback
+                cur_w = (g_settings.output_width  > 0) ? g_settings.output_width  : 320;
+                cur_h = (g_settings.output_height > 0) ? g_settings.output_height : 240;
+            }
+            uint16_t zw = cmd->zoom_w, zh = cmd->zoom_h;
+            if (zw > 0 && zh > 0 && zw <= cur_w && zh <= cur_h) {
+                g_zoom_active  = true;
+                g_zoom_cx      = cmd->center_x;
+                g_zoom_cy      = cmd->center_y;
+                g_zoom_w       = zw;
+                g_zoom_h       = zh;
+                g_force_keyframe  = true;
+                g_pipeline_dirty  = true;
+                g_grid_send_count = 0;  // re-send grid with zoom-adjusted positions
+                ESP_LOGI(TAG, "ZOOM activated: cx=%u cy=%u w=%u h=%u",
+                         g_zoom_cx, g_zoom_cy, g_zoom_w, g_zoom_h);
+            } else {
+                ESP_LOGW(TAG, "SET_ZOOM: ignored (zw=%u zh=%u cur=%ux%u)",
+                         zw, zh, cur_w, cur_h);
+            }
+        }
+        break;
+    }
+    case CAM_CMD_CLEAR_ZOOM: {
+        if (g_zoom_active) {
+            g_zoom_active     = false;
+            g_force_keyframe  = true;
+            g_pipeline_dirty  = true;
+            g_grid_send_count = 0;  // re-send original grid
+            ESP_LOGI(TAG, "ZOOM cleared");
+        }
+        break;
+    }
     default:
         // Ignore hub CNC messages (0x00–0x1F) — they're not for us.
         break;
@@ -317,6 +388,77 @@ static bool allocate_buffers(uint16_t out_w, uint16_t out_h) {
 // Forward declaration (defined below).
 static bool setup_pipeline(void);
 static bool setup_pipeline_with_capture_dims(uint16_t cap_w, uint16_t cap_h);
+
+// ---------------------------------------------------------------------------
+// Calibration helper: map an output-space pixel to physical coordinates.
+//
+// Uses the current calibration grid (g_settings.grid_points[]) with the
+// same bilinear interpolation logic that the pendant uses in grid_interpolate.
+// img_w / img_h should be the CURRENT output dimensions (including the effect
+// of any zoom, i.e. the img_w/img_h the LUT produces — NOT the capture dims).
+// Returns true and fills *phys_x / *phys_y on success.
+// ---------------------------------------------------------------------------
+static bool cam_calib_pixel_to_phys(float px, float py,
+                                     uint16_t img_w, uint16_t img_h,
+                                     float *phys_x, float *phys_y)
+{
+    if (!g_settings.grid_calibrated) return false;
+    const uint16_t nx  = g_settings.grid_nx;
+    const uint16_t ny  = g_settings.grid_ny;
+    const uint16_t pts = g_settings.grid_points_count;
+    if (nx < 2 || ny < 2 || pts < 4 || img_w == 0 || img_h == 0) return false;
+    if (g_settings.surface_width <= 0.0f || g_settings.surface_height <= 0.0f) return false;
+
+    const uint16_t il = g_settings.image_margin_left;
+    const uint16_t it = g_settings.image_margin_top;
+    const uint16_t ir = g_settings.image_margin_right;
+    const uint16_t ib = g_settings.image_margin_bottom;
+    float aw = (float)((int)img_w - (int)il - (int)ir);
+    float ah = (float)((int)img_h - (int)it - (int)ib);
+    if (aw < 1.0f) { aw = (float)img_w; }  // degenerate / no insets
+    if (ah < 1.0f) { ah = (float)img_h; }
+
+    // Pixel → fractional grid cell (mirrors pendant's grid_interpolate).
+    float gx = ((float)px - (float)il) * (float)(nx - 1) / aw;
+    float gy = ((float)py - (float)it) * (float)(ny - 1) / ah;
+
+    int ix = (int)gx; if (ix < 0) ix = 0; if (ix >= nx - 1) ix = nx - 2;
+    int iy = (int)gy; if (iy < 0) iy = 0; if (iy >= ny - 1) iy = ny - 2;
+    float fx = gx - (float)ix; if (fx < 0.0f) fx = 0.0f; if (fx > 1.0f) fx = 1.0f;
+    float fy = gy - (float)iy; if (fy < 0.0f) fy = 0.0f; if (fy > 1.0f) fy = 1.0f;
+
+    // Physical coordinates of each grid node = ideal + perturbation from pixel offset.
+    // Pixel-per-cell is used to convert the int8 pixel deviation to mm.
+    float px_per_cell_x = aw / (float)(nx - 1);
+    float px_per_cell_y = ah / (float)(ny - 1);
+
+    auto node_phys = [&](int ci, int ri, float *out_x, float *out_y) {
+        float phys_xi = (float)ci * g_settings.surface_width  / (float)(nx - 1);
+        float phys_yi = (float)ri * g_settings.surface_height / (float)(ny - 1);
+        uint16_t idx = (uint16_t)ri * nx + (uint16_t)ci;
+        if (idx < pts && img_w > 1 && img_h > 1) {
+            // actual pixel pos vs ideal pixel pos → physical perturbation
+            float act_px = g_settings.grid_points[idx][0] * (float)(img_w - 1);
+            float act_py = g_settings.grid_points[idx][1] * (float)(img_h - 1);
+            float idc_px = (float)il + (float)ci / (float)(nx - 1) * (aw - 1.0f);
+            float idc_py = (float)it + (float)ri / (float)(ny - 1) * (ah - 1.0f);
+            phys_xi += (act_px - idc_px) * g_settings.grid_dx / px_per_cell_x;
+            phys_yi += (act_py - idc_py) * g_settings.grid_dy / px_per_cell_y;
+        }
+        *out_x = phys_xi;
+        *out_y = phys_yi;
+    };
+
+    float x00, y00, x10, y10, x01, y01, x11, y11;
+    node_phys(ix,   iy,   &x00, &y00);
+    node_phys(ix+1, iy,   &x10, &y10);
+    node_phys(ix,   iy+1, &x01, &y01);
+    node_phys(ix+1, iy+1, &x11, &y11);
+
+    *phys_x = x00*(1-fx)*(1-fy) + x10*fx*(1-fy) + x01*(1-fx)*fy + x11*fx*fy;
+    *phys_y = y00*(1-fx)*(1-fy) + y10*fx*(1-fy) + y01*(1-fx)*fy + y11*fx*fy;
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Resolution fallback ladder (highest to lowest).
@@ -422,8 +564,43 @@ static bool setup_pipeline_with_capture_dims(uint16_t cap_w, uint16_t cap_h) {
              g_settings.swap_rb, g_settings.swap_bytes, g_settings.jpeg_quality);
 
     // Homography LUT — maps from output pixels directly to capture pixels.
+    // When zoom is active, compose Z·H_base (forward: cap → zoomed-out)
+    // where Z maps the original output pixel space to the zoom-cropped space.
+    //   Z: x_zoom = (x_orig - left) * out_w / zoom_w
+    //   In matrix form (row-major, maps src→dst, i.e. cap→zoom-out):
+    //     H_zoom = Z · H_base
+    float effective_h[9];
+    if (g_zoom_active && g_zoom_w > 0 && g_zoom_h > 0
+        && g_zoom_w <= out_w && g_zoom_h <= out_h) {
+        float left = (float)g_zoom_cx - (float)g_zoom_w * 0.5f;
+        float top  = (float)g_zoom_cy - (float)g_zoom_h * 0.5f;
+        float sx   = (float)out_w / (float)g_zoom_w;
+        float sy   = (float)out_h / (float)g_zoom_h;
+        // Z = [ sx,   0,  -left*sx ]
+        //     [  0,  sy,  -top*sy  ]
+        //     [  0,   0,     1     ]
+        // H_zoom = Z * H_base  (both row-major)
+        const float *H = g_settings.homography;
+        for (int r = 0; r < 3; r++) {
+            float zr0 = (r == 0) ? sx : (r == 2) ? 0.0f : 0.0f;
+            float zr1 = (r == 1) ? sy : (r == 2) ? 0.0f : 0.0f;
+            float zr2 = (r == 0) ? (-left * sx)
+                      : (r == 1) ? (-top  * sy)
+                      :              1.0f;
+            for (int c = 0; c < 3; c++) {
+                effective_h[r * 3 + c] = zr0 * H[0 * 3 + c]
+                                       + zr1 * H[1 * 3 + c]
+                                       + zr2 * H[2 * 3 + c];
+            }
+        }
+        ESP_LOGI(TAG, "Zoom homography composed: cx=%u cy=%u w=%u h=%u sx=%.3f sy=%.3f",
+                 g_zoom_cx, g_zoom_cy, g_zoom_w, g_zoom_h, sx, sy);
+    } else {
+        memcpy(effective_h, g_settings.homography, sizeof(effective_h));
+    }
+
     if (g_transform) cam_transform_destroy(g_transform);
-    g_transform = cam_transform_create(cap_w, cap_h, out_w, out_h, g_settings.homography);
+    g_transform = cam_transform_create(cap_w, cap_h, out_w, out_h, effective_h);
     if (!g_transform) return false;
 
     // Inform the transform about byte order so bilinear interpolation
@@ -781,6 +958,13 @@ void loop() {
             g_streaming       = false;
             g_frame_requested = false;
             g_force_keyframe  = true;  // Next session starts with keyframe
+            // Also clear any active zoom so the pipeline resets cleanly.
+            if (g_zoom_active) {
+                g_zoom_active = false;
+                g_zoom_cx = g_zoom_cy = g_zoom_w = g_zoom_h = 0;
+                g_pipeline_dirty = true;
+                ESP_LOGI(TAG, "Zoom cleared on idle timeout");
+            }
             cam_led_set(CAM_LED_NO_PEER);
         }
     }
@@ -840,16 +1024,73 @@ void loop() {
             // Send grid mapping at session start (up to 3 times to handle
             // packet loss), then stop until the next STREAM_START.
             if (g_settings.grid_calibrated && g_grid_send_count < 3) {
-                uint16_t pts = g_settings.grid_points_count;
-                if (pts > 0 && pts <= CAM_SETTINGS_MAX_GRID_POINTS) {
-                    int8_t offsets[CAM_SETTINGS_MAX_GRID_POINTS * 2];
-                    uint16_t nx = g_settings.grid_nx;
-                    uint16_t ny = g_settings.grid_ny;
-                    uint16_t img_w = 0, img_h = 0;
-                    if (g_transform) cam_transform_get_size(g_transform, &img_w, &img_h);
-                    if (img_w == 0 || img_h == 0 || g_settings.surface_width <= 0.0f || g_settings.surface_height <= 0.0f) {
-                        for (uint16_t i = 0; i < pts; i++) { offsets[i*2] = 0; offsets[i*2+1] = 0; }
-                    } else {
+                uint16_t img_w = 0, img_h = 0;
+                if (g_transform) cam_transform_get_size(g_transform, &img_w, &img_h);
+                const uint8_t *dst = (g_settings.hub_mac[0]||g_settings.hub_mac[1]||
+                                      g_settings.hub_mac[2]||g_settings.hub_mac[3]||
+                                      g_settings.hub_mac[4]||g_settings.hub_mac[5])
+                                     ? g_settings.hub_mac : NULL;
+
+                if (g_zoom_active && g_zoom_w > 0 && g_zoom_h > 0
+                    && img_w > 0 && img_h > 0
+                    && g_settings.surface_width > 0.0f) {
+                    // --- Zoom active: send a standard-format 3×3 grid spanning
+                    //     the physical extent of the zoom window.            ---
+                    // Each node's physical position is evaluated by bilinearly
+                    // interpolating the calibration at the corresponding
+                    // original-output pixel that the zoom node maps to.
+                    // This approach works with any zoom level without uint16_t
+                    // overflow and correctly accounts for calibration offsets.
+                    static const int ZNX = 3, ZNY = 3;
+                    float left = (float)g_zoom_cx - (float)g_zoom_w * 0.5f;
+                    float top  = (float)g_zoom_cy - (float)g_zoom_h * 0.5f;
+
+                    float zoom_pts[ZNX * ZNY * 2];
+                    float minx_z =  1e9f, maxx_z = -1e9f;
+                    float miny_z =  1e9f, maxy_z = -1e9f;
+                    bool any_valid = false;
+
+                    for (int j = 0; j < ZNY; j++) {
+                        for (int i = 0; i < ZNX; i++) {
+                            // Original output pixel for zoom-view node (i,j)
+                            float orig_x = left + (float)i / (float)(ZNX - 1) * (float)g_zoom_w;
+                            float orig_y = top  + (float)j / (float)(ZNY - 1) * (float)g_zoom_h;
+                            float phys_x = 0.0f, phys_y = 0.0f;
+                            if (cam_calib_pixel_to_phys(orig_x, orig_y, img_w, img_h,
+                                                        &phys_x, &phys_y)) {
+                                any_valid = true;
+                                if (phys_x < minx_z) minx_z = phys_x;
+                                if (phys_x > maxx_z) maxx_z = phys_x;
+                                if (phys_y < miny_z) miny_z = phys_y;
+                                if (phys_y > maxy_z) maxy_z = phys_y;
+                            }
+                            zoom_pts[(j * ZNX + i) * 2 + 0] = phys_x;
+                            zoom_pts[(j * ZNX + i) * 2 + 1] = phys_y;
+                        }
+                    }
+
+                    if (any_valid) {
+                        float dx_z = (maxx_z > minx_z) ? (maxx_z - minx_z) / (ZNX - 1) : 1.0f;
+                        float dy_z = (maxy_z > miny_z) ? (maxy_z - miny_z) / (ZNY - 1) : 1.0f;
+                        cam_espnow_send_grid(dst,
+                                             minx_z, maxx_z, miny_z, maxy_z,
+                                             dx_z, dy_z,
+                                             (uint16_t)ZNX, (uint16_t)ZNY,
+                                             zoom_pts, (uint16_t)(ZNX * ZNY));
+                        ESP_LOGI(TAG, "Zoom grid sent: [%.2f..%.2f] x [%.2f..%.2f]",
+                                 minx_z, maxx_z, miny_z, maxy_z);
+                    }
+                    g_grid_send_count++;
+                } else {
+                    // --- Normal (non-zoom) compact grid send ---
+                    uint16_t pts = g_settings.grid_points_count;
+                    if (pts > 0 && pts <= CAM_SETTINGS_MAX_GRID_POINTS
+                        && img_w > 0 && img_h > 0
+                        && g_settings.surface_width > 0.0f
+                        && g_settings.surface_height > 0.0f) {
+                        int8_t offsets[CAM_SETTINGS_MAX_GRID_POINTS * 2];
+                        uint16_t nx = g_settings.grid_nx;
+                        uint16_t ny = g_settings.grid_ny;
                         // Active area after image margins
                         uint16_t il = g_settings.image_margin_left;
                         uint16_t it = g_settings.image_margin_top;
@@ -863,7 +1104,6 @@ void loop() {
                         for (uint16_t i = 0; i < pts; i++) {
                             uint16_t ixx = i % nx;
                             uint16_t iyy = i / nx;
-                            // Ideal pixel position within the inset area
                             float frac_x = (nx > 1) ? ((float)ixx / (float)(nx - 1)) : 0.0f;
                             float frac_y = (ny > 1) ? ((float)iyy / (float)(ny - 1)) : 0.0f;
                             float ideal_px = (float)il + frac_x * (active_w - 1.0f);
@@ -878,17 +1118,16 @@ void loop() {
                             offsets[i*2 + 0] = (int8_t)dx_px;
                             offsets[i*2 + 1] = (int8_t)dy_px;
                         }
+                        cam_espnow_send_grid_compact(dst,
+                                                     g_settings.surface_width, g_settings.surface_height,
+                                                     g_settings.grid_dx, g_settings.grid_dy,
+                                                     g_settings.grid_nx, g_settings.grid_ny,
+                                                     img_w, img_h,
+                                                     g_settings.image_margin_left, g_settings.image_margin_top,
+                                                     g_settings.image_margin_right, g_settings.image_margin_bottom,
+                                                     offsets, pts);
+                        g_grid_send_count++;
                     }
-                    const uint8_t *dst = (g_settings.hub_mac[0]||g_settings.hub_mac[1]||g_settings.hub_mac[2]||g_settings.hub_mac[3]||g_settings.hub_mac[4]||g_settings.hub_mac[5]) ? g_settings.hub_mac : NULL;
-                    cam_espnow_send_grid_compact(dst,
-                                                 g_settings.surface_width, g_settings.surface_height,
-                                                 g_settings.grid_dx, g_settings.grid_dy,
-                                                 g_settings.grid_nx, g_settings.grid_ny,
-                                                 img_w, img_h,
-                                                 g_settings.image_margin_left, g_settings.image_margin_top,
-                                                 g_settings.image_margin_right, g_settings.image_margin_bottom,
-                                                 offsets, pts);
-                    g_grid_send_count++;
                 }
             }
         }

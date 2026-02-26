@@ -667,6 +667,35 @@ void cam_receiver_stop_stream(cam_receiver_t *self)
     LOGI(TAG, "Stream stopped — sent STREAM_STOP");
 }
 
+int cam_receiver_set_zoom(cam_receiver_t *self,
+                           uint16_t center_x, uint16_t center_y,
+                           uint16_t zoom_w,   uint16_t zoom_h)
+{
+    if (!self) return -1;
+    cam_set_zoom_cmd_t cmd;
+    cmd.type     = CAM_CMD_SET_ZOOM;
+    cmd.center_x = center_x;
+    cmd.center_y = center_y;
+    cmd.zoom_w   = zoom_w;
+    cmd.zoom_h   = zoom_h;
+    int rc = cam_transport_send(self->transport,
+                                (const uint8_t *)&cmd, sizeof(cmd));
+    LOGI(TAG, "SET_ZOOM sent: cx=%u cy=%u w=%u h=%u (rc=%d)",
+         center_x, center_y, zoom_w, zoom_h, rc);
+    return rc;
+}
+
+int cam_receiver_clear_zoom(cam_receiver_t *self)
+{
+    if (!self) return -1;
+    cam_clear_zoom_cmd_t cmd;
+    cmd.type = CAM_CMD_CLEAR_ZOOM;
+    int rc = cam_transport_send(self->transport,
+                                (const uint8_t *)&cmd, sizeof(cmd));
+    LOGI(TAG, "CLEAR_ZOOM sent (rc=%d)", rc);
+    return rc;
+}
+
 bool cam_receiver_is_streaming(cam_receiver_t *self)
 {
     return self && self->in_stream;

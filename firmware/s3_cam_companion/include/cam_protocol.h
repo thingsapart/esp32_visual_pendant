@@ -47,6 +47,8 @@ typedef enum {
     CAM_CMD_FORCE_KEYFRAME = 0x92,  // Request a full keyframe now
     CAM_CMD_STREAM_START   = 0x93,  // Begin streaming session; implies force-keyframe
     CAM_CMD_STREAM_STOP    = 0x94,  // End streaming session gracefully
+    CAM_CMD_SET_ZOOM       = 0x95,  // Zoom/crop output to a sub-window
+    CAM_CMD_CLEAR_ZOOM     = 0x96,  // Restore normal (unzoomed) output
 } cam_msg_type_t;
 
 // ---------------------------------------------------------------------------
@@ -244,6 +246,42 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t  type;    // CAM_CMD_STREAM_STOP
 } cam_stream_stop_cmd_t;
+
+// ---------------------------------------------------------------------------
+// Pendant → Camera: activate zoom / crop mode
+//
+// Instructs the camera to crop its output to a sub-window centred at
+// (center_x, center_y) with the given dimensions (in the current output
+// frame's pixels), then scale the crop back to the full output resolution.
+// This increases effective pixel density over the selected feature so that
+// fine-grained adjustments are easier on a touch interface.
+//
+// center_x / center_y: crop window centre in current output-frame pixels.
+// zoom_w / zoom_h:     crop window size   in current output-frame pixels.
+//   Must satisfy: zoom_w <= current output width, zoom_h <= current height.
+//   Set both to 0 to cancel zoom without sending a separate CLEAR_ZOOM.
+//
+// The camera will:
+//   • Compose an additional scale+translate homography Z with the stored
+//     calibration H to build a combined LUT (source → zoomed output).
+//   • Send a force-keyframe so the pendant gets the new view immediately.
+//   • Re-send the grid mapping with pixel positions recalculated for the
+//     zoom view so the pendant's px→physical coordinate lookup stays valid.
+// ---------------------------------------------------------------------------
+typedef struct __attribute__((packed)) {
+    uint8_t  type;       // CAM_CMD_SET_ZOOM
+    uint16_t center_x;   // Zoom window centre X in current output pixels
+    uint16_t center_y;   // Zoom window centre Y in current output pixels
+    uint16_t zoom_w;     // Zoom window width  in current output pixels
+    uint16_t zoom_h;     // Zoom window height in current output pixels
+} cam_set_zoom_cmd_t;
+
+// ---------------------------------------------------------------------------
+// Pendant → Camera: deactivate zoom and restore the normal calibration view
+// ---------------------------------------------------------------------------
+typedef struct __attribute__((packed)) {
+    uint8_t  type;    // CAM_CMD_CLEAR_ZOOM
+} cam_clear_zoom_cmd_t;
 
 // ---------------------------------------------------------------------------
 // Default configuration values

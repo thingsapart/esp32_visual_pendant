@@ -66,6 +66,29 @@ static const char *TAG = "cam_pos";
 #define WIZ_ZREF_DOT_COLOR   0x00FF88  // Vivid teal for Z-ref dot
 #define WIZ_ZREF_BDR_COLOR   0x00CC66  // Teal border for Z-ref dot
 
+// ---------------------------------------------------------------------------
+// Zoom badge visual constants
+// ---------------------------------------------------------------------------
+#define WIZ_ZOOM_BG_COLOR    0x7C3AED  // Violet-700
+#define WIZ_ZOOM_TEXT_COLOR  0xEDE9FE  // Violet-100 (near-white)
+#define WIZ_ZOOM_BTN_H       22        // Badge height in px
+#define WIZ_ZOOM_PAD          6        // Margin from stream corner (px)
+
+// ---------------------------------------------------------------------------
+// Zoom trigger timing compile-time flag.
+//
+// CAM_POS_ZOOM_AFTER_PT2 = 1 (default):
+//   Zoom activates as soon as pt2 has been collected, before the user taps
+//   Z-surf.  The user can set Z-surf and the Run step in the zoomed view.
+//
+// CAM_POS_ZOOM_AFTER_PT2 = 0:
+//   Zoom activates after Z-surf has been collected, just before Run.
+//   Avoids any keyframe-round-trip latency during pt2/Z-surf collection.
+// ---------------------------------------------------------------------------
+#ifndef CAM_POS_ZOOM_AFTER_PT2
+#define CAM_POS_ZOOM_AFTER_PT2  1
+#endif
+
 // Grid overlay
 #define GRID_LINE_COLOR     0x808080   // Medium gray
 #define GRID_LINE_OPA       LV_OPA_50
@@ -198,6 +221,19 @@ typedef struct {
     // Xtensa); the lv_timer below polls it every 50 ms from the LVGL task.
     volatile bool           grid_dirty;
     lv_timer_t             *grid_timer;   ///< owned by this widget, deleted in on_delete
+
+    // Zoom state
+    bool                    wiz_zoom_active; ///< Camera is currently showing a zoomed view
+    lv_obj_t               *zoom_badge;     ///< Overlay badge while zoom is active (NULL otherwise)
+    // Crop window sent with the last SET_ZOOM (in original image pixel coords).
+    // Stored so that collected point px coords can be inverse-remapped on
+    // CLEAR_ZOOM — restoring them to the unzoomed image coordinate space.
+    uint16_t                wiz_zoom_cx, wiz_zoom_cy; ///< Crop centre (original px)
+    uint16_t                wiz_zoom_w,  wiz_zoom_h;  ///< Crop size   (original px)
+    // Set by wiz_activate_zoom, cleared by grid_dirty_timer_cb once the
+    // first post-zoom grid update arrives (confirming the zoomed keyframe
+    // is on its way).  Until cleared, points are still in pre-zoom coords.
+    volatile bool           wiz_zoom_remap_pending;
 } lv_cam_pos_priv_t;
 
 // ---------------------------------------------------------------------------
@@ -228,6 +264,10 @@ static void wiz_execute(lv_cam_pos_priv_t *priv);
 static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt);
 static void sidebar_rebuild(lv_cam_pos_priv_t *priv);
 static void sidebar_update_coords(lv_cam_pos_priv_t *priv);
+
+// Zoom helpers
+static void wiz_activate_zoom(lv_cam_pos_priv_t *priv);
+static void wiz_deactivate_zoom(lv_cam_pos_priv_t *priv);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -917,6 +957,20 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
         lv_draw_line(layer, &line_dsc);
     }
 
+    // --- Work-area outline: light-gray rounded rect around the calibrated
+    //     region, below origin/WCS markings so they always read on top.
+    {
+        lv_draw_rect_dsc_t wa_dsc;
+        lv_draw_rect_dsc_init(&wa_dsc);
+        wa_dsc.bg_opa       = LV_OPA_TRANSP;
+        wa_dsc.border_color = lv_color_hex(0xA0A8B0);
+        wa_dsc.border_width = 2;
+        wa_dsc.border_opa   = LV_OPA_50;
+        wa_dsc.radius       = 3;
+        lv_area_t wa_area = { wa_x1, wa_y1, wa_x2, wa_y2 };
+        lv_draw_rect(layer, &wa_dsc, &wa_area);
+    }
+
     // --- Machine origin: short yellow axes + dot at physical (0, 0) ---
     draw_machine_origin(layer, &cc);
 
@@ -946,10 +1000,253 @@ static void _wiz_del(lv_obj_t **pobj)
     *pobj = NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Probe wizard — zoom helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the zoom window (center and size in image pixels) from the
+/// currently collected wizard points.
+///
+/// For rect/block/pocket:  bounding box of pt1 + pt2 defines the feature.
+/// For bore/boss/circle:   pt1 is centre, pt2 defines the radius.
+/// For single-point ops:   pt1 is the focus; uses a small fixed feature box.
+///
+/// The zoom window is scaled so the feature's longer dimension fills 60%
+/// of the corresponding output dimension (20% margin on each side), with
+/// the window constrained to the output aspect ratio.
+///
+/// Returns false if there is not enough data (e.g. pt1 not set).
+static bool wiz_compute_zoom_window(lv_cam_pos_priv_t *priv,
+                                     uint16_t *out_cx, uint16_t *out_cy,
+                                     uint16_t *out_w,  uint16_t *out_h)
+{
+    if (!priv->wiz_pt1_set) return false;
+
+    uint16_t img_w = 0, img_h = 0;
+    lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
+    if (img_w == 0 || img_h == 0) return false;
+
+    float feat_cx, feat_cy, feat_w, feat_h;
+    const float pt1x = (float)priv->wiz_pt1.px_x;
+    const float pt1y = (float)priv->wiz_pt1.px_y;
+
+    if (priv->wiz_pt2_set) {
+        const float pt2x = (float)priv->wiz_pt2.px_x;
+        const float pt2y = (float)priv->wiz_pt2.px_y;
+
+        if (priv->wiz_op == PROBE_OP_PROBE_BORE ||
+            priv->wiz_op == PROBE_OP_PROBE_BOSS) {
+            // Circle: pt1 = centre, pt2 = edge point
+            float dx = pt2x - pt1x;
+            float dy = pt2y - pt1y;
+            float r  = sqrtf(dx * dx + dy * dy);
+            feat_cx  = pt1x;
+            feat_cy  = pt1y;
+            feat_w   = feat_h = 2.0f * r;
+        } else {
+            // Rectangle: bounding box of the two corners
+            float x0 = (pt1x < pt2x) ? pt1x : pt2x;
+            float y0 = (pt1y < pt2y) ? pt1y : pt2y;
+            float x1 = (pt1x > pt2x) ? pt1x : pt2x;
+            float y1 = (pt1y > pt2y) ? pt1y : pt2y;
+            feat_cx  = (x0 + x1) * 0.5f;
+            feat_cy  = (y0 + y1) * 0.5f;
+            feat_w   = x1 - x0;
+            feat_h   = y1 - y0;
+        }
+    } else {
+        // Single-point: zoom to a small fixed window centred on pt1.
+        feat_cx = pt1x;
+        feat_cy = pt1y;
+        feat_w  = feat_h = 0.0f;  // Use minimum window (enforced below)
+    }
+
+    // Enforce a minimum feature footprint so tiny / zero-size features still
+    // produce a useful zoom level.
+    static const float MIN_FEAT_PX = 20.0f;
+    if (feat_w < MIN_FEAT_PX) feat_w = MIN_FEAT_PX;
+    if (feat_h < MIN_FEAT_PX) feat_h = MIN_FEAT_PX;
+
+    // Scale the zoom window so the LONGER feature dimension fills 60% of the
+    // corresponding output dimension.  The window must match the output aspect
+    // ratio (same W×H as the output frame) so the resampled zoom frame fits.
+    float out_ar = (float)img_w / (float)img_h;
+    // Minimum crop that achieves 60% fill on each axis independently,
+    // then pick the most conservative (larger) crop and apply aspect ratio.
+    float crop_from_w = feat_w / 0.6f;
+    float crop_from_h = feat_h / 0.6f;
+    float raw_w = (crop_from_w > crop_from_h * out_ar)
+                  ? crop_from_w : crop_from_h * out_ar;
+    float raw_h = raw_w / out_ar;
+
+    // Never produce a zoom window smaller than 40×30 px (avoids absurd zoom).
+    static const float MIN_CROP_W = 40.0f;
+    if (raw_w < MIN_CROP_W) { raw_w = MIN_CROP_W; raw_h = raw_w / out_ar; }
+
+    // If the computed crop covers ≥ 90% of the image, zoom is effectively a
+    // no-op — clamp to the full image so the camera just sends a normal frame.
+    if (raw_w >= (float)img_w * 0.9f) {
+        raw_w = (float)img_w;
+        raw_h = (float)img_h;
+    }
+
+    // Clamp centre so the window stays fully within the image.
+    float half_w = raw_w * 0.5f, half_h = raw_h * 0.5f;
+    if (feat_cx < half_w) feat_cx = half_w;
+    if (feat_cx > (float)img_w - half_w) feat_cx = (float)img_w - half_w;
+    if (feat_cy < half_h) feat_cy = half_h;
+    if (feat_cy > (float)img_h - half_h) feat_cy = (float)img_h - half_h;
+
+    *out_cx = (uint16_t)(feat_cx + 0.5f);
+    *out_cy = (uint16_t)(feat_cy + 0.5f);
+    *out_w  = (uint16_t)(raw_w  + 0.5f);
+    *out_h  = (uint16_t)(raw_h  + 0.5f);
+    return true;
+}
+
+/// Callback for the "(X)" zoom badge close button.
+static void _zoom_badge_close_cb(lv_event_t *e)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    wiz_deactivate_zoom(priv);
+}
+
+/// Remap a collected point's pixel position between the original (unzoomed)
+/// image coordinate space and the zoomed crop-window space.
+/// forward=true  : original → zoomed  (call on zoom activation)
+/// forward=false : zoomed  → original (call on zoom deactivation)
+static void _wiz_zoom_remap_pt(lv_cam_pos_point_t *pt, bool set,
+                                 float left, float top,
+                                 float out_w, float out_h,
+                                 float zoom_w, float zoom_h,
+                                 bool forward)
+{
+    if (!set || zoom_w <= 0 || zoom_h <= 0 || out_w <= 0 || out_h <= 0) return;
+    float nx, ny;
+    if (forward) {
+        // (orig_px - left) * scale  →  zoomed_px
+        nx = (pt->px_x - left) * out_w / zoom_w;
+        ny = (pt->px_y - top)  * out_h / zoom_h;
+    } else {
+        // zoomed_px / scale + left  →  orig_px
+        nx = pt->px_x * zoom_w / out_w + left;
+        ny = pt->px_y * zoom_h / out_h + top;
+    }
+    pt->px_x = (int16_t)LV_CLAMP(-32767, (int)roundf(nx), 32767);
+    pt->px_y = (int16_t)LV_CLAMP(-32767, (int)roundf(ny), 32767);
+}
+
+/// Activate zoom: compute the window, remap collected point pixels,
+/// send SET_ZOOM to the camera, and show the badge overlay.
+static void wiz_activate_zoom(lv_cam_pos_priv_t *priv)
+{
+    if (!priv->receiver || !priv->stream) return;
+
+    uint16_t cx = 0, cy = 0, zw = 0, zh = 0;
+    if (!wiz_compute_zoom_window(priv, &cx, &cy, &zw, &zh)) return;
+
+    // Get current output size to compute the forward pixel remap.
+    uint16_t out_w = 0, out_h = 0;
+    lv_cam_stream_get_image_size(priv->stream, &out_w, &out_h);
+
+    // Defer the pixel remap: the camera must rebuild its pipeline and deliver
+    // a new keyframe (+ grid) before the zoomed image is visible.  If we
+    // remapped now the points would jump to wrong positions on the still-
+    // unzoomed image.  grid_dirty_timer_cb applies the remap once the first
+    // post-zoom grid update arrives, confirming the new frame is on its way.
+    priv->wiz_zoom_cx = cx;  priv->wiz_zoom_cy = cy;
+    priv->wiz_zoom_w  = zw;  priv->wiz_zoom_h  = zh;
+    priv->wiz_zoom_active        = true;
+    priv->wiz_zoom_remap_pending = true;
+
+    int rc = cam_receiver_set_zoom(priv->receiver, cx, cy, zw, zh);
+    if (rc != 0) LOGW(TAG, "wiz_activate_zoom: send failed (rc=%d)", rc);
+
+    // Create badge regardless of send success — the user needs the cancel
+    // affordance and visual feedback of zoom state even during reconnection.
+    if (!priv->overlay) return;
+    _wiz_del(&priv->zoom_badge);
+
+    lv_obj_t *badge = lv_obj_create(priv->overlay);
+    lv_obj_remove_style_all(badge);
+    lv_obj_set_style_bg_color(badge, lv_color_hex(WIZ_ZOOM_BG_COLOR), 0);
+    lv_obj_set_style_bg_opa(badge,   LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(badge,   6, 0);
+    lv_obj_set_style_pad_hor(badge,  8, 0);
+    lv_obj_set_style_pad_ver(badge,  4, 0);
+    lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_add_flag(badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_layout(badge, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(badge, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                           LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(badge, 4, 0);
+
+    lv_obj_t *lbl = lv_label_create(badge);
+    lv_label_set_text(lbl, LV_SYMBOL_EYE_OPEN " ZOOM");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(WIZ_ZOOM_TEXT_COLOR), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
+
+    lv_obj_t *close_lbl = lv_label_create(badge);
+    lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_color(close_lbl, lv_color_hex(WIZ_ZOOM_TEXT_COLOR), 0);
+    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_12, 0);
+
+    lv_obj_add_event_cb(badge, _zoom_badge_close_cb, LV_EVENT_CLICKED, priv);
+
+    // Position AFTER children are added so LV_SIZE_CONTENT has something to
+    // measure.  lv_obj_set_pos sets the top-left corner of the badge relative
+    // to the overlay's content area, independent of badge size.
+    lv_obj_set_pos(badge, WIZ_ZOOM_PAD, WIZ_ZOOM_PAD);
+
+    priv->zoom_badge = badge;
+    LOGI(TAG, "Zoom activated: cx=%u cy=%u w=%u h=%u out=%ux%u",
+         cx, cy, zw, zh, out_w, out_h);
+}
+
+/// Deactivate zoom: inverse-remap collected point pixels back to unzoomed
+/// image space, send CLEAR_ZOOM, and remove the badge.
+static void wiz_deactivate_zoom(lv_cam_pos_priv_t *priv)
+{
+    if (!priv->wiz_zoom_active) return;
+    priv->wiz_zoom_active = false;
+    _wiz_del(&priv->zoom_badge);
+
+    if (priv->wiz_zoom_remap_pending) {
+        // The zoomed keyframe never arrived (or the user cancelled fast).
+        // Points are still in original (pre-zoom) coordinates — nothing to undo.
+        priv->wiz_zoom_remap_pending = false;
+    } else {
+        // Inverse-remap collected point payload pixels: zoomed → original frame.
+        if (priv->stream && priv->wiz_zoom_w && priv->wiz_zoom_h) {
+            uint16_t out_w = 0, out_h = 0;
+            lv_cam_stream_get_image_size(priv->stream, &out_w, &out_h);
+            if (out_w && out_h) {
+                float left = priv->wiz_zoom_cx - priv->wiz_zoom_w * 0.5f;
+                float top  = priv->wiz_zoom_cy - priv->wiz_zoom_h * 0.5f;
+                _wiz_zoom_remap_pt(&priv->wiz_pt1,  priv->wiz_pt1_set,  left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, false);
+                _wiz_zoom_remap_pt(&priv->wiz_pt2,  priv->wiz_pt2_set,  left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, false);
+                _wiz_zoom_remap_pt(&priv->wiz_zref, priv->wiz_zref_set, left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, false);
+            }
+        }
+    }
+    priv->wiz_zoom_cx = priv->wiz_zoom_cy = priv->wiz_zoom_w = priv->wiz_zoom_h = 0;
+
+    if (priv->receiver) cam_receiver_clear_zoom(priv->receiver);
+    LOGD(TAG, "Zoom deactivated");
+}
+
 /// Reset wizard to idle state — cancels any running op, clears all points,
 /// rebuilds the sidebar.  Safe to call at any time including from on_delete.
 static void wiz_reset(lv_cam_pos_priv_t *priv)
 {
+    // Deactivate any active zoom so the camera returns to its normal view.
+    wiz_deactivate_zoom(priv);
+
     // Null event callbacks before cancelling so probe_api_cancel doesn't
     // fire into tearing-down UI (avoids re-entrant LVGL + dangling-priv).
     if (priv->probe_cbs_set) {
@@ -1020,6 +1317,7 @@ static void _probe_done_async(void *user_data)
     priv->wiz_pt2_set  = false;  memset(&priv->wiz_pt2,  0, sizeof(priv->wiz_pt2));
     priv->wiz_zref_set = false;  memset(&priv->wiz_zref, 0, sizeof(priv->wiz_zref));
     priv->wiz_step_idx = 0;
+    wiz_deactivate_zoom(priv);   // ensure camera returns to normal view
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
     lv_obj_invalidate(priv->overlay);
@@ -1316,6 +1614,12 @@ static void _wiz_op_btn_cb(lv_event_t *e)
         // and jump straight to step 1 (pt2 / zref / run, depending on op).
         priv->wiz_step_idx = 1;
         priv->wiz_state    = (k_op_step_counts[ctx->op] > 2) ? WIZ_COLLECTING : WIZ_READY;
+        // For single-point ops (move-to / probe-z) that jump straight to READY,
+        // activate zoom now so the user can fine-tune pt1 before executing.
+        if (priv->wiz_state == WIZ_READY) {
+            wiz_deactivate_zoom(priv);
+            wiz_activate_zoom(priv);
+        }
     } else {
         // No point placed yet — start collection from step 0.
         priv->wiz_pt1_set  = false;  memset(&priv->wiz_pt1, 0, sizeof(priv->wiz_pt1));
@@ -1344,6 +1648,15 @@ static void _wiz_step_btn_cb(lv_event_t *e)
 
     priv->wiz_step_idx = k;
     priv->wiz_state    = WIZ_COLLECTING;
+
+    // Deactivate zoom if we're rewinding to a step before the trigger point.
+    // This prevents a stale zoom (from now-invalid pt2/pt1) from persisting.
+#if CAM_POS_ZOOM_AFTER_PT2
+    if (k <= 1 && priv->wiz_zoom_active) wiz_deactivate_zoom(priv);
+#else
+    if (k <= 2 && priv->wiz_zoom_active) wiz_deactivate_zoom(priv);
+#endif
+
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
     lv_obj_invalidate(priv->overlay);
@@ -1482,12 +1795,12 @@ static void sidebar_rebuild(lv_cam_pos_priv_t *priv)
         btn_idx++;
     }
 
-    // Reset button at bottom (always shown while in step-list mode)
+    // Reset/abort button — always tappable so the user can cancel at any
+    // point including while an operation is running (wiz_reset cancels it).
     if (btn_idx < 8) {
         lv_obj_t *rst = lv_list_add_button(lst, LV_SYMBOL_CLOSE, "Reset");
-        _lst_style(rst, WIZ_CANCEL_COLOR, !running);
-        if (!running)
-            lv_obj_add_event_cb(rst, _wiz_reset_btn_cb, LV_EVENT_CLICKED, priv);
+        _lst_style(rst, WIZ_CANCEL_COLOR, true);
+        lv_obj_add_event_cb(rst, _wiz_reset_btn_cb, LV_EVENT_CLICKED, priv);
     }
 }
 
@@ -1751,6 +2064,21 @@ static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt)
 
         priv->wiz_step_idx++;
 
+        // Zoom trigger: activate (or re-activate) zoom at the configured point.
+#if CAM_POS_ZOOM_AFTER_PT2
+        // Trigger after pt2 has been collected (kind == WIZ_SK_PT2 was just done).
+        if (kind == WIZ_SK_PT2) {
+            wiz_deactivate_zoom(priv);  // clear any prior zoom before re-zooming
+            wiz_activate_zoom(priv);
+        }
+#else
+        // Trigger after Z-surf has been collected (kind == WIZ_SK_ZREF was just done).
+        if (kind == WIZ_SK_ZREF) {
+            wiz_deactivate_zoom(priv);
+            wiz_activate_zoom(priv);
+        }
+#endif
+
         // If the next step is RUN (last step in sequence), transition to READY.
         if (priv->wiz_step_idx == n - 1)
             priv->wiz_state = WIZ_READY;
@@ -1960,6 +2288,14 @@ static void overlay_click_cb(lv_event_t *e)
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
     if (!priv) return;
 
+    // Ignore clicks that originated from a child widget (e.g. zoom badge).
+    // Without this guard the click would bubble up and wiz_handle_click would
+    // place a spurious wizard point at the badge's screen position.
+    if (lv_event_get_target(e) != lv_event_get_current_target(e)) {
+        lv_event_stop_bubbling(e);
+        return;
+    }
+
     lv_point_t scr_pt;
     lv_indev_get_point(lv_indev_active(), &scr_pt);
 
@@ -2062,6 +2398,12 @@ static void overlay_press_cb(lv_event_t *e)
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
     if (!priv) return;
 
+    // Same child-propagation guard as overlay_click_cb.
+    if (lv_event_get_target(e) != lv_event_get_current_target(e)) {
+        lv_event_stop_bubbling(e);
+        return;
+    }
+
     lv_point_t scr_pt;
     lv_indev_get_point(lv_indev_active(), &scr_pt);
 
@@ -2116,6 +2458,31 @@ static void grid_dirty_timer_cb(lv_timer_t *t)
     if (!priv) return;
     if (!priv->grid_dirty) return;
     priv->grid_dirty = false;
+
+    // If zoom was activated and we were waiting for the first post-zoom grid
+    // update (which arrives with the new keyframe), now apply the px remap.
+    // This runs in the LVGL task so LVGL and float writes are safe.
+    if (priv->wiz_zoom_remap_pending && priv->wiz_zoom_active) {
+        priv->wiz_zoom_remap_pending = false;
+        if (priv->stream && priv->wiz_zoom_w && priv->wiz_zoom_h) {
+            uint16_t out_w = 0, out_h = 0;
+            lv_cam_stream_get_image_size(priv->stream, &out_w, &out_h);
+            if (out_w && out_h) {
+                float left = priv->wiz_zoom_cx - priv->wiz_zoom_w * 0.5f;
+                float top  = priv->wiz_zoom_cy - priv->wiz_zoom_h * 0.5f;
+                _wiz_zoom_remap_pt(&priv->wiz_pt1,  priv->wiz_pt1_set,  left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, true);
+                _wiz_zoom_remap_pt(&priv->wiz_pt2,  priv->wiz_pt2_set,  left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, true);
+                _wiz_zoom_remap_pt(&priv->wiz_zref, priv->wiz_zref_set, left, top,
+                                    out_w, out_h, priv->wiz_zoom_w, priv->wiz_zoom_h, true);
+                LOGD(TAG, "Zoom remap applied after keyframe (left=%.1f top=%.1f out=%ux%u crop=%ux%u)",
+                     (double)left, (double)top, out_w, out_h,
+                     priv->wiz_zoom_w, priv->wiz_zoom_h);
+            }
+        }
+    }
+
     if (priv->overlay && lv_obj_is_valid(priv->overlay)) {
         lv_obj_invalidate(priv->overlay);
     }
