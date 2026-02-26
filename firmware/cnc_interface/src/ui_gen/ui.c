@@ -4,6 +4,21 @@
 #include "lvgl_ui.h"
 #include <stdlib.h> // For malloc
 
+// --- Memory Allocator (define LVGL_UI_MALLOC/FREE before this file to override) ---
+#ifndef LVGL_UI_MALLOC
+  #if defined(ESP32_HW) && defined(BOARD_HAS_PSRAM)
+    #include "esp_heap_caps.h"
+    #define LVGL_UI_MALLOC(sz) heap_caps_malloc((sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    #define LVGL_UI_FREE(ptr)  heap_caps_free(ptr)
+  #else
+    #define LVGL_UI_MALLOC(sz) malloc((sz))
+    #define LVGL_UI_FREE(ptr)  free(ptr)
+  #endif
+#endif
+#ifndef LVGL_UI_FREE
+  #define LVGL_UI_FREE(ptr) free(ptr)
+#endif
+
 // --- Custom Includes from API Spec ---
 #include "ui/components/lv_cam_positioning.h"
 #include "ui/components/lv_cam_stream.h"
@@ -11,12 +26,44 @@
 #include "ui/components/lv_probing_wizard.h"
 #include "ui.h"
 
-void create_ui(lv_obj_t* parent) {
-    // --- Static Arrays for LVGL properties ---
-    static const int32_t s_static_array_11[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
-    static const int32_t s_static_array_10[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
-    static const int32_t s_static_array_9[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
-    static const int32_t s_static_array_8[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+// --- Hoisted Variables (shared between create_ui and deferred functions) ---
+static const lv_font_t* font_kode_20_4 = NULL;
+static const lv_font_t* font_kode_30_2 = NULL;
+static const lv_font_t* font_kode_14_5 = NULL;
+static const lv_font_t* font_kode_34_1 = NULL;
+static const lv_font_t* font_kode_40_0 = NULL;
+static lv_style_t* font_default_33 = NULL;
+static lv_style_t* titlebar_entry_center_kode_32 = NULL;
+static lv_style_t* titlebar_entry_31 = NULL;
+static lv_style_t* titlebar_30 = NULL;
+static lv_style_t* background_none_29 = NULL;
+static lv_style_t* background_purple_28 = NULL;
+static lv_style_t* tick_color_27 = NULL;
+static lv_style_t* bg_group_26 = NULL;
+static lv_style_t* btn_clicked_25 = NULL;
+static lv_style_t* debug_24 = NULL;
+static lv_style_t* indicator_light_yellow_23 = NULL;
+static lv_style_t* indicator_light_green_22 = NULL;
+static lv_style_t* indicator_light_red_21 = NULL;
+static lv_style_t* indicator_light_20 = NULL;
+static lv_style_t* border_right_19 = NULL;
+static lv_style_t* border_top_btn_18 = NULL;
+static lv_style_t* jog_btn_17 = NULL;
+static lv_style_t* text_actionable_16 = NULL;
+static lv_style_t* indicator_yellow_15 = NULL;
+static lv_style_t* indicator_green_14 = NULL;
+static lv_style_t* flex_y_13 = NULL;
+static lv_style_t* flex_x_12 = NULL;
+static lv_style_t* bg_gradient_11 = NULL;
+static lv_style_t* bar_indicator_10 = NULL;
+static lv_style_t* container_transp_9 = NULL;
+static lv_style_t* container_8 = NULL;
+static lv_style_t* debug_7 = NULL;
+
+// --- Deferred UI Functions ---
+
+static void create_ui_obj_44(lv_obj_t* parent) {
+    // --- Static Arrays ---
     static const int32_t s_static_array_7[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
     static const int32_t s_static_array_6[] = { LV_GRID_CONTENT, LV_GRID_FR1, LV_GRID_TEMPLATE_LAST };
     static const int32_t s_static_array_5[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
@@ -26,399 +73,8 @@ void create_ui(lv_obj_t* parent) {
     static const int32_t s_static_array_1[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
     static const int32_t s_static_array_0[] = { LV_GRID_CONTENT, LV_GRID_FR1, LV_GRID_TEMPLATE_LAST };
 
-    // font_kode_40: font_kode_40_0 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_40_0 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 40);
-    #else
-    extern const lv_font_t font_kode_40;
-    const lv_font_t* font_kode_40_0 = &font_kode_40;
-    #endif
-
-    // font_kode_34: font_kode_34_1 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_34_1 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 34);
-    #else
-    extern const lv_font_t font_kode_34;
-    const lv_font_t* font_kode_34_1 = &font_kode_34;
-    #endif
-
-    // font_kode_30: font_kode_30_2 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_30_2 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 30);
-    #else
-    extern const lv_font_t font_kode_30;
-    const lv_font_t* font_kode_30_2 = &font_kode_30;
-    #endif
-
-    // font_kode_24: font_kode_24_3 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_24_3 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 24);
-    #else
-    extern const lv_font_t font_kode_24;
-    const lv_font_t* font_kode_24_3 = &font_kode_24;
-    #endif
-
-    // font_kode_20: font_kode_20_4 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_20_4 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 20);
-    #else
-    extern const lv_font_t font_kode_20;
-    const lv_font_t* font_kode_20_4 = &font_kode_20;
-    #endif
-
-    // font_kode_14: font_kode_14_5 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_kode_14_5 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 14);
-    #else
-    extern const lv_font_t font_kode_14;
-    const lv_font_t* font_kode_14_5 = &font_kode_14;
-    #endif
-
-    // font_montserrat_14: font_montserrat_14_6 (font)
-    #ifdef LOAD_FONTS_TTF
-    const lv_font_t* font_montserrat_14_6 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/lvgl/scripts/built_in_font/Montserrat-Medium.ttf", 14);
-    #else
-    extern const lv_font_t font_montserrat_14;
-    const lv_font_t* font_montserrat_14_6 = &font_montserrat_14;
-    #endif
-
-    // debug: debug_7 (style)
-    lv_style_t* debug_7 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(debug_7);
-    obj_registry_add("debug", debug_7);
-    lv_style_set_outline_width(debug_7, 1);
-    lv_style_set_outline_color(debug_7, lv_color_hex(0xFFEEFF));
-    lv_style_set_outline_opa(debug_7, 150);
-    lv_style_set_border_width(debug_7, 1);
-    lv_style_set_border_color(debug_7, lv_color_hex(0xFFEEFF));
-    lv_style_set_border_opa(debug_7, 150);
-    lv_style_set_radius(debug_7, 0);
-
-    // container: container_8 (style)
-    lv_style_t* container_8 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(container_8);
-    obj_registry_add("container", container_8);
-    lv_style_set_pad_all(container_8, 0);
-    lv_style_set_margin_all(container_8, 0);
-    lv_style_set_border_width(container_8, 0);
-    lv_style_set_pad_row(container_8, 3);
-    lv_style_set_pad_column(container_8, 5);
-    lv_style_set_bg_color(container_8, lv_color_hex(0x222222));
-    lv_style_set_text_color(container_8, lv_color_hex(0xEBEBCB));
-    lv_style_set_radius(container_8, 0);
-
-    // container_transp: container_transp_9 (style)
-    lv_style_t* container_transp_9 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(container_transp_9);
-    obj_registry_add("container_transp", container_transp_9);
-    lv_style_set_pad_all(container_transp_9, 0);
-    lv_style_set_margin_all(container_transp_9, 0);
-    lv_style_set_border_width(container_transp_9, 0);
-    lv_style_set_pad_row(container_transp_9, 3);
-    lv_style_set_pad_column(container_transp_9, 5);
-    lv_style_set_bg_color(container_transp_9, lv_color_hex(0x222222));
-    lv_style_set_text_color(container_transp_9, lv_color_hex(0xEBEBCB));
-    lv_style_set_radius(container_transp_9, 0);
-    lv_style_set_bg_opa(container_transp_9, 0);
-
-    // bar_indicator: bar_indicator_10 (style)
-    lv_style_t* bar_indicator_10 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(bar_indicator_10);
-    obj_registry_add("bar_indicator", bar_indicator_10);
-    lv_style_set_radius(bar_indicator_10, 4);
-
-    // bg_gradient: bg_gradient_11 (style)
-    lv_style_t* bg_gradient_11 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(bg_gradient_11);
-    obj_registry_add("bg_gradient", bg_gradient_11);
-    lv_style_set_bg_opa(bg_gradient_11, 255);
-    lv_style_set_bg_color(bg_gradient_11, lv_color_hex(0x353535));
-
-    // flex_x: flex_x_12 (style)
-    lv_style_t* flex_x_12 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(flex_x_12);
-    obj_registry_add("flex_x", flex_x_12);
-    lv_style_set_layout(flex_x_12, LV_LAYOUT_FLEX);
-    lv_style_set_flex_flow(flex_x_12, LV_FLEX_FLOW_ROW);
-
-    // flex_y: flex_y_13 (style)
-    lv_style_t* flex_y_13 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(flex_y_13);
-    obj_registry_add("flex_y", flex_y_13);
-    lv_style_set_layout(flex_y_13, LV_LAYOUT_FLEX);
-    lv_style_set_flex_flow(flex_y_13, LV_FLEX_FLOW_COLUMN);
-
-    // indicator_green: indicator_green_14 (style)
-    lv_style_t* indicator_green_14 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_green_14);
-    obj_registry_add("indicator_green", indicator_green_14);
-    lv_style_set_text_color(indicator_green_14, lv_color_hex(0x44EE44));
-
-    // indicator_yellow: indicator_yellow_15 (style)
-    lv_style_t* indicator_yellow_15 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_yellow_15);
-    obj_registry_add("indicator_yellow", indicator_yellow_15);
-    lv_style_set_text_color(indicator_yellow_15, lv_color_hex(0xFFFF55));
-
-    // text_actionable: text_actionable_16 (style)
-    lv_style_t* text_actionable_16 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(text_actionable_16);
-    obj_registry_add("text_actionable", text_actionable_16);
-    lv_style_set_text_color(text_actionable_16, lv_color_hex(0xFFFF55));
-    lv_style_set_text_font(text_actionable_16, font_kode_14_5);
-
-    // jog_btn: jog_btn_17 (style)
-    lv_style_t* jog_btn_17 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(jog_btn_17);
-    obj_registry_add("jog_btn", jog_btn_17);
-    lv_style_set_pad_all(jog_btn_17, 5);
-    lv_style_set_pad_bottom(jog_btn_17, 10);
-    lv_style_set_pad_top(jog_btn_17, 10);
-    lv_style_set_margin_all(jog_btn_17, 0);
-    lv_style_set_radius(jog_btn_17, 2);
-
-    // border_top_btn: border_top_btn_18 (style)
-    lv_style_t* border_top_btn_18 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(border_top_btn_18);
-    obj_registry_add("border_top_btn", border_top_btn_18);
-    lv_style_set_border_width(border_top_btn_18, 1);
-    lv_style_set_border_color(border_top_btn_18, lv_color_hex(0xFFFFFF));
-    lv_style_set_border_opa(border_top_btn_18, 50);
-    lv_style_set_border_side(border_top_btn_18, 3);
-
-    // border_right: border_right_19 (style)
-    lv_style_t* border_right_19 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(border_right_19);
-    obj_registry_add("border_right", border_right_19);
-    lv_style_set_border_width(border_right_19, 1);
-    lv_style_set_border_color(border_right_19, lv_color_hex(0xFFFFFF));
-    lv_style_set_border_opa(border_right_19, 50);
-    lv_style_set_border_side(border_right_19, LV_BORDER_SIDE_RIGHT);
-
-    // indicator_light: indicator_light_20 (style)
-    lv_style_t* indicator_light_20 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_light_20);
-    obj_registry_add("indicator_light", indicator_light_20);
-    lv_style_set_border_width(indicator_light_20, 6);
-    lv_style_set_pad_left(indicator_light_20, 12);
-    lv_style_set_margin_left(indicator_light_20, 5);
-    lv_style_set_border_opa(indicator_light_20, 200);
-    lv_style_set_border_side(indicator_light_20, LV_BORDER_SIDE_LEFT);
-
-    // indicator_light_red: indicator_light_red_21 (style)
-    lv_style_t* indicator_light_red_21 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_light_red_21);
-    obj_registry_add("indicator_light_red", indicator_light_red_21);
-    lv_style_set_border_color(indicator_light_red_21, lv_color_hex(0xFF5555));
-
-    // indicator_light_green: indicator_light_green_22 (style)
-    lv_style_t* indicator_light_green_22 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_light_green_22);
-    obj_registry_add("indicator_light_green", indicator_light_green_22);
-    lv_style_set_border_color(indicator_light_green_22, lv_color_hex(0x55FF55));
-
-    // indicator_light_yellow: indicator_light_yellow_23 (style)
-    lv_style_t* indicator_light_yellow_23 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(indicator_light_yellow_23);
-    obj_registry_add("indicator_light_yellow", indicator_light_yellow_23);
-    lv_style_set_border_color(indicator_light_yellow_23, lv_color_hex(0xFFFF55));
-
-    // debug: debug_24 (style)
-    lv_style_t* debug_24 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(debug_24);
-    obj_registry_add("debug", debug_24);
-    lv_style_set_bg_color(debug_24, lv_color_hex(0xF000F0));
-    lv_style_set_bg_opa(debug_24, LV_OPA_COVER);
-
-    // btn_clicked: btn_clicked_25 (style)
-    lv_style_t* btn_clicked_25 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(btn_clicked_25);
-    obj_registry_add("btn_clicked", btn_clicked_25);
-    lv_style_set_bg_color(btn_clicked_25, lv_color_hex(0x777777));
-    lv_style_set_bg_opa(btn_clicked_25, 60);
-
-    // bg_group: bg_group_26 (style)
-    lv_style_t* bg_group_26 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(bg_group_26);
-    obj_registry_add("bg_group", bg_group_26);
-    lv_style_set_bg_opa(bg_group_26, 40);
-    lv_style_set_bg_color(bg_group_26, lv_color_hex(0x111111));
-
-    // tick_color: tick_color_27 (style)
-    lv_style_t* tick_color_27 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(tick_color_27);
-    obj_registry_add("tick_color", tick_color_27);
-    lv_style_set_line_color(tick_color_27, lv_color_hex(0x777777));
-
-    // background_purple: background_purple_28 (style)
-    lv_style_t* background_purple_28 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(background_purple_28);
-    obj_registry_add("background_purple", background_purple_28);
-    lv_style_set_text_color(background_purple_28, lv_color_hex(0xFF00FF));
-
-    // background_none: background_none_29 (style)
-    lv_style_t* background_none_29 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(background_none_29);
-    obj_registry_add("background_none", background_none_29);
-    lv_style_set_shadow_opa(background_none_29, 0);
-    lv_style_set_bg_opa(background_none_29, 0);
-
-    // titlebar: titlebar_30 (style)
-    lv_style_t* titlebar_30 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(titlebar_30);
-    obj_registry_add("titlebar", titlebar_30);
-    lv_style_set_outline_width(titlebar_30, 1);
-    lv_style_set_outline_color(titlebar_30, lv_color_hex(0xFFEEFF));
-    lv_style_set_outline_opa(titlebar_30, 150);
-    lv_style_set_border_width(titlebar_30, 1);
-    lv_style_set_border_color(titlebar_30, lv_color_hex(0x777777));
-    lv_style_set_border_opa(titlebar_30, 255);
-    lv_style_set_outline_opa(titlebar_30, 0);
-    lv_style_set_shadow_opa(titlebar_30, 0);
-    lv_style_set_radius(titlebar_30, 0);
-    lv_style_set_margin_all(titlebar_30, 0);
-    lv_style_set_pad_all(titlebar_30, 0);
-    lv_style_set_radius(titlebar_30, 8);
-    lv_style_set_margin_right(titlebar_30, 3);
-    lv_style_set_margin_left(titlebar_30, 3);
-
-    // titlebar_entry: titlebar_entry_31 (style)
-    lv_style_t* titlebar_entry_31 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(titlebar_entry_31);
-    obj_registry_add("titlebar_entry", titlebar_entry_31);
-    lv_style_set_pad_left(titlebar_entry_31, 10);
-    lv_style_set_pad_right(titlebar_entry_31, 10);
-    lv_style_set_width(titlebar_entry_31, LV_SIZE_CONTENT);
-
-    // titlebar_entry_center_kode: titlebar_entry_center_kode_32 (style)
-    lv_style_t* titlebar_entry_center_kode_32 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(titlebar_entry_center_kode_32);
-    obj_registry_add("titlebar_entry_center_kode", titlebar_entry_center_kode_32);
-    lv_style_set_pad_top(titlebar_entry_center_kode_32, 2);
-
-    // font_default: font_default_33 (style)
-    lv_style_t* font_default_33 = malloc(sizeof(lv_style_t));
-
-    lv_style_init(font_default_33);
-    obj_registry_add("font_default", font_default_33);
-    lv_style_set_text_font(font_default_33, NULL);
-
-    // unnamed: obj_34 (obj)
-    lv_obj_t* obj_34 = lv_obj_create(parent);
-
-    lv_obj_add_style(obj_34, container_8, 0);
-    lv_obj_add_style(obj_34, flex_y_13, 0);
-    lv_obj_set_style_size(obj_34, lv_pct(100), lv_pct(100), 0);
-    // unnamed: obj_35 (obj)
-    lv_obj_t* obj_35 = lv_obj_create(obj_34);
-
-    lv_obj_add_style(obj_35, container_8, 0);
-    lv_obj_add_style(obj_35, titlebar_30, 0);
-    lv_obj_add_style(obj_35, flex_x_12, 0);
-    lv_obj_set_style_text_font(obj_35, font_kode_14_5, 0);
-    lv_obj_set_style_size(obj_35, lv_pct(100), 35, 0);
-    lv_obj_set_flex_align(obj_35, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
-    // unnamed: label_36 (label)
-    lv_obj_t* label_36 = lv_label_create(obj_35);
-
-    lv_obj_add_style(label_36, titlebar_entry_31, 0);
-    lv_obj_set_style_text_font(label_36, LV_FONT_DEFAULT, 0);
-    lv_label_set_text(label_36, "\xef\x80\x95  ");
-    lv_obj_set_style_pad_right(label_36, 0, 0);
-
-    // unnamed: led_37 (led)
-    lv_obj_t* led_37 = lv_led_create(obj_35);
-
-    lv_obj_set_style_size(led_37, 15, 15, 0);
-    lv_led_off(led_37);
-    lv_obj_set_style_pad_left(led_37, 0, 0);
-    data_binding_add_observer("motion.homed.all", led_37, 5, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, (const void*)&(bool){false});
-
-    // unnamed: label_38 (label)
-    lv_obj_t* label_38 = lv_label_create(obj_35);
-
-    lv_obj_add_style(label_38, titlebar_entry_31, 0);
-    lv_obj_set_style_text_font(label_38, LV_FONT_DEFAULT, 0);
-    lv_label_set_text(label_38, "\xef\x84\xa4 ");
-    lv_obj_set_style_pad_right(label_38, 0, 0);
-
-    // unnamed: label_39 (label)
-    lv_obj_t* label_39 = lv_label_create(obj_35);
-
-    lv_obj_add_style(label_39, titlebar_entry_31, 0);
-    lv_obj_add_style(label_39, titlebar_entry_center_kode_32, 0);
-    lv_obj_set_style_pad_left(label_39, 0, 0);
-    lv_label_set_text(label_39, "?");
-    data_binding_add_observer("motion.wcs.active_name", label_39, 0, "%s", 0, NULL);
-
-    // unnamed: label_40 (label)
-    lv_obj_t* label_40 = lv_label_create(obj_35);
-
-    lv_obj_add_style(label_40, titlebar_entry_31, 0);
-    lv_obj_add_style(label_40, titlebar_entry_center_kode_32, 0);
-    lv_label_set_text(label_40, "Status: ?");
-    lv_obj_set_style_flex_grow(label_40, 1, 0);
-    lv_obj_set_style_text_align(label_40, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(label_40, lv_color_hex(0xFFFF44), 0);
-    data_binding_add_observer("machine.status_text", label_40, 0, "Status: %s", 0, NULL);
-
-    // unnamed: obj_41 (obj)
-    lv_obj_t* obj_41 = lv_obj_create(obj_35);
-
-    lv_obj_add_style(obj_41, container_8, 0);
-    lv_obj_set_style_size(obj_41, 120, lv_pct(100), 0);
-    lv_obj_set_style_text_font(obj_41, LV_FONT_DEFAULT, 0);
-    // unnamed: dropdown_42 (dropdown)
-    lv_obj_t* dropdown_42 = lv_dropdown_create(obj_41);
-
-    lv_obj_add_style(dropdown_42, container_8, 0);
-    lv_obj_set_style_size(dropdown_42, lv_pct(100), lv_pct(100), 0);
-    lv_obj_set_ext_click_area(dropdown_42, 20);
-    lv_dropdown_set_options(dropdown_42, "Jog/Pos\nProbe\nProbe Wiz");
-
-
-
-    // unnamed: tileview_43 (tileview)
-    lv_obj_t* tileview_43 = lv_tileview_create(obj_34);
-
-    lv_obj_add_style(tileview_43, container_8, 0);
-    lv_obj_set_style_flex_grow(tileview_43, 1, 0);
-    lv_obj_set_style_size(tileview_43, lv_pct(100), lv_pct(100), 0);
-    lv_obj_set_style_pad_row(tileview_43, 0, 0);
-    lv_obj_set_style_pad_column(tileview_43, 0, 0);
-    lv_obj_set_scrollbar_mode(tileview_43, LV_SCROLLBAR_MODE_ACTIVE);
-    // unnamed: obj_44 (obj)
-    lv_obj_t* obj_44 = lv_tileview_add_tile(tileview_43, 0, 0, LV_DIR_RIGHT);
-
-    lv_obj_add_style(obj_44, container_8, 0);
     // main: main_45 (obj)
-    lv_obj_t* main_45 = lv_obj_create(obj_44);
+    lv_obj_t* main_45 = lv_obj_create(parent);
 
     obj_registry_add("main", main_45);
     lv_obj_set_style_layout(main_45, LV_LAYOUT_FLEX, 0);
@@ -1341,13 +997,23 @@ void create_ui(lv_obj_t* parent) {
 
 
 
+}
 
-    // unnamed: obj_139 (obj)
-    lv_obj_t* obj_139 = lv_tileview_add_tile(tileview_43, 1, 0, 3);
+static void destroy_ui_obj_44(lv_obj_t** obj_ptr) {
+    if (!obj_ptr || !*obj_ptr) return;
+    lv_obj_clean(*obj_ptr);
+    *obj_ptr = NULL;
+}
 
-    lv_obj_add_style(obj_139, container_8, 0);
+static void create_ui_obj_139(lv_obj_t* parent) {
+    // --- Static Arrays ---
+    static const int32_t s_static_array_3[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_2[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_1[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_0[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+
     // unnamed: obj_140 (obj)
-    lv_obj_t* obj_140 = lv_obj_create(obj_139);
+    lv_obj_t* obj_140 = lv_obj_create(parent);
 
     lv_obj_add_style(obj_140, container_transp_9, 0);
     lv_obj_add_style(obj_140, flex_x_12, 0);
@@ -1393,7 +1059,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(obj_146, 5, 0);
     lv_obj_set_style_pad_row(obj_146, 5, 0);
     lv_obj_set_style_pad_column(obj_146, 5, 0);
-    lv_obj_set_grid_dsc_array(obj_146, s_static_array_8, s_static_array_9);
+    lv_obj_set_grid_dsc_array(obj_146, s_static_array_0, s_static_array_1);
     // unnamed: obj_147 (obj)
     lv_obj_t* obj_147 = lv_obj_create(obj_146);
 
@@ -1634,7 +1300,7 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(obj_176, 5, 0);
     lv_obj_set_style_pad_row(obj_176, 5, 0);
     lv_obj_set_style_pad_column(obj_176, 5, 0);
-    lv_obj_set_grid_dsc_array(obj_176, s_static_array_10, s_static_array_11);
+    lv_obj_set_grid_dsc_array(obj_176, s_static_array_2, s_static_array_3);
     // unnamed: obj_177 (obj)
     lv_obj_t* obj_177 = lv_obj_create(obj_176);
 
@@ -1991,29 +1657,471 @@ void create_ui(lv_obj_t* parent) {
 
 
 
+}
+
+static void destroy_ui_obj_139(lv_obj_t** obj_ptr) {
+    if (!obj_ptr || !*obj_ptr) return;
+    lv_obj_clean(*obj_ptr);
+    *obj_ptr = NULL;
+}
+
+static void create_ui_obj_221(lv_obj_t* parent) {
+    // probing_wizard: probing_wizard_222 (obj)
+    lv_obj_t* probing_wizard_222 = lv_probing_wizard_create(parent);
+
+    obj_registry_add("probing_wizard", probing_wizard_222);
+    lv_probing_wizard_set_mode(probing_wizard_222, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
+
+}
+
+static void destroy_ui_obj_221(lv_obj_t** obj_ptr) {
+    if (!obj_ptr || !*obj_ptr) return;
+    lv_obj_clean(*obj_ptr);
+    *obj_ptr = NULL;
+}
+
+static void create_ui_obj_223(lv_obj_t* parent) {
+    // cam_positioning: cam_positioning_224 (obj)
+    lv_obj_t* cam_positioning_224 = lv_cam_positioning_create(parent);
+
+    obj_registry_add("cam_positioning", cam_positioning_224);
+    lv_cam_positioning_set_mode(cam_positioning_224, LV_CAM_POS_MODE_POINT);
+
+}
+
+static void destroy_ui_obj_223(lv_obj_t** obj_ptr) {
+    if (!obj_ptr || !*obj_ptr) return;
+    lv_obj_clean(*obj_ptr);
+    *obj_ptr = NULL;
+}
+
+void create_ui(lv_obj_t* parent) {
+    // --- Static Arrays for LVGL properties ---
+    static const int32_t s_static_array_11[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_10[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_9[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_8[] = { 75, 75, 75, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_7[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_6[] = { LV_GRID_CONTENT, LV_GRID_FR1, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_5[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_4[] = { 22, 50, 12, 50, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_3[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_2[] = { LV_GRID_CONTENT, LV_GRID_FR1, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_1[] = { LV_GRID_CONTENT, LV_GRID_TEMPLATE_LAST };
+    static const int32_t s_static_array_0[] = { LV_GRID_CONTENT, LV_GRID_FR1, LV_GRID_TEMPLATE_LAST };
+
+    // font_kode_40: font_kode_40_0 (font)
+    #ifdef LOAD_FONTS_TTF
+    font_kode_40_0 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 40);
+    #else
+    extern const lv_font_t font_kode_40;
+    font_kode_40_0 = &font_kode_40;
+    #endif
+
+    // font_kode_34: font_kode_34_1 (font)
+    #ifdef LOAD_FONTS_TTF
+    font_kode_34_1 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 34);
+    #else
+    extern const lv_font_t font_kode_34;
+    font_kode_34_1 = &font_kode_34;
+    #endif
+
+    // font_kode_30: font_kode_30_2 (font)
+    #ifdef LOAD_FONTS_TTF
+    font_kode_30_2 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 30);
+    #else
+    extern const lv_font_t font_kode_30;
+    font_kode_30_2 = &font_kode_30;
+    #endif
+
+    // font_kode_24: font_kode_24_3 (font)
+    #ifdef LOAD_FONTS_TTF
+    const lv_font_t* font_kode_24_3 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 24);
+    #else
+    extern const lv_font_t font_kode_24;
+    const lv_font_t* font_kode_24_3 = &font_kode_24;
+    #endif
+
+    // font_kode_20: font_kode_20_4 (font)
+    #ifdef LOAD_FONTS_TTF
+    font_kode_20_4 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 20);
+    #else
+    extern const lv_font_t font_kode_20;
+    font_kode_20_4 = &font_kode_20;
+    #endif
+
+    // font_kode_14: font_kode_14_5 (font)
+    #ifdef LOAD_FONTS_TTF
+    font_kode_14_5 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/examples/fonts/kodemono-medium.ttf", 14);
+    #else
+    extern const lv_font_t font_kode_14;
+    font_kode_14_5 = &font_kode_14;
+    #endif
+
+    // font_montserrat_14: font_montserrat_14_6 (font)
+    #ifdef LOAD_FONTS_TTF
+    const lv_font_t* font_montserrat_14_6 = lv_tiny_ttf_create_file("S:/Users/loranttoth/Development/SW/CNC/lvgl_ui/lvgl/scripts/built_in_font/Montserrat-Medium.ttf", 14);
+    #else
+    extern const lv_font_t font_montserrat_14;
+    const lv_font_t* font_montserrat_14_6 = &font_montserrat_14;
+    #endif
+
+    // debug: debug_7 (style)
+    debug_7 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(debug_7);
+    obj_registry_add("debug", debug_7);
+    lv_style_set_outline_width(debug_7, 1);
+    lv_style_set_outline_color(debug_7, lv_color_hex(0xFFEEFF));
+    lv_style_set_outline_opa(debug_7, 150);
+    lv_style_set_border_width(debug_7, 1);
+    lv_style_set_border_color(debug_7, lv_color_hex(0xFFEEFF));
+    lv_style_set_border_opa(debug_7, 150);
+    lv_style_set_radius(debug_7, 0);
+
+    // container: container_8 (style)
+    container_8 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(container_8);
+    obj_registry_add("container", container_8);
+    lv_style_set_pad_all(container_8, 0);
+    lv_style_set_margin_all(container_8, 0);
+    lv_style_set_border_width(container_8, 0);
+    lv_style_set_pad_row(container_8, 3);
+    lv_style_set_pad_column(container_8, 5);
+    lv_style_set_bg_color(container_8, lv_color_hex(0x222222));
+    lv_style_set_text_color(container_8, lv_color_hex(0xEBEBCB));
+    lv_style_set_radius(container_8, 0);
+
+    // container_transp: container_transp_9 (style)
+    container_transp_9 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(container_transp_9);
+    obj_registry_add("container_transp", container_transp_9);
+    lv_style_set_pad_all(container_transp_9, 0);
+    lv_style_set_margin_all(container_transp_9, 0);
+    lv_style_set_border_width(container_transp_9, 0);
+    lv_style_set_pad_row(container_transp_9, 3);
+    lv_style_set_pad_column(container_transp_9, 5);
+    lv_style_set_bg_color(container_transp_9, lv_color_hex(0x222222));
+    lv_style_set_text_color(container_transp_9, lv_color_hex(0xEBEBCB));
+    lv_style_set_radius(container_transp_9, 0);
+    lv_style_set_bg_opa(container_transp_9, 0);
+
+    // bar_indicator: bar_indicator_10 (style)
+    bar_indicator_10 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(bar_indicator_10);
+    obj_registry_add("bar_indicator", bar_indicator_10);
+    lv_style_set_radius(bar_indicator_10, 4);
+
+    // bg_gradient: bg_gradient_11 (style)
+    bg_gradient_11 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(bg_gradient_11);
+    obj_registry_add("bg_gradient", bg_gradient_11);
+    lv_style_set_bg_opa(bg_gradient_11, 255);
+    lv_style_set_bg_color(bg_gradient_11, lv_color_hex(0x353535));
+
+    // flex_x: flex_x_12 (style)
+    flex_x_12 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(flex_x_12);
+    obj_registry_add("flex_x", flex_x_12);
+    lv_style_set_layout(flex_x_12, LV_LAYOUT_FLEX);
+    lv_style_set_flex_flow(flex_x_12, LV_FLEX_FLOW_ROW);
+
+    // flex_y: flex_y_13 (style)
+    flex_y_13 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(flex_y_13);
+    obj_registry_add("flex_y", flex_y_13);
+    lv_style_set_layout(flex_y_13, LV_LAYOUT_FLEX);
+    lv_style_set_flex_flow(flex_y_13, LV_FLEX_FLOW_COLUMN);
+
+    // indicator_green: indicator_green_14 (style)
+    indicator_green_14 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_green_14);
+    obj_registry_add("indicator_green", indicator_green_14);
+    lv_style_set_text_color(indicator_green_14, lv_color_hex(0x44EE44));
+
+    // indicator_yellow: indicator_yellow_15 (style)
+    indicator_yellow_15 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_yellow_15);
+    obj_registry_add("indicator_yellow", indicator_yellow_15);
+    lv_style_set_text_color(indicator_yellow_15, lv_color_hex(0xFFFF55));
+
+    // text_actionable: text_actionable_16 (style)
+    text_actionable_16 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(text_actionable_16);
+    obj_registry_add("text_actionable", text_actionable_16);
+    lv_style_set_text_color(text_actionable_16, lv_color_hex(0xFFFF55));
+    lv_style_set_text_font(text_actionable_16, font_kode_14_5);
+
+    // jog_btn: jog_btn_17 (style)
+    jog_btn_17 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(jog_btn_17);
+    obj_registry_add("jog_btn", jog_btn_17);
+    lv_style_set_pad_all(jog_btn_17, 5);
+    lv_style_set_pad_bottom(jog_btn_17, 10);
+    lv_style_set_pad_top(jog_btn_17, 10);
+    lv_style_set_margin_all(jog_btn_17, 0);
+    lv_style_set_radius(jog_btn_17, 2);
+
+    // border_top_btn: border_top_btn_18 (style)
+    border_top_btn_18 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(border_top_btn_18);
+    obj_registry_add("border_top_btn", border_top_btn_18);
+    lv_style_set_border_width(border_top_btn_18, 1);
+    lv_style_set_border_color(border_top_btn_18, lv_color_hex(0xFFFFFF));
+    lv_style_set_border_opa(border_top_btn_18, 50);
+    lv_style_set_border_side(border_top_btn_18, 3);
+
+    // border_right: border_right_19 (style)
+    border_right_19 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(border_right_19);
+    obj_registry_add("border_right", border_right_19);
+    lv_style_set_border_width(border_right_19, 1);
+    lv_style_set_border_color(border_right_19, lv_color_hex(0xFFFFFF));
+    lv_style_set_border_opa(border_right_19, 50);
+    lv_style_set_border_side(border_right_19, LV_BORDER_SIDE_RIGHT);
+
+    // indicator_light: indicator_light_20 (style)
+    indicator_light_20 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_light_20);
+    obj_registry_add("indicator_light", indicator_light_20);
+    lv_style_set_border_width(indicator_light_20, 6);
+    lv_style_set_pad_left(indicator_light_20, 12);
+    lv_style_set_margin_left(indicator_light_20, 5);
+    lv_style_set_border_opa(indicator_light_20, 200);
+    lv_style_set_border_side(indicator_light_20, LV_BORDER_SIDE_LEFT);
+
+    // indicator_light_red: indicator_light_red_21 (style)
+    indicator_light_red_21 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_light_red_21);
+    obj_registry_add("indicator_light_red", indicator_light_red_21);
+    lv_style_set_border_color(indicator_light_red_21, lv_color_hex(0xFF5555));
+
+    // indicator_light_green: indicator_light_green_22 (style)
+    indicator_light_green_22 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_light_green_22);
+    obj_registry_add("indicator_light_green", indicator_light_green_22);
+    lv_style_set_border_color(indicator_light_green_22, lv_color_hex(0x55FF55));
+
+    // indicator_light_yellow: indicator_light_yellow_23 (style)
+    indicator_light_yellow_23 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(indicator_light_yellow_23);
+    obj_registry_add("indicator_light_yellow", indicator_light_yellow_23);
+    lv_style_set_border_color(indicator_light_yellow_23, lv_color_hex(0xFFFF55));
+
+    // debug: debug_24 (style)
+    debug_24 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(debug_24);
+    obj_registry_add("debug", debug_24);
+    lv_style_set_bg_color(debug_24, lv_color_hex(0xF000F0));
+    lv_style_set_bg_opa(debug_24, LV_OPA_COVER);
+
+    // btn_clicked: btn_clicked_25 (style)
+    btn_clicked_25 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(btn_clicked_25);
+    obj_registry_add("btn_clicked", btn_clicked_25);
+    lv_style_set_bg_color(btn_clicked_25, lv_color_hex(0x777777));
+    lv_style_set_bg_opa(btn_clicked_25, 60);
+
+    // bg_group: bg_group_26 (style)
+    bg_group_26 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(bg_group_26);
+    obj_registry_add("bg_group", bg_group_26);
+    lv_style_set_bg_opa(bg_group_26, 40);
+    lv_style_set_bg_color(bg_group_26, lv_color_hex(0x111111));
+
+    // tick_color: tick_color_27 (style)
+    tick_color_27 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(tick_color_27);
+    obj_registry_add("tick_color", tick_color_27);
+    lv_style_set_line_color(tick_color_27, lv_color_hex(0x777777));
+
+    // background_purple: background_purple_28 (style)
+    background_purple_28 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(background_purple_28);
+    obj_registry_add("background_purple", background_purple_28);
+    lv_style_set_text_color(background_purple_28, lv_color_hex(0xFF00FF));
+
+    // background_none: background_none_29 (style)
+    background_none_29 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(background_none_29);
+    obj_registry_add("background_none", background_none_29);
+    lv_style_set_shadow_opa(background_none_29, 0);
+    lv_style_set_bg_opa(background_none_29, 0);
+
+    // titlebar: titlebar_30 (style)
+    titlebar_30 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(titlebar_30);
+    obj_registry_add("titlebar", titlebar_30);
+    lv_style_set_outline_width(titlebar_30, 1);
+    lv_style_set_outline_color(titlebar_30, lv_color_hex(0xFFEEFF));
+    lv_style_set_outline_opa(titlebar_30, 150);
+    lv_style_set_border_width(titlebar_30, 1);
+    lv_style_set_border_color(titlebar_30, lv_color_hex(0x777777));
+    lv_style_set_border_opa(titlebar_30, 255);
+    lv_style_set_outline_opa(titlebar_30, 0);
+    lv_style_set_shadow_opa(titlebar_30, 0);
+    lv_style_set_radius(titlebar_30, 0);
+    lv_style_set_margin_all(titlebar_30, 0);
+    lv_style_set_pad_all(titlebar_30, 0);
+    lv_style_set_radius(titlebar_30, 8);
+    lv_style_set_margin_right(titlebar_30, 3);
+    lv_style_set_margin_left(titlebar_30, 3);
+
+    // titlebar_entry: titlebar_entry_31 (style)
+    titlebar_entry_31 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(titlebar_entry_31);
+    obj_registry_add("titlebar_entry", titlebar_entry_31);
+    lv_style_set_pad_left(titlebar_entry_31, 10);
+    lv_style_set_pad_right(titlebar_entry_31, 10);
+    lv_style_set_width(titlebar_entry_31, LV_SIZE_CONTENT);
+
+    // titlebar_entry_center_kode: titlebar_entry_center_kode_32 (style)
+    titlebar_entry_center_kode_32 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(titlebar_entry_center_kode_32);
+    obj_registry_add("titlebar_entry_center_kode", titlebar_entry_center_kode_32);
+    lv_style_set_pad_top(titlebar_entry_center_kode_32, 2);
+
+    // font_default: font_default_33 (style)
+    font_default_33 = LVGL_UI_MALLOC(sizeof(lv_style_t));
+
+    lv_style_init(font_default_33);
+    obj_registry_add("font_default", font_default_33);
+    lv_style_set_text_font(font_default_33, NULL);
+
+    // unnamed: obj_34 (obj)
+    lv_obj_t* obj_34 = lv_obj_create(parent);
+
+    lv_obj_add_style(obj_34, container_8, 0);
+    lv_obj_add_style(obj_34, flex_y_13, 0);
+    lv_obj_set_style_size(obj_34, lv_pct(100), lv_pct(100), 0);
+    // unnamed: obj_35 (obj)
+    lv_obj_t* obj_35 = lv_obj_create(obj_34);
+
+    lv_obj_add_style(obj_35, container_8, 0);
+    lv_obj_add_style(obj_35, titlebar_30, 0);
+    lv_obj_add_style(obj_35, flex_x_12, 0);
+    lv_obj_set_style_text_font(obj_35, font_kode_14_5, 0);
+    lv_obj_set_style_size(obj_35, lv_pct(100), 35, 0);
+    lv_obj_set_flex_align(obj_35, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+    // unnamed: label_36 (label)
+    lv_obj_t* label_36 = lv_label_create(obj_35);
+
+    lv_obj_add_style(label_36, titlebar_entry_31, 0);
+    lv_obj_set_style_text_font(label_36, LV_FONT_DEFAULT, 0);
+    lv_label_set_text(label_36, "\xef\x80\x95  ");
+    lv_obj_set_style_pad_right(label_36, 0, 0);
+
+    // unnamed: led_37 (led)
+    lv_obj_t* led_37 = lv_led_create(obj_35);
+
+    lv_obj_set_style_size(led_37, 15, 15, 0);
+    lv_led_off(led_37);
+    lv_obj_set_style_pad_left(led_37, 0, 0);
+    data_binding_add_observer("motion.homed.all", led_37, 5, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, (const void*)&(bool){false});
+
+    // unnamed: label_38 (label)
+    lv_obj_t* label_38 = lv_label_create(obj_35);
+
+    lv_obj_add_style(label_38, titlebar_entry_31, 0);
+    lv_obj_set_style_text_font(label_38, LV_FONT_DEFAULT, 0);
+    lv_label_set_text(label_38, "\xef\x84\xa4 ");
+    lv_obj_set_style_pad_right(label_38, 0, 0);
+
+    // unnamed: label_39 (label)
+    lv_obj_t* label_39 = lv_label_create(obj_35);
+
+    lv_obj_add_style(label_39, titlebar_entry_31, 0);
+    lv_obj_add_style(label_39, titlebar_entry_center_kode_32, 0);
+    lv_obj_set_style_pad_left(label_39, 0, 0);
+    lv_label_set_text(label_39, "?");
+    data_binding_add_observer("motion.wcs.active_name", label_39, 0, "%s", 0, NULL);
+
+    // unnamed: label_40 (label)
+    lv_obj_t* label_40 = lv_label_create(obj_35);
+
+    lv_obj_add_style(label_40, titlebar_entry_31, 0);
+    lv_obj_add_style(label_40, titlebar_entry_center_kode_32, 0);
+    lv_label_set_text(label_40, "Status: ?");
+    lv_obj_set_style_flex_grow(label_40, 1, 0);
+    lv_obj_set_style_text_align(label_40, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(label_40, lv_color_hex(0xFFFF44), 0);
+    data_binding_add_observer("machine.status_text", label_40, 0, "Status: %s", 0, NULL);
+
+    // unnamed: obj_41 (obj)
+    lv_obj_t* obj_41 = lv_obj_create(obj_35);
+
+    lv_obj_add_style(obj_41, container_8, 0);
+    lv_obj_set_style_size(obj_41, 120, lv_pct(100), 0);
+    lv_obj_set_style_text_font(obj_41, LV_FONT_DEFAULT, 0);
+    // unnamed: dropdown_42 (dropdown)
+    lv_obj_t* dropdown_42 = lv_dropdown_create(obj_41);
+
+    lv_obj_add_style(dropdown_42, container_8, 0);
+    lv_obj_set_style_size(dropdown_42, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_ext_click_area(dropdown_42, 20);
+    lv_dropdown_set_options(dropdown_42, "Jog/Pos\nProbe\nProbe Wiz");
+
+
+
+    // unnamed: tileview_43 (tileview)
+    lv_obj_t* tileview_43 = lv_tileview_create(obj_34);
+
+    lv_obj_add_style(tileview_43, container_8, 0);
+    lv_obj_set_style_flex_grow(tileview_43, 1, 0);
+    lv_obj_set_style_size(tileview_43, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_style_pad_row(tileview_43, 0, 0);
+    lv_obj_set_style_pad_column(tileview_43, 0, 0);
+    lv_obj_set_scrollbar_mode(tileview_43, LV_SCROLLBAR_MODE_ACTIVE);
+    // unnamed: obj_44 (obj)
+    lv_obj_t* obj_44 = lv_tileview_add_tile(tileview_43, 0, 0, LV_DIR_RIGHT);
+
+    lv_obj_add_style(obj_44, container_8, 0);
+    deferred_loader_register(tileview_43, obj_44, create_ui_obj_44);
+
+    // unnamed: obj_139 (obj)
+    lv_obj_t* obj_139 = lv_tileview_add_tile(tileview_43, 1, 0, 3);
+
+    lv_obj_add_style(obj_139, container_8, 0);
+    deferred_loader_register(tileview_43, obj_139, create_ui_obj_139);
 
     // unnamed: obj_221 (obj)
     lv_obj_t* obj_221 = lv_tileview_add_tile(tileview_43, 2, 0, 3);
 
     lv_obj_add_style(obj_221, container_8, 0);
-    // probing_wizard: probing_wizard_222 (obj)
-    lv_obj_t* probing_wizard_222 = lv_probing_wizard_create(obj_221);
-
-    obj_registry_add("probing_wizard", probing_wizard_222);
-    lv_probing_wizard_set_mode(probing_wizard_222, LV_PROBING_WIZARD_MODE_RECTANGLE, false);
-
+    deferred_loader_register(tileview_43, obj_221, create_ui_obj_221);
 
     // unnamed: obj_223 (obj)
     lv_obj_t* obj_223 = lv_tileview_add_tile(tileview_43, 3, 0, LV_DIR_LEFT);
 
     lv_obj_add_style(obj_223, container_8, 0);
-    // cam_positioning: cam_positioning_224 (obj)
-    lv_obj_t* cam_positioning_224 = lv_cam_positioning_create(obj_223);
+    deferred_loader_register(tileview_43, obj_223, create_ui_obj_223);
 
-    obj_registry_add("cam_positioning", cam_positioning_224);
-    lv_cam_positioning_set_mode(cam_positioning_224, LV_CAM_POS_MODE_NONE);
-
-
+    deferred_loader_init(tileview_43);
 
 
     // disconnected_overlay: disconnected_overlay_225 (obj)
@@ -2054,4 +2162,39 @@ void create_ui(lv_obj_t* parent) {
     data_binding_add_observer("motion.jog.axis_selected_str", label_228, 0, "%s", 0, NULL);
 
 
+}
+
+void destroy_ui(lv_obj_t** root_ptr) {
+    if (!root_ptr || !*root_ptr) return;
+    lv_obj_delete(*root_ptr);
+    *root_ptr = NULL;
+    // Free all hoisted (file-scope) allocations.
+    // destroy_* fns already NULL these after their own frees, so free(NULL) is safe.
+    LVGL_UI_FREE(font_default_33); font_default_33 = NULL;
+    LVGL_UI_FREE(titlebar_entry_center_kode_32); titlebar_entry_center_kode_32 = NULL;
+    LVGL_UI_FREE(titlebar_entry_31); titlebar_entry_31 = NULL;
+    LVGL_UI_FREE(titlebar_30); titlebar_30 = NULL;
+    LVGL_UI_FREE(background_none_29); background_none_29 = NULL;
+    LVGL_UI_FREE(background_purple_28); background_purple_28 = NULL;
+    LVGL_UI_FREE(tick_color_27); tick_color_27 = NULL;
+    LVGL_UI_FREE(bg_group_26); bg_group_26 = NULL;
+    LVGL_UI_FREE(btn_clicked_25); btn_clicked_25 = NULL;
+    LVGL_UI_FREE(debug_24); debug_24 = NULL;
+    LVGL_UI_FREE(indicator_light_yellow_23); indicator_light_yellow_23 = NULL;
+    LVGL_UI_FREE(indicator_light_green_22); indicator_light_green_22 = NULL;
+    LVGL_UI_FREE(indicator_light_red_21); indicator_light_red_21 = NULL;
+    LVGL_UI_FREE(indicator_light_20); indicator_light_20 = NULL;
+    LVGL_UI_FREE(border_right_19); border_right_19 = NULL;
+    LVGL_UI_FREE(border_top_btn_18); border_top_btn_18 = NULL;
+    LVGL_UI_FREE(jog_btn_17); jog_btn_17 = NULL;
+    LVGL_UI_FREE(text_actionable_16); text_actionable_16 = NULL;
+    LVGL_UI_FREE(indicator_yellow_15); indicator_yellow_15 = NULL;
+    LVGL_UI_FREE(indicator_green_14); indicator_green_14 = NULL;
+    LVGL_UI_FREE(flex_y_13); flex_y_13 = NULL;
+    LVGL_UI_FREE(flex_x_12); flex_x_12 = NULL;
+    LVGL_UI_FREE(bg_gradient_11); bg_gradient_11 = NULL;
+    LVGL_UI_FREE(bar_indicator_10); bar_indicator_10 = NULL;
+    LVGL_UI_FREE(container_transp_9); container_transp_9 = NULL;
+    LVGL_UI_FREE(container_8); container_8 = NULL;
+    LVGL_UI_FREE(debug_7); debug_7 = NULL;
 }

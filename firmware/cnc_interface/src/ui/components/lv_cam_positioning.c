@@ -1211,7 +1211,14 @@ static void wiz_deactivate_zoom(lv_cam_pos_priv_t *priv)
 {
     if (!priv->wiz_zoom_active) return;
     priv->wiz_zoom_active = false;
-    _wiz_del(&priv->zoom_badge);
+
+    // Use lv_obj_delete_async: wiz_deactivate_zoom can be called from inside
+    // the badge's own CLICKED event (_zoom_badge_close_cb).  Synchronous
+    // lv_obj_delete of the current event target corrupts LVGL's event-dispatch
+    // chain.  Async delete defers until the current lv_task_handler pass ends.
+    if (priv->zoom_badge && lv_obj_is_valid(priv->zoom_badge))
+        lv_obj_delete_async(priv->zoom_badge);
+    priv->zoom_badge = NULL;
 
     if (priv->wiz_zoom_remap_pending) {
         // The zoomed keyframe never arrived (or the user cancelled fast).
@@ -2407,11 +2414,40 @@ static void overlay_press_cb(lv_event_t *e)
     lv_point_t scr_pt;
     lv_indev_get_point(lv_indev_active(), &scr_pt);
 
-    // Wizard point-drag in READY state: move the nearest collected point
+    // Wizard point-drag in READY state: move the nearest collected point.
+    // NOTE: do NOT call wiz_handle_click here — it calls sidebar_update_coords
+    // which does lv_obj_clean + lv_label_create.  That LVGL tree mutation
+    // fires on every indev tick during a drag (PRESSING) and crashes
+    // lv_obj_class_create_obj because the object tree is modified while
+    // an event is still being dispatched.  Instead we inline the minimal
+    // drag logic: update the point struct, invalidate for visual feedback.
+    // sidebar_update_coords fires on the final CLICKED event (overlay_click_cb
+    // → wiz_handle_click → sidebar_update_coords) when the finger lifts.
     if (priv->mode == LV_CAM_POS_MODE_NONE && priv->wiz_state == WIZ_READY) {
-        /* Capture the press so the tileview doesn't interpret this as a swipe. */
         lv_event_stop_bubbling(e);
-        wiz_handle_click(priv, scr_pt);
+        int16_t img_x, img_y;
+        if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
+        // Find and move nearest collected point — same logic as wiz_handle_click.
+        int32_t best_d2 = INT32_MAX;
+        int     best_pt = -1;
+        typedef struct { lv_cam_pos_point_t *pt; bool set; } pt_drag_t;
+        pt_drag_t pts[3] = {
+            { &priv->wiz_pt1,  priv->wiz_pt1_set  },
+            { &priv->wiz_pt2,  priv->wiz_pt2_set  },
+            { &priv->wiz_zref, priv->wiz_zref_set },
+        };
+        for (int i = 0; i < 3; i++) {
+            if (!pts[i].set) continue;
+            int32_t sx, sy;
+            if (!image_to_screen_coords(priv, pts[i].pt->px_x, pts[i].pt->px_y,
+                                         &sx, &sy)) continue;
+            int32_t dx = sx - scr_pt.x, dy = sy - scr_pt.y;
+            int32_t d2 = dx * dx + dy * dy;
+            if (d2 < best_d2) { best_d2 = d2; best_pt = i; }
+        }
+        if (best_pt >= 0)
+            *pts[best_pt].pt = make_point(priv, img_x, img_y);
+        lv_obj_invalidate(priv->overlay);  // redraw only — no LVGL tree changes
         return;
     }
 
