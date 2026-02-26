@@ -39,6 +39,7 @@ typedef struct {
     bool     agc_enable;          // Auto-gain control
     int16_t  aec_value;           // Manual exposure (when AEC off)
     uint8_t  agc_gain;            // Manual gain ceiling (when AGC off)
+    uint8_t  ae_lock_interval;    // AEC/AGC re-sample interval in frames (0=disabled)
 
     // Extended sensor settings
     int8_t   ae_level;            // AEC brightness bias (-3..+3)

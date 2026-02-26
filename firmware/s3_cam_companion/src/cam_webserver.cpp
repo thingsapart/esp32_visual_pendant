@@ -408,6 +408,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
       </label>
     </div>
   </div>
+    <div class="row">
+      <div>
+        <label title="AE lock interval in frames. 0 = disabled (AEC/AGC left running). Higher values will periodically re-sample exposure every N frames.">AE Lock Interval (frames, 0=disabled) &#9432; <input type="number" id="ae_lock_interval" min="0" max="255" value="0" class="sensor-ctrl"></label>
+      </div>
+    </div>
   <div class="row">
     <div>
       <label title="Colour saturation (-2..+2). Higher values produce more vivid colours; lower values move towards greyscale.">Saturation (-2..+2) &#9432; <input type="number" id="saturation" min="-2" max="2" value="0" class="sensor-ctrl"></label>
@@ -469,6 +474,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawhtml(
 <!-- Actions -->
 <div class="actions">
   <button class="btn-success" onclick="saveConfig()">&#128190; Save & Reboot</button>
+  <button class="btn-warning" onclick="applyCamera()">&#9881; Apply (no save)</button>
   <button class="btn-danger" onclick="if(confirm('Reset all settings?')) resetConfig()">Reset Defaults</button>
 </div>
 <div class="status" id="status"></div>
@@ -493,25 +499,37 @@ let hasDragged = false;
 let refreshTimer = null;
 let currentHomography = [1,0,0, 0,1,0, 0,0,1];
 let viewMode = 'processed';
+// Capture and output dimensions (filled in by syncPreviewCalibration from server response).
+// Needed to correctly scale homography coordinates (H maps capture pixels -> output pixels).
+let capW = 0, capH = 0; // camera capture resolution
+let outW = 0, outH = 0; // processed output resolution
 
 function clamp01(v) {
   return Math.max(0, Math.min(1, v));
 }
 
 function imageWidthPx() {
-  return Math.max(1, img.clientWidth || img.naturalWidth || 640);
+  return Math.max(1, img.naturalWidth || img.clientWidth || 640);
 }
 
 function imageHeightPx() {
-  return Math.max(1, img.clientHeight || img.naturalHeight || 480);
+  return Math.max(1, img.naturalHeight || img.clientHeight || 480);
 }
 
+// Source (capture) dimensions for homography input scaling.
+// Falls back to the displayed image size when unknown (works when cap==out).
+function srcWidthPx()  { return capW > 0 ? capW : imageWidthPx(); }
+function srcHeightPx() { return capH > 0 ? capH : imageHeightPx(); }
+// Destination (output) dimensions for homography output scaling.
+function dstWidthPx()  { return outW > 0 ? outW : imageWidthPx(); }
+function dstHeightPx() { return outH > 0 ? outH : imageHeightPx(); }
+
 function gridImageWidthPx() {
-  return Math.max(1, gridImg.clientWidth || gridImg.naturalWidth || 640);
+  return Math.max(1, gridImg.naturalWidth || gridImg.clientWidth || 640);
 }
 
 function gridImageHeightPx() {
-  return Math.max(1, gridImg.clientHeight || gridImg.naturalHeight || 480);
+  return Math.max(1, gridImg.naturalHeight || gridImg.clientHeight || 480);
 }
 
 function gridContainerWidthPx() {
@@ -627,56 +645,84 @@ function invert3x3(m) {
           C*invDet, F*invDet, I*invDet];
 }
 
-function applyHomographyNorm(pt, h) {
-  const w = imageWidthPx();
-  const hgt = imageHeightPx();
-  const sx = pt[0] * (w - 1);
-  const sy = pt[1] * (hgt - 1);
+// Apply homography h (in pixel space) to a point.
+// inSw/inSh: scale for the input point (capture dims for forward H, output dims for inverse).
+// outSw/outSh: scale for the output point (output dims for forward H, capture dims for inverse).
+function applyHomographyNormScaled(pt, h, inSw, inSh, outSw, outSh) {
+  const sx = pt[0] * (inSw - 1);
+  const sy = pt[1] * (inSh - 1);
   const den = h[6] * sx + h[7] * sy + h[8];
   if (!Number.isFinite(den) || Math.abs(den) < 1e-9) return [pt[0], pt[1]];
   const dx = (h[0] * sx + h[1] * sy + h[2]) / den;
   const dy = (h[3] * sx + h[4] * sy + h[5]) / den;
-  return [dx / (w - 1), dy / (hgt - 1)];
+  return [dx / (outSw - 1), dy / (outSh - 1)];
+}
+
+// H maps capture pixels -> output pixels.
+// sourceToDisplayNorm: src-normalized -> dst-normalized (forward H).
+function applyHomographyNorm(pt, h) {
+  return applyHomographyNormScaled(pt, h, srcWidthPx(), srcHeightPx(), dstWidthPx(), dstHeightPx());
+}
+
+// displayToSource uses H inverse: dst-normalized -> src-normalized.
+function applyHomographyNormInv(pt, h) {
+  return applyHomographyNormScaled(pt, h, dstWidthPx(), dstHeightPx(), srcWidthPx(), srcHeightPx());
+}
+
+// Returns the homography to use for display<->source projection.
+// When the stored H is identity but capture and output resolutions differ,
+// the /snapshot image is a pure downsample. The identity matrix does NOT
+// encode that scale, so display-coord -> source-coord conversions would
+// return values that are (out_w/cap_w) × too small. We substitute the
+// implicit scale matrix [[sc_x,0,0],[0,sc_y,0],[0,0,1]] in that case so
+// that all coordinate conversions are geometrically correct.
+function getEffectiveHomography() {
+  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
+  const isIdentity = H[0]===1&&H[1]===0&&H[2]===0&&
+                     H[3]===0&&H[4]===1&&H[5]===0&&
+                     H[6]===0&&H[7]===0&&H[8]===1;
+  if (isIdentity && capW > 1 && outW > 1 && (capW !== outW || capH !== outH)) {
+    const sx = (outW - 1) / (capW - 1);
+    const sy = (outH - 1) / (capH - 1);
+    return [sx, 0, 0,  0, sy, 0,  0, 0, 1];
+  }
+  return H;
 }
 
 function sourceToDisplayNorm(srcPt) {
   if (viewMode === 'raw') return [srcPt[0], srcPt[1]];
-  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
-  return applyHomographyNorm(srcPt, H);
+  return applyHomographyNorm(srcPt, getEffectiveHomography());
 }
 
 function displayToSourceNorm(dstPt) {
   if (viewMode === 'raw') return [dstPt[0], dstPt[1]];
-  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
+  const H = getEffectiveHomography();
   const inv = invert3x3(H);
   if (!inv) return [dstPt[0], dstPt[1]];
-  return applyHomographyNorm(dstPt, inv);
+  return applyHomographyNormInv(dstPt, inv);
 }
 
+// Grid variants: same logic, but use the grid preview image dimensions (which
+// are the same output dimensions when showing a processed snapshot).
 function gridApplyHomographyNorm(pt, h) {
-  const w = gridImageWidthPx();
-  const hgt = gridImageHeightPx();
-  const sx = pt[0] * (w - 1);
-  const sy = pt[1] * (hgt - 1);
-  const den = h[6] * sx + h[7] * sy + h[8];
-  if (!Number.isFinite(den) || Math.abs(den) < 1e-9) return [pt[0], pt[1]];
-  const dx = (h[0] * sx + h[1] * sy + h[2]) / den;
-  const dy = (h[3] * sx + h[4] * sy + h[5]) / den;
-  return [dx / (w - 1), dy / (hgt - 1)];
+  return applyHomographyNormScaled(pt, h, srcWidthPx(), srcHeightPx(), dstWidthPx(), dstHeightPx());
+}
+
+function gridApplyHomographyNormInv(pt, h) {
+  return applyHomographyNormScaled(pt, h, dstWidthPx(), dstHeightPx(), srcWidthPx(), srcHeightPx());
 }
 
 function gridDisplayToSourceNorm(dstPt) {
   if (viewMode === 'raw') return [dstPt[0], dstPt[1]];
-  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
+  const H = getEffectiveHomography();
   const inv = invert3x3(H);
   if (!inv) return [dstPt[0], dstPt[1]];
-  return gridApplyHomographyNorm(dstPt, inv);
+  return gridApplyHomographyNormInv(dstPt, inv);
 }
 
 function gridSourceToDisplayNorm(srcPt) {
   if (viewMode === 'raw') return [srcPt[0], srcPt[1]];
-  const H = isValidHomography(currentHomography) ? currentHomography : identityH();
-  return gridApplyHomographyNorm(srcPt, H);
+  return gridApplyHomographyNorm(srcPt, getEffectiveHomography());
 }
 
 function getRenderedCorners() {
@@ -761,6 +807,12 @@ async function syncPreviewCalibration() {
     const j = await r.json();
     if (j && Array.isArray(j.homography) && j.homography.length === 9) {
       currentHomography = j.homography;
+      // Update capture/output dimensions from server response so homography
+      // scaling uses the correct pixel coordinates on both sides.
+      if (j.cap_w > 0) capW = j.cap_w;
+      if (j.cap_h > 0) capH = j.cap_h;
+      if (j.out_w > 0) outW = j.out_w;
+      if (j.out_h > 0) outH = j.out_h;
       drawCorners();
       updateCornerList();
       // After updating homography/corners, fetch config to pick up any server-generated grid
@@ -770,6 +822,9 @@ async function syncPreviewCalibration() {
         if (cc && cc.grid_calibrated) {
           gridPoints = [];
           if (Array.isArray(cc.grid_points)) {
+            // Server-stored grid_points are source-normalised (0..1 over capture image).
+            // Use them directly; sourceToDisplayNorm() will project them onto the
+            // processed-view image for rendering.
             cc.grid_points.forEach(p => { if (Array.isArray(p) && p.length === 2) gridPoints.push([p[0], p[1]]); });
             if (typeof cc.grid_nx !== 'undefined') grid_nx = cc.grid_nx;
             if (typeof cc.grid_ny !== 'undefined') grid_ny = cc.grid_ny;
@@ -1115,11 +1170,15 @@ function generateDefaultGrid() {
   }
   const nx = Math.round(projW / dx) + 1;
   const ny = Math.round(projH / dy) + 1;
-  // Use the snapshot natural dimensions as the destination image size
-  const imgW = img.naturalWidth || 640;
-  const imgH = img.naturalHeight || 480;
-  const activeW = imgW - ins.left - ins.right;
-  const activeH = imgH - ins.top - ins.bottom;
+  // Output (destination) image dimensions — these are the pixel dimensions of
+  // the processed snapshot and are the coordinate space for the homography output.
+  const oW = dstWidthPx();
+  const oH = dstHeightPx();
+  // Capture (source) image dimensions — coordinate space for homography input.
+  const cW = srcWidthPx();
+  const cH = srcHeightPx();
+  const activeW = oW - ins.left - ins.right;
+  const activeH = oH - ins.top - ins.bottom;
   if (activeW <= 0 || activeH <= 0) { alert('Image margins are too large for image'); return; }
 
   const Hinv = invertHomography(currentHomography);
@@ -1130,14 +1189,17 @@ function generateDefaultGrid() {
   grid_ny = ny;
   for (let iy = 0; iy < ny; iy++) {
     for (let ix = 0; ix < nx; ix++) {
+      // Grid position in output pixel coordinates.
       const dst_x = (nx > 1) ? (ins.left + ix * (activeW - 1) / (nx - 1)) : (ins.left + activeW * 0.5);
       const dst_y = (ny > 1) ? (ins.top + iy * (activeH - 1) / (ny - 1)) : (ins.top + activeH * 0.5);
+      // Back-project through H⁻¹: dst pixel coords -> src pixel coords.
       const den = Hinv[6]*dst_x + Hinv[7]*dst_y + Hinv[8];
       if (Math.abs(den) < 1e-9) continue;
       const src_x = (Hinv[0]*dst_x + Hinv[1]*dst_y + Hinv[2]) / den;
       const src_y = (Hinv[3]*dst_x + Hinv[4]*dst_y + Hinv[5]) / den;
-      const sxn = Math.max(0, Math.min(1, src_x / (imgW > 1 ? imgW - 1 : 1)));
-      const syn = Math.max(0, Math.min(1, src_y / (imgH > 1 ? imgH - 1 : 1)));
+      // Normalize by capture (source) dimensions.
+      const sxn = Math.max(0, Math.min(1, src_x / (cW > 1 ? cW - 1 : 1)));
+      const syn = Math.max(0, Math.min(1, src_y / (cH > 1 ? cH - 1 : 1)));
       gridPoints.push([sxn, syn]);
     }
   }
@@ -1247,9 +1309,11 @@ function submitGridPoints() {
       document.getElementById('grid-wizard-status').textContent = j.message || 'Grid saved.';
       // update local grid dims
       grid_nx = body.nx; grid_ny = body.ny;
-      // hide grid preview and show main preview again
+      // hide grid preview and show main preview again — reset explicit size
+      gridContainer.style.width = '';
+      gridContainer.style.height = '';
       gridContainer.style.display = 'none';
-      container.style.display = 'block';
+      container.style.display = 'inline-block';
       drawGridPoints();
       setTimeout(() => { document.getElementById('grid-wizard-status').textContent = ''; }, 4000);
     }).catch(e => {
@@ -1264,9 +1328,11 @@ function clearGrid() {
   gridPoints = [];
   document.getElementById('grid-wizard-status').textContent = 'Grid cleared';
   drawGridPoints();
-  // restore main preview
+  // restore main preview — reset any explicit size set by startGridWizard
+  gridContainer.style.width = '';
+  gridContainer.style.height = '';
   gridContainer.style.display = 'none';
-  container.style.display = 'block';
+  container.style.display = 'inline-block';
   // Also clear on server
   fetch('/grid_calib', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({clear:true}) })
     .then(() => {}).catch(() => {});
@@ -1296,6 +1362,11 @@ async function loadConfig() {
     const r = await fetch('/config');
     const c = await r.json();
     updateViewButtons();
+    // Capture/output dimensions for homography coordinate scaling.
+    if (c.cap_w > 0) capW = c.cap_w;
+    if (c.cap_h > 0) capH = c.cap_h;
+    if (c.out_w > 0) outW = c.out_w;
+    if (c.out_h > 0) outH = c.out_h;
     document.getElementById('resolution').value = c.resolution;
     document.getElementById('out_w').value = c.output_width || 0;
     document.getElementById('out_h').value = c.output_height || 0;
@@ -1311,6 +1382,7 @@ async function loadConfig() {
     document.getElementById('agc').checked = c.agc_enable;
     document.getElementById('aec_val').value = c.aec_value;
     document.getElementById('agc_gain').value = c.agc_gain;
+    if (typeof c.ae_lock_interval !== 'undefined') document.getElementById('ae_lock_interval').value = c.ae_lock_interval;
     // Extended sensor controls
     if (typeof c.ae_level !== 'undefined')    document.getElementById('ae_level').value = c.ae_level;
     if (typeof c.gainceiling !== 'undefined') document.getElementById('gainceiling').value = c.gainceiling;
@@ -1384,6 +1456,7 @@ async function saveConfig() {
     agc_enable: document.getElementById('agc').checked,
     aec_value: parseInt(document.getElementById('aec_val').value),
     agc_gain: parseInt(document.getElementById('agc_gain').value),
+    ae_lock_interval: parseInt(document.getElementById('ae_lock_interval').value) || 0,
     ae_level: parseInt(document.getElementById('ae_level').value),
     gainceiling: parseInt(document.getElementById('gainceiling').value),
     saturation: parseInt(document.getElementById('saturation').value),
@@ -1423,6 +1496,54 @@ async function saveConfig() {
   }
 }
 
+async function applyCamera() {
+  const srcCorners = corners.length === 4 ? getSourceCornersForSubmit() : null;
+  const body = {
+    resolution: parseInt(document.getElementById('resolution').value),
+    output_width: parseInt(document.getElementById('out_w').value),
+    output_height: parseInt(document.getElementById('out_h').value),
+    jpeg_quality: parseInt(document.getElementById('quality').value),
+    diff_threshold: parseInt(document.getElementById('diff_thr').value),
+    tiles_x: parseInt(document.getElementById('tiles_x').value),
+    tiles_y: parseInt(document.getElementById('tiles_y').value),
+    keyframe_interval: parseInt(document.getElementById('kf_interval').value),
+    send_interval_ms: parseInt(document.getElementById('send_ms').value),
+    brightness: parseInt(document.getElementById('brightness').value),
+    contrast: parseInt(document.getElementById('contrast').value),
+    aec_enable: document.getElementById('aec').checked,
+    agc_enable: document.getElementById('agc').checked,
+    aec_value: parseInt(document.getElementById('aec_val').value),
+    agc_gain: parseInt(document.getElementById('agc_gain').value),
+    ae_lock_interval: parseInt(document.getElementById('ae_lock_interval').value) || 0,
+    ae_level: parseInt(document.getElementById('ae_level').value),
+    gainceiling: parseInt(document.getElementById('gainceiling').value),
+    saturation: parseInt(document.getElementById('saturation').value),
+    sharpness: parseInt(document.getElementById('sharpness').value),
+    denoise: parseInt(document.getElementById('denoise').value),
+    wb_mode: parseInt(document.getElementById('wb_mode').value),
+    aec2: document.getElementById('aec2').checked,
+    bpc: document.getElementById('bpc').checked,
+    wpc: document.getElementById('wpc').checked,
+    raw_gma: document.getElementById('raw_gma').checked,
+    lenc: document.getElementById('lenc').checked,
+    dcw: document.getElementById('dcw').checked,
+    hmirror: document.getElementById('hmirror').checked,
+    vflip: document.getElementById('vflip').checked,
+    cal_src: srcCorners,
+  };
+  try {
+    const r = await fetch('/apply_camera', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    document.getElementById('status').textContent = j.message || (j.ok ? 'Applied.' : 'Apply failed');
+  } catch(e) {
+    document.getElementById('status').textContent = 'Apply failed: ' + e;
+  }
+}
+
 async function resetConfig() {
   try {
     await fetch('/reset', { method: 'POST' });
@@ -1446,6 +1567,7 @@ function applySensorLive() {
       agc_enable: document.getElementById('agc').checked,
       aec_value: parseInt(document.getElementById('aec_val').value),
       agc_gain: parseInt(document.getElementById('agc_gain').value),
+      ae_lock_interval: parseInt(document.getElementById('ae_lock_interval').value) || 0,
       ae_level: parseInt(document.getElementById('ae_level').value),
       gainceiling: parseInt(document.getElementById('gainceiling').value),
       saturation: parseInt(document.getElementById('saturation').value),
@@ -1525,6 +1647,12 @@ static void handle_get_config() {
     if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
     cam_settings_t *s = s_settings;
 
+    // Determine actual capture and output dimensions for the JS homography math.
+    uint16_t cfg_cap_w = 0, cfg_cap_h = 0;
+    cam_capture_get_resolution(&cfg_cap_w, &cfg_cap_h);
+    uint16_t cfg_out_w = (s->output_width  > 0) ? s->output_width  : cfg_cap_w;
+    uint16_t cfg_out_h = (s->output_height > 0) ? s->output_height : cfg_cap_h;
+
     // Build JSON manually (no ArduinoJson dependency).
     // With up to 256 grid points (~22 chars each ≈ 5.6 KB) + ~1 KB header,
     // heap-allocate to avoid stack overflow.
@@ -1536,6 +1664,7 @@ static void handle_get_config() {
       "\"resolution\":%d,"
       "\"output_width\":%u,"
       "\"output_height\":%u,"
+      "\"cap_w\":%u,\"cap_h\":%u,\"out_w\":%u,\"out_h\":%u,"
       "\"jpeg_quality\":%d,"
       "\"diff_threshold\":%d,"
       "\"tiles_x\":%d,"
@@ -1570,6 +1699,7 @@ static void handle_get_config() {
       "\"image_margin_left\":%u,\"image_margin_top\":%u,\"image_margin_right\":%u,\"image_margin_bottom\":%u,"
       "\"grid_dx\":%.4f,\"grid_dy\":%.4f,\"grid_nx\":%u,\"grid_ny\":%u,\"grid_points\":[",
       s->resolution, (unsigned)s->output_width, (unsigned)s->output_height,
+      (unsigned)cfg_cap_w, (unsigned)cfg_cap_h, (unsigned)cfg_out_w, (unsigned)cfg_out_h,
       s->jpeg_quality, s->diff_threshold,
       s->tiles_x, s->tiles_y, s->keyframe_interval, s->send_interval_ms,
       s->brightness, s->contrast,
@@ -1682,6 +1812,7 @@ static void handle_post_config() {
     s->agc_enable        = json_bool(body, "agc_enable", s->agc_enable);
     s->aec_value         = (int16_t)json_int(body, "aec_value", s->aec_value);
     s->agc_gain          = (uint8_t)json_int(body, "agc_gain", s->agc_gain);
+    s->ae_lock_interval  = (uint8_t)json_int(body, "ae_lock_interval", s->ae_lock_interval);
     // Extended sensor controls
     s->ae_level          = (int8_t)json_int(body, "ae_level", s->ae_level);
     s->gainceiling       = (uint8_t)json_int(body, "gainceiling", s->gainceiling);
@@ -1697,6 +1828,9 @@ static void handle_post_config() {
     s->dcw               = json_bool(body, "dcw", s->dcw) ? 1 : 0;
     s->hmirror           = json_bool(body, "hmirror", s->hmirror) ? 1 : 0;
     s->vflip             = json_bool(body, "vflip", s->vflip) ? 1 : 0;
+
+    // AE lock interval (frames). 0 = disabled
+    s->ae_lock_interval  = (uint8_t)json_int(body, "ae_lock_interval", s->ae_lock_interval);
     s->surface_width     = json_float(body, "surface_width", s->surface_width);
     s->surface_height    = json_float(body, "surface_height", s->surface_height);
     s->image_margin_left   = (uint16_t)json_int(body, "image_margin_left", s->image_margin_left);
@@ -1726,6 +1860,7 @@ static void handle_post_config() {
 
     cam_settings_save(s);
     cam_capture_apply_sensor(s);
+    cam_capture_set_ae_lock_interval(s->ae_lock_interval);
 
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->send(200, "application/json",
@@ -1786,7 +1921,10 @@ static void handle_post_config() {
           Hinv[3] = B * invDet; Hinv[4] = E * invDet; Hinv[5] = K * invDet;
           Hinv[6] = C * invDet; Hinv[7] = F * invDet; Hinv[8] = L * invDet;
 
-          // Build grid in OUTPUT pixel space.
+          // Build grid in OUTPUT pixel space, then back-project to SOURCE
+          // pixel space for storage.  All grid_points are stored as
+          // source-normalised (0..1 over the capture image) so loadConfig()
+          // and the generateDefaultGrid() path use the same coordinate system.
           // Margins are output pixels; use output dims (fall back to capture).
           uint16_t out_w2 = (s_settings->output_width  > 0) ? s_settings->output_width  : w;
           uint16_t out_h2 = (s_settings->output_height > 0) ? s_settings->output_height : h;
@@ -1798,17 +1936,29 @@ static void handle_post_config() {
           float activeH = (float)((int)out_h2 - (int)inT - (int)inB);
           if (activeW < 1.0f) activeW = (float)out_w2;
           if (activeH < 1.0f) activeH = (float)out_h2;
-          const float norm_w = (float)(out_w2 > 1 ? out_w2 - 1 : 1);
-          const float norm_h = (float)(out_h2 > 1 ? out_h2 - 1 : 1);
+          // Source (capture) normalisation denominators.
+          const float src_norm_w = (float)(w > 1 ? w - 1 : 1);
+          const float src_norm_h = (float)(h > 1 ? h - 1 : 1);
           uint16_t count = 0;
           for (uint16_t iy = 0; iy < NY && count < CAM_SETTINGS_MAX_GRID_POINTS; iy++) {
             for (uint16_t ix = 0; ix < NX && count < CAM_SETTINGS_MAX_GRID_POINTS; ix++) {
               // Ideal grid position in output pixel coordinates.
               float dst_x = (float)inL + (float)ix * (activeW - 1.0f) / (float)(NX - 1);
               float dst_y = (float)inT + (float)iy * (activeH - 1.0f) / (float)(NY - 1);
-              // Store as output-normalised (0..1 over the output image).
-              float sxnorm = dst_x / norm_w;
-              float synorm = dst_y / norm_h;
+              // Back-project through H⁻¹ → source pixel coords.
+              float hi_den = Hinv[6]*dst_x + Hinv[7]*dst_y + Hinv[8];
+              float src_x, src_y;
+              if (fabsf(hi_den) < 1e-10f) {
+                // Degenerate: fall back to identity mapping
+                src_x = dst_x;
+                src_y = dst_y;
+              } else {
+                src_x = (Hinv[0]*dst_x + Hinv[1]*dst_y + Hinv[2]) / hi_den;
+                src_y = (Hinv[3]*dst_x + Hinv[4]*dst_y + Hinv[5]) / hi_den;
+              }
+              // Normalise by capture (source) dimensions.
+              float sxnorm = src_x / src_norm_w;
+              float synorm = src_y / src_norm_h;
               if (sxnorm < 0.0f) sxnorm = 0.0f; if (sxnorm > 1.0f) sxnorm = 1.0f;
               if (synorm < 0.0f) synorm = 0.0f; if (synorm > 1.0f) synorm = 1.0f;
               s_settings->grid_points[count][0] = sxnorm;
@@ -1848,9 +1998,17 @@ static void handle_post_config() {
     s_preview_homography_valid = false;
     ensure_preview_pipeline();
 
-    char out[256];
+    uint16_t resp_cap_w = 0, resp_cap_h = 0;
+    cam_capture_get_resolution(&resp_cap_w, &resp_cap_h);
+    uint16_t resp_out_w = (s_settings->output_width  > 0) ? s_settings->output_width  : resp_cap_w;
+    uint16_t resp_out_h = (s_settings->output_height > 0) ? s_settings->output_height : resp_cap_h;
+    char out[320];
     snprintf(out, sizeof(out),
-         "{\"ok\":true,\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]}",
+         "{\"ok\":true,"
+         "\"cap_w\":%u,\"cap_h\":%u,\"out_w\":%u,\"out_h\":%u,"
+         "\"homography\":[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]}",
+         (unsigned)resp_cap_w, (unsigned)resp_cap_h,
+         (unsigned)resp_out_w, (unsigned)resp_out_h,
          s_settings->homography[0], s_settings->homography[1], s_settings->homography[2],
          s_settings->homography[3], s_settings->homography[4], s_settings->homography[5],
          s_settings->homography[6], s_settings->homography[7], s_settings->homography[8]);
@@ -1886,10 +2044,97 @@ static void handle_apply_sensor() {
     s->hmirror      = json_bool(body, "hmirror", s->hmirror) ? 1 : 0;
     s->vflip        = json_bool(body, "vflip", s->vflip) ? 1 : 0;
 
+    // AE lock interval (frames). 0 = disabled
+    s->ae_lock_interval = (uint8_t)json_int(body, "ae_lock_interval", s->ae_lock_interval);
+
     cam_capture_apply_sensor(s);
+    cam_capture_set_ae_lock_interval(s->ae_lock_interval);
 
     server->sendHeader("Access-Control-Allow-Origin", "*");
     server->send(200, "application/json", "{\"ok\":true}");
+}
+
+// POST /apply_camera — apply full camera settings (in-memory) and rebuild
+// camera pipeline without saving to NVS or rebooting the device.
+static void handle_apply_camera() {
+    if (!s_settings) { server->send(500, "text/plain", "No settings"); return; }
+    cam_settings_t old = *s_settings; // copy to allow revert on failure
+    String body = server->arg("plain");
+    cam_settings_t *s = s_settings;
+
+    // Update fields similar to config POST but do NOT persist to NVS here.
+    s->resolution        = (uint8_t)json_int(body, "resolution", s->resolution);
+    s->output_width      = (uint16_t)json_int(body, "output_width", s->output_width);
+    s->output_height     = (uint16_t)json_int(body, "output_height", s->output_height);
+    s->jpeg_quality      = (uint8_t)json_int(body, "jpeg_quality", s->jpeg_quality);
+    s->diff_threshold    = (uint8_t)json_int(body, "diff_threshold", s->diff_threshold);
+    s->tiles_x           = (uint8_t)json_int(body, "tiles_x", s->tiles_x);
+    s->tiles_y           = (uint8_t)json_int(body, "tiles_y", s->tiles_y);
+    s->keyframe_interval = (uint8_t)json_int(body, "keyframe_interval", s->keyframe_interval);
+    s->send_interval_ms  = (uint8_t)json_int(body, "send_interval_ms", s->send_interval_ms);
+    s->brightness        = (int8_t)json_int(body, "brightness", s->brightness);
+    s->contrast          = (int8_t)json_int(body, "contrast", s->contrast);
+    s->aec_enable        = json_bool(body, "aec_enable", s->aec_enable);
+    s->agc_enable        = json_bool(body, "agc_enable", s->agc_enable);
+    s->aec_value         = (int16_t)json_int(body, "aec_value", s->aec_value);
+    s->agc_gain          = (uint8_t)json_int(body, "agc_gain", s->agc_gain);
+    s->ae_level          = (int8_t)json_int(body, "ae_level", s->ae_level);
+    s->gainceiling       = (uint8_t)json_int(body, "gainceiling", s->gainceiling);
+    s->saturation        = (int8_t)json_int(body, "saturation", s->saturation);
+    s->sharpness         = (int8_t)json_int(body, "sharpness", s->sharpness);
+    s->denoise           = (int8_t)json_int(body, "denoise", s->denoise);
+    s->wb_mode           = (uint8_t)json_int(body, "wb_mode", s->wb_mode);
+    s->aec2              = json_bool(body, "aec2", s->aec2) ? 1 : 0;
+    s->bpc               = json_bool(body, "bpc", s->bpc) ? 1 : 0;
+    s->wpc               = json_bool(body, "wpc", s->wpc) ? 1 : 0;
+    s->raw_gma           = json_bool(body, "raw_gma", s->raw_gma) ? 1 : 0;
+    s->lenc              = json_bool(body, "lenc", s->lenc) ? 1 : 0;
+    s->dcw               = json_bool(body, "dcw", s->dcw) ? 1 : 0;
+    s->hmirror           = json_bool(body, "hmirror", s->hmirror) ? 1 : 0;
+    s->vflip             = json_bool(body, "vflip", s->vflip) ? 1 : 0;
+
+    float parsed_cal_src[4][2];
+    if (parse_cal_src(body, parsed_cal_src)) {
+      memcpy(s->cal_src, parsed_cal_src, sizeof(s->cal_src));
+      s->calibrated = true;
+      uint16_t w, h;
+      cam_capture_get_resolution(&w, &h);
+      cam_settings_compute_homography(s, w, h);
+      s_preview_homography_valid = false;
+    }
+
+    // Apply sensor controls live first (brightness/AE/AGC etc.).
+    cam_capture_apply_sensor(s);
+    cam_capture_set_ae_lock_interval(s->ae_lock_interval);
+
+    // Rebuild camera pipeline if capture-related fields changed (e.g. resolution)
+    bool need_reinit = (s->resolution != old.resolution) ||
+                       (s->output_width != old.output_width) ||
+                       (s->output_height != old.output_height) ||
+                       (s->tiles_x != old.tiles_x) ||
+                       (s->tiles_y != old.tiles_y);
+
+    if (need_reinit) {
+      cam_capture_release();
+      esp_camera_deinit();
+      if (!cam_capture_init(s)) {
+        // revert on failure
+        *s_settings = old;
+        if (!cam_capture_init(&old)) {
+          server->sendHeader("Access-Control-Allow-Origin", "*");
+          server->send(500, "application/json", "{\"ok\":false,\"message\":\"Camera reinit failed and revert failed\"}");
+          return;
+        }
+        ensure_preview_pipeline();
+        server->sendHeader("Access-Control-Allow-Origin", "*");
+        server->send(500, "application/json", "{\"ok\":false,\"message\":\"Camera reinit failed; reverted\"}");
+        return;
+      }
+      ensure_preview_pipeline();
+    }
+
+    server->sendHeader("Access-Control-Allow-Origin", "*");
+    server->send(200, "application/json", "{\"ok\":true,\"message\":\"Applied\"}");
 }
 
 static void handle_reset() {
@@ -2074,6 +2319,8 @@ void cam_webserver_start(cam_settings_t *settings) {
     server->on("/config",   HTTP_OPTIONS, handle_cors);
     server->on("/apply_sensor", HTTP_POST, handle_apply_sensor);
     server->on("/apply_sensor", HTTP_OPTIONS, handle_cors);
+    server->on("/apply_camera", HTTP_POST, handle_apply_camera);
+    server->on("/apply_camera", HTTP_OPTIONS, handle_cors);
     server->on("/preview_calib", HTTP_POST, handle_post_preview_calib);
     server->on("/preview_calib", HTTP_OPTIONS, handle_cors);
     server->on("/grid_calib", HTTP_GET, handle_get_grid);

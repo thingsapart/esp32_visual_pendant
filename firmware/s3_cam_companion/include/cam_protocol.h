@@ -316,7 +316,7 @@ typedef struct __attribute__((packed)) {
 // companion will throttle outgoing frames so that it does not send more
 // frequently than this value. Set to 0 to disable throttling.
 #ifndef CAM_TARGET_FPS
-#define CAM_TARGET_FPS 6
+#define CAM_TARGET_FPS 15
 #endif
 // ---------------------------------------------------------------------------
 // Tile geometry helpers

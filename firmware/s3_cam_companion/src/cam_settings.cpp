@@ -29,6 +29,7 @@ void cam_settings_defaults(cam_settings_t *s) {
     s->agc_enable        = true;
     s->aec_value         = 300;
     s->agc_gain          = 0;
+    s->ae_lock_interval  = 0; // disabled by default
 
     // Extended sensor defaults
     s->ae_level          = CAM_DEFAULT_AE_LEVEL;
@@ -98,7 +99,9 @@ void cam_settings_defaults(cam_settings_t *s) {
 // v5: forces re-load of defaults so CAM_DEFAULT_JPEG_QUALITY (now 20) takes effect.
 // v6: renamed grid_inset_* -> image_margin_*; homography now maps corners to the
 //     margin-inset positions so extra image area appears around the work area.
-#define NVS_VERSION 6
+// v7: grid_points stored as source-normalised (0..1 over capture image) instead of
+//     output-normalised.
+#define NVS_VERSION 8
 
 void cam_settings_init(cam_settings_t *s) {
     cam_settings_defaults(s);
