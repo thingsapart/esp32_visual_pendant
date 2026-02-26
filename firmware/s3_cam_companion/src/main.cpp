@@ -67,15 +67,8 @@ static cam_diff_t      g_diff      = NULL;
 // PSRAM buffers for the warped frame.
 static uint16_t *g_warped_buf = NULL;
 
-#if CAM_ENH_TEMPORAL_DENOISE
-// Temporal denoise: previous warped frame for 2-frame EMA.
-static uint16_t *g_temporal_prev = NULL;
-static bool      g_temporal_valid = false;
-// EMA alpha in 8-bit fixed-point: alpha=0.7 → 179/256.  Higher = more
-// new-frame weight (less smoothing, less motion blur).
-#define TEMPORAL_ALPHA  179   // 0.7 × 256 ≈ 179
-#define TEMPORAL_INV    (256 - TEMPORAL_ALPHA)  // 77
-#endif
+// Temporal denoise removed: feature flags remain in headers but implementation
+// and buffers are intentionally omitted here to allow a clean reimplementation.
 
 // Output resolution requested by the pendant (0 = don't-care → use defaults).
 static uint16_t g_output_w = 0;
@@ -315,14 +308,7 @@ static bool allocate_buffers(uint16_t out_w, uint16_t out_h) {
     }
     memset(g_warped_buf, 0, frame_bytes);
 
-#if CAM_ENH_TEMPORAL_DENOISE
-    if (g_temporal_prev) heap_caps_free(g_temporal_prev);
-    g_temporal_prev = (uint16_t *)heap_caps_malloc(frame_bytes, MALLOC_CAP_SPIRAM);
-    if (!g_temporal_prev) {
-        ESP_LOGW(TAG, "Failed to alloc temporal buffer — temporal denoise disabled");
-    }
-    g_temporal_valid = false;
-#endif
+    // Temporal denoise removed — no temporal buffer allocation
 
     return true;
 }
@@ -509,15 +495,7 @@ static void process_frame(void) {
     // The previous enhanced temporal-denoise implementation was cleared
     // to allow a clean reimplementation. Keep the previous-frame buffer
     // updated so future work can reuse it without changing configs.
-#if CAM_ENH_TEMPORAL_DENOISE
-    uint16_t _out_w_tmp = 0, _out_h_tmp = 0;
-    cam_transform_get_size(g_transform, &_out_w_tmp, &_out_h_tmp);
-    size_t _px_count_tmp = (size_t)_out_w_tmp * _out_h_tmp;
-    if (g_temporal_prev) {
-        memcpy(g_temporal_prev, g_warped_buf, _px_count_tmp * sizeof(uint16_t));
-        g_temporal_valid = true;
-    }
-#endif // CAM_ENH_TEMPORAL_DENOISE
+    // Temporal denoise removed — no per-frame blending or temporal buffer update
 
     // 3. Diff against previous frame.
     //    Use the output (warped) dimensions, NOT the capture dimensions.
