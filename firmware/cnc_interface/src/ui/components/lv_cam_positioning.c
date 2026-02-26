@@ -77,6 +77,26 @@ static const char *TAG = "cam_pos";
 #define CALIB_GRID_DOT_OPA     LV_OPA_80
 #define CALIB_GRID_DOT_R       2          // dot half-size in screen pixels
 
+// Machine origin axes overlay (yellow short axis lines + dot at physical 0,0)
+#define COL_MACH_ORIGIN_AXES   0xFFFF00   // Yellow
+#define OPA_MACH_ORIGIN_AXES   LV_OPA_90
+#define COL_MACH_ORIGIN_DOT    0xFFFF00   // Yellow
+#define OPA_MACH_ORIGIN_DOT    LV_OPA_COVER
+#define MACH_ORIGIN_AXIS_LEN   50         // Length of axis arms in screen px
+#define MACH_ORIGIN_DOT_R      3          // Dot radius in screen px
+
+// WCS origin overlay (green axis lines + green dot with white outline)
+#define COL_WCS_ORIGIN_AXES    0x00EE00   // Green
+#define OPA_WCS_ORIGIN_AXES    LV_OPA_80
+#define COL_WCS_ORIGIN_DOT     0x00CC00   // Slightly darker green
+#define WCS_ORIGIN_DOT_R       5          // Dot radius in screen px
+
+// Machine absolute-position crosshair (red)
+#define COL_MACH_POS_CROSS     0xFF2222   // Bright red
+#define OPA_MACH_POS_CROSS     LV_OPA_COVER
+#define MACH_CROSS_ARM         16         // Half-length of each crosshair arm (px)
+#define MACH_CROSS_GAP          5         // Half-gap around the centre (px)
+
 // ---------------------------------------------------------------------------
 // Wizard (probe flow) states
 // ---------------------------------------------------------------------------
@@ -286,6 +306,8 @@ static bool image_to_screen_coords(lv_cam_pos_priv_t *priv,
 /// Bilinear interpolation on the grid to get physical coordinates.
 /// Accounts for grid insets: the grid spans from
 ///   (inset_left, inset_top) to (img_w - inset_right - 1, img_h - inset_bottom - 1).
+/// Insets are stored in calibration-image pixels; they are scaled to the
+/// current display image size when the two differ.
 /// Pixels outside the inset area are extrapolated (clamped to grid boundary).
 static bool grid_interpolate(const cam_grid_info_t *g,
                               uint16_t img_w, uint16_t img_h,
@@ -294,11 +316,17 @@ static bool grid_interpolate(const cam_grid_info_t *g,
 {
     if (!g || !g->points || g->nx < 2 || g->ny < 2) return false;
 
+    // Scale insets to current display-image pixels when the calibration was
+    // performed at a different output resolution.
+    float sx = (g->src_img_w > 0 && g->src_img_w != img_w)
+               ? (float)img_w / (float)g->src_img_w : 1.0f;
+    float sy = (g->src_img_h > 0 && g->src_img_h != img_h)
+               ? (float)img_h / (float)g->src_img_h : 1.0f;
+    float il = (float)g->inset_left  * sx;
+    float it = (float)g->inset_top   * sy;
     // Active pixel area after insets
-    float il = (float)g->inset_left;
-    float it = (float)g->inset_top;
-    float active_w = (float)img_w - il - (float)g->inset_right;
-    float active_h = (float)img_h - it - (float)g->inset_bottom;
+    float active_w = (float)img_w - il - (float)g->inset_right  * sx;
+    float active_h = (float)img_h - it - (float)g->inset_bottom * sy;
     if (active_w < 1.0f) active_w = 1.0f;
     if (active_h < 1.0f) active_h = 1.0f;
 
@@ -634,41 +662,191 @@ static float cam_pos_choose_grid_step(float range_x, float range_y)
     return best_step;
 }
 
-/// Draw a millimetre-spaced idealized grid over the camera image using the
-/// physical bounds from the camera calibration grid.  Step size is chosen
-/// to give roughly 5–10 divisions across the shorter physical dimension of
-/// the camera's field of view.
+/// Screen-space context for physical ↔ screen coordinate conversion.
+/// Y axis is FLIPPED: physical origin is at bottom-left, screen Y grows down.
+typedef struct {
+    float min_x, max_x;   ///< Physical X bounds (mm)
+    float min_y, max_y;   ///< Physical Y bounds (mm)
+    float phys_w, phys_h; ///< Physical extents
+    float work_x0;        ///< Screen X of left edge of work area
+    float work_y0;        ///< Screen Y of TOP edge of work area (physical Y-max)
+    float work_w;         ///< Work area width  (screen px)
+    float work_h;         ///< Work area height (screen px)
+    lv_area_t img_area;   ///< Full image widget screen area
+} grid_coord_ctx_t;
+
+/// Convert physical (mm) coordinates to screen pixel coordinates.
+/// X: left→right (same direction as screen X).
+/// Y: FLIPPED – physical Y=min_y → screen bottom; Y=max_y → screen top.
+static void phys_to_scr(const grid_coord_ctx_t *c, float px, float py,
+                         int32_t *sx, int32_t *sy)
+{
+    *sx = (int32_t)(c->work_x0 + (px - c->min_x) / c->phys_w * c->work_w + 0.5f);
+    *sy = (int32_t)(c->work_y0 + (c->max_y - py) / c->phys_h * c->work_h + 0.5f);
+}
+
+/// Draw two short yellow perpendicular lines (+X, +Y) and a filled dot at
+/// the machine origin (physical 0, 0).
+static void draw_machine_origin(lv_layer_t *layer, const grid_coord_ctx_t *c)
+{
+    int32_t ox, oy;
+    phys_to_scr(c, 0.0f, 0.0f, &ox, &oy);
+
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = lv_color_hex(COL_MACH_ORIGIN_AXES);
+    ld.width = 2;
+    ld.opa   = OPA_MACH_ORIGIN_AXES;
+
+    // +X arm (rightward)
+    ld.p1.x = (lv_value_precise_t)ox;                        ld.p1.y = (lv_value_precise_t)oy;
+    ld.p2.x = (lv_value_precise_t)(ox + MACH_ORIGIN_AXIS_LEN); ld.p2.y = (lv_value_precise_t)oy;
+    lv_draw_line(layer, &ld);
+    // +Y arm (upward on screen, i.e. decreasing screen Y because Y is flipped)
+    ld.p1.x = (lv_value_precise_t)ox; ld.p1.y = (lv_value_precise_t)oy;
+    ld.p2.x = (lv_value_precise_t)ox; ld.p2.y = (lv_value_precise_t)(oy - MACH_ORIGIN_AXIS_LEN);
+    lv_draw_line(layer, &ld);
+
+    // Dot at origin
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color     = lv_color_hex(COL_MACH_ORIGIN_DOT);
+    rd.bg_opa       = OPA_MACH_ORIGIN_DOT;
+    rd.border_color = lv_color_black();
+    rd.border_width = 1;
+    rd.border_opa   = LV_OPA_70;
+    rd.radius       = LV_RADIUS_CIRCLE;
+    lv_area_t da = { ox - MACH_ORIGIN_DOT_R, oy - MACH_ORIGIN_DOT_R,
+                     ox + MACH_ORIGIN_DOT_R, oy + MACH_ORIGIN_DOT_R };
+    lv_draw_rect(layer, &rd, &da);
+}
+
+/// Draw two green axis lines and a green dot with white outline at the
+/// current WCS origin (machine coords: MPos − WPos).
+static void draw_wcs_origin(lv_layer_t *layer, const grid_coord_ctx_t *c,
+                              float wcs_ox, float wcs_oy)
+{
+    int32_t sx, sy;
+    phys_to_scr(c, wcs_ox, wcs_oy, &sx, &sy);
+
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = lv_color_hex(COL_WCS_ORIGIN_AXES);
+    ld.width = 2;
+    ld.opa   = OPA_WCS_ORIGIN_AXES;
+
+    // +X arm
+    ld.p1.x = (lv_value_precise_t)sx;                        ld.p1.y = (lv_value_precise_t)sy;
+    ld.p2.x = (lv_value_precise_t)(sx + MACH_ORIGIN_AXIS_LEN); ld.p2.y = (lv_value_precise_t)sy;
+    lv_draw_line(layer, &ld);
+    // +Y arm (upward)
+    ld.p1.x = (lv_value_precise_t)sx; ld.p1.y = (lv_value_precise_t)sy;
+    ld.p2.x = (lv_value_precise_t)sx; ld.p2.y = (lv_value_precise_t)(sy - MACH_ORIGIN_AXIS_LEN);
+    lv_draw_line(layer, &ld);
+
+    // Green dot with white border
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color     = lv_color_hex(COL_WCS_ORIGIN_DOT);
+    rd.bg_opa       = LV_OPA_COVER;
+    rd.border_color = lv_color_white();
+    rd.border_width = 2;
+    rd.border_opa   = LV_OPA_COVER;
+    rd.radius       = LV_RADIUS_CIRCLE;
+    lv_area_t wa = { sx - WCS_ORIGIN_DOT_R, sy - WCS_ORIGIN_DOT_R,
+                     sx + WCS_ORIGIN_DOT_R, sy + WCS_ORIGIN_DOT_R };
+    lv_draw_rect(layer, &rd, &wa);
+}
+
+/// Draw a red crosshair at the current absolute machine position.
+static void draw_machine_pos_crosshair(lv_layer_t *layer,
+                                        const grid_coord_ctx_t *c,
+                                        float mpos_x, float mpos_y)
+{
+    int32_t sx, sy;
+    phys_to_scr(c, mpos_x, mpos_y, &sx, &sy);
+
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = lv_color_hex(COL_MACH_POS_CROSS);
+    ld.width = 2;
+    ld.opa   = OPA_MACH_POS_CROSS;
+
+    // Horizontal arms
+    ld.p1.x = (lv_value_precise_t)(sx - MACH_CROSS_ARM); ld.p1.y = (lv_value_precise_t)sy;
+    ld.p2.x = (lv_value_precise_t)(sx - MACH_CROSS_GAP); ld.p2.y = (lv_value_precise_t)sy;
+    lv_draw_line(layer, &ld);
+    ld.p1.x = (lv_value_precise_t)(sx + MACH_CROSS_GAP); ld.p1.y = (lv_value_precise_t)sy;
+    ld.p2.x = (lv_value_precise_t)(sx + MACH_CROSS_ARM); ld.p2.y = (lv_value_precise_t)sy;
+    lv_draw_line(layer, &ld);
+    // Vertical arms
+    ld.p1.x = (lv_value_precise_t)sx; ld.p1.y = (lv_value_precise_t)(sy - MACH_CROSS_ARM);
+    ld.p2.x = (lv_value_precise_t)sx; ld.p2.y = (lv_value_precise_t)(sy - MACH_CROSS_GAP);
+    lv_draw_line(layer, &ld);
+    ld.p1.x = (lv_value_precise_t)sx; ld.p1.y = (lv_value_precise_t)(sy + MACH_CROSS_GAP);
+    ld.p2.x = (lv_value_precise_t)sx; ld.p2.y = (lv_value_precise_t)(sy + MACH_CROSS_ARM);
+    lv_draw_line(layer, &ld);
+}
+
+/// Draw a mm-spaced idealised grid over the camera image work area.
+///
+/// Grid lines are clipped to the margins-defined work area (they do NOT
+/// extend into the margin regions).  Physical Y increases upward (CNC
+/// convention): origin (0,0) is at the bottom-left of the work area.
+///
+/// In addition this function draws:
+///  - Two short yellow lines + dot at the machine origin (0,0)
+///  - Two green lines + white-outlined dot at the current WCS origin
+///  - A red crosshair at the current absolute machine position
+///
+/// Step size is taken from grid_dx/grid_dy when the resulting line count is
+/// manageable (≤ DRAW_AXIS_MAX_LINES), otherwise auto-chosen from
+/// {5,10,20,50,100} mm for roughly 5–10 divisions.
+#define DRAW_AXIS_MAX_LINES  20
 static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
 {
     if (!priv->receiver) return;
 
-    // Snapshot the grid scalar bounds under the grid lock so we can't race
-    // with a concurrent handle_grid_map that may update them.
+    // Snapshot all grid fields needed under the lock.
     cam_receiver_lock_grid(priv->receiver);
     const cam_grid_info_t *g = cam_receiver_get_grid(priv->receiver);
     if (!g) {
         cam_receiver_unlock_grid(priv->receiver);
-        return;  // No calibration grid — physical bounds unknown
+        return;
     }
-    float cam_min_x = g->min_x, cam_max_x = g->max_x;
-    float cam_min_y = g->min_y, cam_max_y = g->max_y;
+    float cam_min_x  = g->min_x,  cam_max_x = g->max_x;
+    float cam_min_y  = g->min_y,  cam_max_y = g->max_y;
+    float grid_dx    = g->dx;
+    float grid_dy    = g->dy;
+    uint16_t inset_l = g->inset_left;
+    uint16_t inset_t = g->inset_top;
+    uint16_t inset_r = g->inset_right;
+    uint16_t inset_b = g->inset_bottom;
+    uint16_t src_w   = g->src_img_w;
+    uint16_t src_h   = g->src_img_h;
     cam_receiver_unlock_grid(priv->receiver);
 
     uint16_t img_w = 0, img_h = 0;
     lv_cam_stream_get_image_size(priv->stream, &img_w, &img_h);
     if (img_w == 0 || img_h == 0) return;
 
-    // Camera physical view bounds (from snapshot above)
     float phys_w = cam_max_x - cam_min_x;
     float phys_h = cam_max_y - cam_min_y;
     if (phys_w <= 0.0f || phys_h <= 0.0f) return;
 
-    // Step is chosen from the camera's physical extent (not the full machine
-    // travel).  Using machine range caused the step to exceed the camera FOV
-    // entirely (e.g. 50 mm step for a 25 mm FOV), leaving no visible lines.
-    float step = cam_pos_choose_grid_step(phys_w, phys_h);
+    // Scale insets from calibration-image pixels to current display-image pixels.
+    float sc_x = (src_w > 0 && src_w != img_w) ? (float)img_w / (float)src_w : 1.0f;
+    float sc_y = (src_h > 0 && src_h != img_h) ? (float)img_h / (float)src_h : 1.0f;
+    float il = (float)inset_l * sc_x;
+    float it = (float)inset_t * sc_y;
+    float ir = (float)inset_r * sc_x;
+    float ib = (float)inset_b * sc_y;
+    float active_img_w = (float)img_w - il - ir;
+    float active_img_h = (float)img_h - it - ib;
+    if (active_img_w < 1.0f) active_img_w = (float)img_w;
+    if (active_img_h < 1.0f) active_img_h = (float)img_h;
 
-    // Screen area occupied by the image object (absolute coordinates)
+    // Screen area of the image widget.
     lv_obj_t *img_obj = lv_cam_stream_get_image_obj(priv->stream);
     if (!img_obj) return;
     lv_area_t img_area;
@@ -677,38 +855,81 @@ static void draw_axis_grid(lv_layer_t *layer, lv_cam_pos_priv_t *priv)
     int32_t scr_h = (int32_t)lv_area_get_height(&img_area);
     if (scr_w <= 0 || scr_h <= 0) return;
 
+    // Build the coordinate context.
+    // work_y0 is the screen-top of the work area, which corresponds to
+    // physical Y = cam_max_y (CNC Y increases upward, screen Y increases down).
+    float scr_per_px_x = (float)scr_w / (float)img_w;
+    float scr_per_px_y = (float)scr_h / (float)img_h;
+    grid_coord_ctx_t cc;
+    cc.min_x   = cam_min_x;  cc.max_x  = cam_max_x;
+    cc.min_y   = cam_min_y;  cc.max_y  = cam_max_y;
+    cc.phys_w  = phys_w;     cc.phys_h = phys_h;
+    cc.work_x0 = (float)img_area.x1 + il * scr_per_px_x;
+    cc.work_y0 = (float)img_area.y1 + it * scr_per_px_y;
+    cc.work_w  = active_img_w * scr_per_px_x;
+    cc.work_h  = active_img_h * scr_per_px_y;
+    cc.img_area = img_area;
+    if (cc.work_w <= 0.0f || cc.work_h <= 0.0f) return;
+
+    // Integer work-area boundary for grid line clamping.
+    int32_t wa_x1 = (int32_t)(cc.work_x0);
+    int32_t wa_y1 = (int32_t)(cc.work_y0);
+    int32_t wa_x2 = (int32_t)(cc.work_x0 + cc.work_w);
+    int32_t wa_y2 = (int32_t)(cc.work_y0 + cc.work_h);
+
+    // Step: prefer calibration dx/dy; fall back to auto-choose.
+    float auto_step = cam_pos_choose_grid_step(phys_w, phys_h);
+    float step_x = (grid_dx > 0.0f && phys_w / grid_dx <= DRAW_AXIS_MAX_LINES)
+                   ? grid_dx : auto_step;
+    float step_y = (grid_dy > 0.0f && phys_h / grid_dy <= DRAW_AXIS_MAX_LINES)
+                   ? grid_dy : auto_step;
+
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
     line_dsc.color = lv_color_hex(GRID_LINE_COLOR);
     line_dsc.width = 1;
     line_dsc.opa   = GRID_LINE_OPA;
-    // dash_width/dash_gap left at 0 (solid lines) — dashed lines allocate a
-    // temporary blend buffer per draw-task at render time; solid lines do not.
 
-    // Vertical grid lines — constant physical-X values
-    float x_first = ceilf(cam_min_x / step) * step;
-    for (float x = x_first; x <= cam_max_x + 0.001f; x += step) {
-        int32_t scr_x = img_area.x1 +
-                        (int32_t)((x - cam_min_x) / phys_w * (float)scr_w);
-        if (scr_x < img_area.x1 || scr_x > img_area.x2) continue;
+    // --- Vertical grid lines (constant physical X) — clipped to work area ---
+    float x_first = ceilf(cam_min_x / step_x) * step_x;
+    for (float x = x_first; x <= cam_max_x + 0.001f; x += step_x) {
+        int32_t scr_x, dummy_y;
+        phys_to_scr(&cc, x, 0.0f, &scr_x, &dummy_y);
+        if (scr_x < wa_x1 || scr_x > wa_x2) continue;
         line_dsc.p1.x = (lv_value_precise_t)scr_x;
-        line_dsc.p1.y = (lv_value_precise_t)img_area.y1;
+        line_dsc.p1.y = (lv_value_precise_t)wa_y1;
         line_dsc.p2.x = (lv_value_precise_t)scr_x;
-        line_dsc.p2.y = (lv_value_precise_t)img_area.y2;
+        line_dsc.p2.y = (lv_value_precise_t)wa_y2;
         lv_draw_line(layer, &line_dsc);
     }
 
-    // Horizontal grid lines — constant physical-Y values
-    float y_first = ceilf(cam_min_y / step) * step;
-    for (float y = y_first; y <= cam_max_y + 0.001f; y += step) {
-        int32_t scr_y = img_area.y1 +
-                        (int32_t)((y - cam_min_y) / phys_h * (float)scr_h);
-        if (scr_y < img_area.y1 || scr_y > img_area.y2) continue;
-        line_dsc.p1.x = (lv_value_precise_t)img_area.x1;
+    // --- Horizontal grid lines (constant physical Y) — clipped to work area ---
+    // Y is flipped: physical Y = cam_min_y → screen bottom; cam_max_y → screen top.
+    float y_first = ceilf(cam_min_y / step_y) * step_y;
+    for (float y = y_first; y <= cam_max_y + 0.001f; y += step_y) {
+        int32_t dummy_x, scr_y;
+        phys_to_scr(&cc, 0.0f, y, &dummy_x, &scr_y);
+        if (scr_y < wa_y1 || scr_y > wa_y2) continue;
+        line_dsc.p1.x = (lv_value_precise_t)wa_x1;
         line_dsc.p1.y = (lv_value_precise_t)scr_y;
-        line_dsc.p2.x = (lv_value_precise_t)img_area.x2;
+        line_dsc.p2.x = (lv_value_precise_t)wa_x2;
         line_dsc.p2.y = (lv_value_precise_t)scr_y;
         lv_draw_line(layer, &line_dsc);
+    }
+
+    // --- Machine origin: short yellow axes + dot at physical (0, 0) ---
+    draw_machine_origin(layer, &cc);
+
+    // --- WCS origin + machine position from machine_interface ---
+    machine_interface_t *mi = priv->machine;
+    if (mi) {
+        // WCS origin in machine (physical) coords: MPos − WPos
+        float wcs_ox = mi->position[0] - mi->wcs_position[0];
+        float wcs_oy = mi->position[1] - mi->wcs_position[1];
+        draw_wcs_origin(layer, &cc, wcs_ox, wcs_oy);
+
+        // Current absolute machine position — red crosshair
+        draw_machine_pos_crosshair(layer, &cc, mi->position[0], mi->position[1]);
     }
 }
 
