@@ -447,6 +447,7 @@ static void _mach_copy_files(multi_machine_interface_t *mm,
       for (size_t j = 0; mm->base.filelists[i].files[j] != NULL; ++j) {
         free((void *)mm->base.filelists[i].files[j]);
       }
+      free(mm->base.filelists[i].files);
     }
     mm->base.filelists[i].fdir = NULL;
     mm->base.filelists[i].files = NULL;
@@ -454,10 +455,11 @@ static void _mach_copy_files(multi_machine_interface_t *mm,
   for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
     if (mach->filelists[i].fdir != NULL) {
       size_t n_files = 0;
-      for (n_files = 0; mach->filelists[i].files != NULL; ++n_files) {
+      if (mach->filelists[i].files) {
+        while (mach->filelists[i].files[n_files] != NULL) ++n_files;
       }
       mm->base.filelists[i].fdir = strdup(mach->filelists[i].fdir);
-      mm->base.filelists[i].files = malloc(sizeof(char *) * n_files + 1);
+      mm->base.filelists[i].files = (char **)malloc(sizeof(char *) * (n_files + 1));
       for (size_t j = 0; j < n_files; ++j) {
         mm->base.filelists[i].files[j] = strdup(mach->filelists[i].files[j]);
       }

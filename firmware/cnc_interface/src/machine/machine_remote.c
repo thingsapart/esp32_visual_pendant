@@ -1353,21 +1353,40 @@ void process_binary_msg_file_list(machine_interface_remote_t *mach,
       calloc(header->num_files + 1, sizeof(char *));  // +1 for NULL sentinel
   mach->base.filelists[idx].fdir = strdup(fdir);
 
+  if (!mach->base.filelists[idx].files || !mach->base.filelists[idx].fdir) {
+    LOGE(TAG, "process_binary_msg_file_list: OOM allocating slot for '%s'", fdir);
+    free(mach->base.filelists[idx].files);
+    free(mach->base.filelists[idx].fdir);
+    mach->base.filelists[idx].files = NULL;
+    mach->base.filelists[idx].fdir = NULL;
+    return;
+  }
+
   char *offset = fdir + strlen(fdir) + 1;
   char *end = ((char *)header) + header->total_size;
   size_t filled = 0;
   for (size_t i = 0; i < header->num_files && offset < end; ++i) {
     const char *fn = offset;
     const size_t fn_len = strlen(fn) + 1;
-    mach->base.filelists[idx].files[i] = strdup(fn);
+    char *entry = strdup(fn);
+    if (!entry) {
+      LOGE(TAG, "process_binary_msg_file_list: strdup OOM at file %u of %u", (unsigned)i, header->num_files);
+      break;  // filled not incremented; remaining slots left NULL-terminated by calloc
+    }
+    mach->base.filelists[idx].files[i] = entry;
     offset += fn_len;
     filled++;
   }
   mach->base.filelists[idx].files[filled] = NULL;  // NULL-terminate (calloc already zeroed)
 
-  LOGI(TAG, "Received FILELIST => '%s': %zu of %u file(s):", fdir, filled, header->num_files);
+  if (filled < header->num_files) {
+    LOGW(TAG, "FILELIST '%s': only stored %u of %u file(s) — payload truncated or OOM",
+         fdir, (unsigned)filled, header->num_files);
+  }
+  LOGI(TAG, "Received FILELIST '%s': %u file(s):", fdir, (unsigned)filled);
   for (size_t i = 0; i < filled; ++i) {
-    LOGI(TAG, "  [%zu] %s", i, mach->base.filelists[idx].files[i]);
+    LOGI(TAG, "  [%u] %s", (unsigned)i,
+         mach->base.filelists[idx].files[i] ? mach->base.filelists[idx].files[i] : "(null)");
   }
   machine_interface_files_updated(&mach->base, mach->base.filelists[idx].fdir);
 }

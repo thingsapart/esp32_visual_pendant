@@ -31,7 +31,8 @@ bool machine_response_proc_task_run(const char* task_name,
                                     machine_interface_t* machine,
 #ifdef ESP32_HW
                                     TaskHandle_t* task_handle,
-                                    QueueHandle_t* queue, BaseType_t pinned_core
+                                    QueueHandle_t* queue, BaseType_t pinned_core,
+                                    size_t stack_size
 #else
                                     thrd_t* task_handle, gcode_queue_t* queue
 #endif

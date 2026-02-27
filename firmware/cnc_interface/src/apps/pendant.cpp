@@ -123,7 +123,8 @@ static void cam_init(void)
     s_cam_transport = cam_transport_espnow_create(cam_mac);
     if (!s_cam_transport) { LOGE(TAG, "cam_transport_espnow_create failed"); return; }
 
-    cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = 640, .max_height = 480 };
+    //cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = 640, .max_height = 480 };
+    cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = TFT_HEIGHT, .max_height = TFT_WIDTH };
     s_cam_receiver = cam_receiver_create(&cfg);
     if (!s_cam_receiver) { LOGE(TAG, "cam_receiver_create failed"); return; }
 
@@ -438,7 +439,7 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-      1024 * 12,    // Reduced stack size for runtime loop
+      1024 * 10,    // Reduced stack size for runtime loop
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
@@ -519,10 +520,11 @@ void setup() {
   if (!abort &&
       machine_response_proc_task_run(
           "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, TASK_MACHINE_CORE)) {
+          &machine_rrf_proc_queue, TASK_MACHINE_CORE,
+          6 * 1024)) {  // RRF serial + cJSON on pendant
     if (!machine_rrf_setup_response_processing_task(&machine_rrf,
                                                     machine_rrf_proc_queue)) {
-      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+      LOGE(TAG, "Failed to set up response processing queue for RRF task");
     }
     LOGI(TAG, "DONE\n");
   } else {
@@ -536,10 +538,11 @@ void setup() {
   if (!abort && machine_response_proc_task_run(
                     "MachineRemoteProc", &machine_remote.base,
                     &machine_remote_proc_task_handle,
-                    &machine_remote_proc_queue, TASK_MACHINE_CORE)) {
+                    &machine_remote_proc_queue, TASK_MACHINE_CORE,
+                    4 * 1024)) {  // ESP-NOW binary dispatch only — no cJSON
     if (!machine_remote_setup_response_processing_task(
             &machine_remote, machine_remote_proc_queue)) {
-      LOGE(TAG, "Failed to set up even processing queue for RRF task");
+      LOGE(TAG, "Failed to set up response processing queue for Remote task");
     }
     LOGI(TAG, "DONE\n");
   } else {

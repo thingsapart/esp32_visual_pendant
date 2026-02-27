@@ -29,7 +29,11 @@ extern "C" {
 
 #include "machine/machine_interface.h"
 
-#define TASK_STACK_SIZE (1024 * 9)
+// Default stack size — callers should pass an explicit value to
+// machine_response_proc_task_run() since the right size depends on the
+// machine type and build target (hub vs pendant).
+#define TASK_STACK_SIZE_DEFAULT (1024 * 8)
+
 #define TASK_PRIORITY \
   (tskIDLE_PRIORITY + 4)  // Higher priority to ensure it can preempt UI task
 
@@ -533,18 +537,23 @@ void machine_response_proc_task(void *vpargs) {
 
   free(args);
 
-  ring_buffer_t response_buffer;
+  ring_buffer_t *response_buffer = (ring_buffer_t *)malloc(sizeof(ring_buffer_t));
   bool abort = false;
 
-  if (!ring_buffer_init(&response_buffer)) {
+  if (!response_buffer) {
+    LOGE(TAG, "Failed to allocate response ring buffer.");
+    abort = true;
+  } else if (!ring_buffer_init(response_buffer)) {
     LOGE(TAG, "Failed to initialize response ring buffer.");
+    free(response_buffer);
+    response_buffer = NULL;
     abort = true;
   }
 
   for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
     if (queue_buffers[i].ring_buffer == NULL) {
       queue_buffers[i].queue = queue;
-      queue_buffers[i].ring_buffer = &response_buffer;
+      queue_buffers[i].ring_buffer = response_buffer;
       break;
     }
 
@@ -600,7 +609,7 @@ void machine_response_proc_task(void *vpargs) {
 #else
       // Loop to process all available lines in the buffer before blocking again
       while (
-          (line_buffer = ring_buffer_line_data(&response_buffer, &line_len))) {
+          (line_buffer = ring_buffer_line_data(response_buffer, &line_len))) {
         LOGI(TAG, "[%s] Processing line (len %d): %p, machine %p, queue %p",
              task_name, line_len, line_buffer, machine, queue);
         if (line_len > 0) {
@@ -609,7 +618,7 @@ void machine_response_proc_task(void *vpargs) {
           machine_interface_process_machine_state_response(machine, line_buffer,
                                                            line_len);
         }
-        ring_buffer_purge_line(&response_buffer);
+        ring_buffer_purge_line(response_buffer);
       }
 
 #endif
@@ -623,7 +632,10 @@ void machine_response_proc_task(void *vpargs) {
   // Should never reach here, but good practice to include
   LOGW(TAG, "Machine Response Processing Task terminating unexpectedly...");
 #ifdef ESP32_HW
-  vSemaphoreDelete(response_buffer.mutex);  // Clean up mutex
+  if (response_buffer) {
+    vSemaphoreDelete(response_buffer->mutex);  // Clean up mutex
+    free(response_buffer);
+  }
   vTaskDelete(NULL);
 #endif
   return;
@@ -633,11 +645,15 @@ bool machine_response_proc_task_run(const char *task_name,
                                     machine_interface_t *machine,
 #ifdef ESP32_HW
                                     TaskHandle_t *task_handle,
-                                    QueueHandle_t *queue, BaseType_t pinned_core
+                                    QueueHandle_t *queue, BaseType_t pinned_core,
+                                    size_t stack_size
 #else
                                     thrd_t *task_handle, gcode_queue_t *queue
 #endif
 ) {
+#ifdef ESP32_HW
+  if (stack_size == 0) stack_size = TASK_STACK_SIZE_DEFAULT;
+#endif
 #ifdef ESP32_HW
   if (*task_handle != NULL) {
     LOGE(TAG, "Task already running!");
@@ -676,10 +692,9 @@ bool machine_response_proc_task_run(const char *task_name,
 #ifdef ESP32_HW
   BaseType_t task_created =
       xTaskCreatePinnedToCore(machine_response_proc_task,
-                              task_name,        // Task name
-                              TASK_STACK_SIZE,  // Stack depth
-                              args,  // Parameter passed to the task (using
-                                     // global s_machine_interface instead)
+                              task_name,   // Task name
+                              stack_size,  // Stack depth (caller-specified)
+                              args,  // Parameter passed to the task
                               TASK_PRIORITY,  // Task priority
                               task_handle,    // Task handle
                               pinned_core) == pdPASS;

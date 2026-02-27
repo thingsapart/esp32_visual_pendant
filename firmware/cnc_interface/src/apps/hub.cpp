@@ -1151,7 +1151,8 @@ void setup() {
   if (!abort && machine_response_proc_task_run("MachineRRFProc", g_machine_base,
                                                &machine_rrf_proc_task_handle,
                                                &machine_rrf_proc_queue,
-                                               TASK_MACHINE_CORE)) {
+                                               TASK_MACHINE_CORE,
+                                               14 * 1024)) {  // cJSON + on_files_changed + ESP-NOW send
     if (!machine_rrf_setup_response_processing_task(g_machine,
                                                     machine_rrf_proc_queue)) {
       LOGE(TAG, "Failed to set up even processing queue for RRF task");

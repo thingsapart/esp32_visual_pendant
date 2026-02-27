@@ -60,13 +60,18 @@ static void rb_free(ring_buffer_t *rb) {
   }
 }
 
-static bool rb_is_full(const ring_buffer_t *rb) {
+// rb_push and rb_is_full must be IRAM_ATTR because they are called (directly or
+// inlined) from onReceiveGeneric which runs in UART ISR/event-task context.
+// Without IRAM_ATTR, any SPI-flash operation that disables the MMU cache
+// (e.g. WiFi/ESP-NOW RF-calibration NVS writes during boot) will crash the CPU
+// when it tries to fetch these small functions from flash.
+static IRAM_ATTR bool rb_is_full(const ring_buffer_t *rb) {
   return rb->count == rb->size;
 }
 
-static bool rb_is_empty(const ring_buffer_t *rb) { return rb->count == 0; }
+static IRAM_ATTR bool rb_is_empty(const ring_buffer_t *rb) { return rb->count == 0; }
 
-static bool rb_push(ring_buffer_t *rb, uint8_t data) {
+static IRAM_ATTR bool rb_push(ring_buffer_t *rb, uint8_t data) {
   if (rb_is_full(rb)) return false;  // Buffer full
   rb->buffer[rb->head] = data;
   rb->head = (rb->head + 1) % rb->size;
@@ -119,8 +124,8 @@ static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t *port_data);
 #if defined(ESP32_HW)
-static void onReceiveGeneric(
-    void *arg);  // Remove IRAM_ATTR from forward declaration
+static IRAM_ATTR void onReceiveGeneric(
+    void *arg);  // Must be IRAM_ATTR — called during flash-cache-disable windows
 #endif
 
 // --- Internal Helper Functions ---
@@ -175,7 +180,12 @@ static void process_received_data(serial_port_data_t *port_data) {
 // Generic onReceive callback for HardwareSerial
 // IMPORTANT: This runs in ISR context on ESP32. Keep it short and fast.
 // Avoid blocking calls, memory allocation, or complex logic.
-static void onReceiveGeneric(void *arg) {  // Removed IRAM_ATTR
+// IRAM_ATTR is REQUIRED here: this function is invoked from the Arduino-ESP32
+// UART event task (or ISR) which can run while the SPI flash cache is disabled
+// (e.g. during WiFi/ESP-NOW RF-calibration NVS writes at boot).  Without
+// IRAM_ATTR the CPU faults with EXCCAUSE=7 "cache disabled" on every boot-time
+// flash operation, causing the observed random crashes before first full boot.
+static IRAM_ATTR void onReceiveGeneric(void *arg) {
   serial_port_data_t *port_data = (serial_port_data_t *)arg;
   if (!port_data || !port_data->is_hw_serial) return;  // Should not happen
 

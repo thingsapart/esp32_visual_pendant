@@ -623,8 +623,10 @@ void machine_interface_files_updated(machine_interface_t *self,
     }
   }
   for (int i = 0; i < MAX_CALLBACKS; i++) {
-    // Bug fix: was incorrectly checking index 0 for non-NULL instead of index i.
-    if (self->files_changed_cb[i].path != NULL &&
+    if (!self->files_changed_cb[i].cb_fn) continue;
+    // NULL path = wildcard: fire for any fdir (used by multi_machine aggregator).
+    // Non-NULL path = fire only when fdir matches exactly.
+    if (self->files_changed_cb[i].path == NULL ||
         strcmp(fdir, self->files_changed_cb[i].path) == 0) {
       self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data,
                                       fdir, files);
@@ -674,6 +676,7 @@ bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             files_changed_callback_cb_t cb) {
   for (int i = 0; i < MAX_CALLBACKS; i++) {
     if (!self->files_changed_cb[i].cb_fn) {
+      self->files_changed_cb[i].path = path;  // NULL = wildcard (match any path)
       self->files_changed_cb[i].cb_fn = cb;
       self->files_changed_cb[i].user_data = user_data;
       return true;

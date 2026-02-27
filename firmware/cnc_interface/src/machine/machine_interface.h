@@ -37,8 +37,7 @@ typedef enum {
 } poll_state_t;
 
 typedef enum {
-  MACHINE_STATUS_WAITING_FOR_MACHINE = 0,  // Hub is alive but has no connection to CNC controller
-  MACHINE_STATUS_INITIALIZING,
+  MACHINE_STATUS_INITIALIZING = 0,
   MACHINE_STATUS_FLASHING_FIRMWARE,
   MACHINE_STATUS_EMERGENCY_HALTED,
   MACHINE_STATUS_OFF,
@@ -50,6 +49,7 @@ typedef enum {
   MACHINE_STATUS_TOOL_CHANGING,
   MACHINE_STATUS_RUNNING,
   MACHINE_STATUS_UNKNOWN = 100,
+  MACHINE_STATUS_WAITING_FOR_MACHINE = 101,  // Hub is alive but has no connection to CNC controller
 } machine_status_t;
 
 // --- Data Structures ---

@@ -259,11 +259,11 @@ static bool _dwc_parse_json_response(machine_rrf_t *self,
   return success;
 }
 
+#if 0
 static void _dwc_do_poll_key(machine_rrf_t *self, const char *key) {
   if (!key) return;
 
-  // Using static buffer to save stack space in the task
-  static char response_buffer[4096];
+  char response_buffer[4096];
   int status_code = 0;
 
   LOGD(TAG, "DWC: Polling key: %s", key);
@@ -287,6 +287,12 @@ static void _dwc_do_poll_key(machine_rrf_t *self, const char *key) {
          status_code, key);
   }
 }
+#else
+
+static void _dwc_do_poll_key(machine_rrf_t *self, const char *key) {
+}
+
+#endif
 
 static void _dwc_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   if (!self->connected) {
@@ -382,9 +388,10 @@ static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect) {
   }
 }
 
+#if 0
 static void _dwc_list_files_impl(machine_rrf_t *self, const char *path) {
   char request_path[128];
- char response_buffer[4096];
+  char response_buffer[4096];
   int status_code;
 
   snprintf(request_path, sizeof(request_path), "/rr_filelist?dir=%s", path);
@@ -395,6 +402,11 @@ static void _dwc_list_files_impl(machine_rrf_t *self, const char *path) {
     // This requires a different parser than the M20 response parser.
   }
 }
+#else
+
+static void _dwc_list_files_impl(machine_rrf_t *self, const char *path) { }
+
+#endif
 
 static void _dwc_deinit_impl(machine_rrf_t *self) {
   if (self->connected) {
@@ -459,8 +471,9 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
 }
 
 // --- M20 response parser ---
-// M20 S2 P"/gcodes/" returns:
-//   {"dir":"0:/gcodes/","first":0,"last":N,"files":[{"type":"f","name":"job.gcode",...},...]}
+// M20 S2 P"/gcodes" returns:
+//   {"dir":"0:/gcodes/","first":0,"next":0,"files":["job.gcode","*subdir",...]
+// Files is a plain string array; subdirectories are prefixed with '*'.
 // Normalize the dir (strip leading "V:/" volume prefix and trailing '/')
 // then find or allocate a filelists slot and call machine_interface_files_updated.
 static bool _serial_parse_m20_response(machine_rrf_t *self, cJSON *json_obj) {
@@ -535,14 +548,19 @@ static bool _serial_parse_m20_response(machine_rrf_t *self, cJSON *json_obj) {
   int j = 0;
   cJSON *file_item;
   cJSON_ArrayForEach(file_item, files_json) {
-    cJSON *name_json = cJSON_GetObjectItemCaseSensitive(file_item, "name");
-    if (cJSON_IsString(name_json) && name_json->valuestring) {
-      self->base.filelists[idx].files[j++] = strdup(name_json->valuestring);
-    }
+    // S2 format: each item is a plain string; subdirs are prefixed with '*'.
+    if (!cJSON_IsString(file_item) || !file_item->valuestring) continue;
+    const char *name = file_item->valuestring;
+    // Include subdirectory entries but strip the leading '*' so the UI sees
+    // a plain name.  The file list is purely flat for now; navigation into
+    // subdirs can be added later.
+    if (name[0] == '*') name++;
+    if (*name == '\0') continue;  // shouldn't happen, but be safe
+    self->base.filelists[idx].files[j++] = strdup(name);
   }
   self->base.filelists[idx].files[j] = NULL;  // NULL-terminate
 
-  LOGI(TAG, "M20: stored %d files for '%s' (slot %zu)", j, fdir, idx);
+  LOGI(TAG, "M20: stored %d files for '%s' (slot %u)", j, fdir, (unsigned)idx);
   machine_interface_files_updated(&self->base, self->base.filelists[idx].fdir);
   return true;
 }
@@ -789,7 +807,8 @@ static void _serial_set_connected_impl(machine_rrf_t *self, bool connect) {
 
 static void _serial_list_files_impl(machine_rrf_t *self, const char *path) {
   char cmd[128];
-  snprintf(cmd, sizeof(cmd), "M20 S2 P\"/%s/\"", path);
+  // S2 = JSON format; path without trailing slash per RRF docs.
+  snprintf(cmd, sizeof(cmd), "M20 S2 P\"/%s\"", path);
   machine_interface_send_gcode(&self->base, cmd, 0);
 }
 
@@ -846,10 +865,10 @@ static void _machine_rrf_attempt_connect(machine_interface_t *self) {
 
     // Distinguish transport type by checking which implementation is used.
     if (rrf_self->_poll_state_impl == _serial_poll_state_impl) {
-        // For serial, we must poll to check for connection.
-        // We'll send a simple status request. If we get a response,
-        // _serial_proc_state_resp_impl will mark us as connected.
-        // Also process any pending input first.
+        // Guard against a NULL uart handle (e.g. serial init failed or not yet
+        // assigned).  Calling serial_process_input(NULL) dereferences the
+        // handle and crashes.
+        if (!rrf_self->transport_state.serial.uart) return;
         serial_process_input(rrf_self->transport_state.serial.uart);
         machine_interface_send_gcode(self, "M409 K\"state.status\" F\"v\"", 0);
     } else if (rrf_self->_poll_state_impl == _dwc_poll_state_impl) {
