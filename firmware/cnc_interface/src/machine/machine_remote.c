@@ -458,6 +458,15 @@ machine_interface_remote_t *machine_interface_remote_init(
       _machine_interface_remote_update_machine_state;
   self->base.debug_print = NULL;
 
+  // Pre-initialize the two standard filelist slots so that incoming
+  // MSG_SUB_TYPE_FILE_LIST payloads are always matched to a named slot,
+  // and so that interface_tick() can build Job.items / Macro.items strings
+  // even before the first request is answered.
+  self->base.filelists[0].fdir = strdup("gcodes");
+  self->base.filelists[0].files = NULL;
+  self->base.filelists[1].fdir = strdup("macros");
+  self->base.filelists[1].files = NULL;
+
   initialize_binary_payload_buffers();
 
   // Initialize ESP-NOW
@@ -498,6 +507,21 @@ void _machine_interface_remote_update_machine_state(
     machine_interface_t *base_self, uint32_t poll_state) {
   machine_interface_remote_t *self = (machine_interface_remote_t *)base_self;
   machine_interface_remote_process_messages(self);
+
+  // Periodically request file-listings from the hub.  The base class sets
+  // LIST_FILES | LIST_MACROS every ~9973 ticks; consume those bits here and
+  // send the corresponding CMD_TYPE_LIST_FILES commands so the hub will run
+  // M20 and return the current file-list over ESP-NOW.
+  if (self->hub_mac_received) {
+    if (poll_state & LIST_FILES) {
+      LOGI(TAG, "Requesting file list: gcodes");
+      _machine_interface_remote_list_files(base_self, "gcodes");
+    }
+    if (poll_state & LIST_MACROS) {
+      LOGI(TAG, "Requesting file list: macros");
+      _machine_interface_remote_list_files(base_self, "macros");
+    }
+  }
 }
 
 void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
@@ -1294,14 +1318,24 @@ void process_binary_msg_file_list(machine_interface_remote_t *mach,
   file_list_payload_t *header = (file_list_payload_t *)data;
   char *fdir = (char *)header + sizeof(*header);
   size_t idx = MAX_FILE_LISTS;
+  size_t empty_slot = MAX_FILE_LISTS;
 
   for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
-    if (strcmp(fdir, mach->base.filelists[i].fdir) == 0) {
+    if (mach->base.filelists[i].fdir &&
+        strcmp(fdir, mach->base.filelists[i].fdir) == 0) {
       idx = i;
+      break;
+    }
+    if (!mach->base.filelists[i].fdir && empty_slot == MAX_FILE_LISTS) {
+      empty_slot = i;
     }
   }
+  // If no existing slot matches, use an empty slot to accept the new list.
   if (idx == MAX_FILE_LISTS) {
-    LOGE(TAG, "Received enexpected file list '%s'... not using.", fdir);
+    idx = empty_slot;
+  }
+  if (idx == MAX_FILE_LISTS) {
+    LOGE(TAG, "No filelist slot available for '%s'", fdir);
     return;
   }
 
@@ -1316,19 +1350,25 @@ void process_binary_msg_file_list(machine_interface_remote_t *mach,
   }
 
   mach->base.filelists[idx].files =
-      malloc(sizeof(char *) * (header->num_files + 1));
+      calloc(header->num_files + 1, sizeof(char *));  // +1 for NULL sentinel
   mach->base.filelists[idx].fdir = strdup(fdir);
 
   char *offset = fdir + strlen(fdir) + 1;
   char *end = ((char *)header) + header->total_size;
+  size_t filled = 0;
   for (size_t i = 0; i < header->num_files && offset < end; ++i) {
     const char *fn = offset;
     const size_t fn_len = strlen(fn) + 1;
     mach->base.filelists[idx].files[i] = strdup(fn);
     offset += fn_len;
+    filled++;
   }
+  mach->base.filelists[idx].files[filled] = NULL;  // NULL-terminate (calloc already zeroed)
 
-  LOGI(TAG, "Received FILELIST => %s:%d files...", fdir, header->num_files);
+  LOGI(TAG, "Received FILELIST => '%s': %zu of %u file(s):", fdir, filled, header->num_files);
+  for (size_t i = 0; i < filled; ++i) {
+    LOGI(TAG, "  [%zu] %s", i, mach->base.filelists[idx].files[i]);
+  }
   machine_interface_files_updated(&mach->base, mach->base.filelists[idx].fdir);
 }
 

@@ -115,10 +115,18 @@ static void on_current_move_axis_change(machine_interface_t *machine,
 static void on_files_change(machine_interface_t *machine, void *user_data,
                             const char *path, char **files) {
   interface_t *interface = (interface_t *)user_data;
+  // Count incoming files for diagnostics
+  int fcount = 0;
+  if (files) { while (files[fcount]) fcount++; }
+  LOGI(TAG, "on_files_change: path='%s' count=%d", path, fcount);
   if (strstr(path, "gcode")) {
+    LOGI(TAG, "  -> marking UI_DIRTY_FILES_GCODES");
     interface->dirty_flags |= UI_DIRTY_FILES_GCODES;
   } else if (strstr(path, "macro")) {
+    LOGI(TAG, "  -> marking UI_DIRTY_FILES_MACROS");
     interface->dirty_flags |= UI_DIRTY_FILES_MACROS;
+  } else {
+    LOGW(TAG, "  -> path '%s' matched neither 'gcode' nor 'macro'", path);
   }
 }
 
@@ -491,7 +499,7 @@ void interface_tick(interface_t *interface) {
         (binding_value_t){.type = BINDING_TYPE_STRING,
                           .as.s_val = machine_reachable
                               ? machine_status_to_string(machine->machine_status)
-                              : "--XX--"});
+                              : "--X-X--"});
     data_binding_notify_state_changed(
         "machine.program_is_running",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
@@ -769,6 +777,7 @@ void interface_tick(interface_t *interface) {
       }
       if (ptr != buf) *(ptr - 1) = '\0'; // replace last newline with NUL
 
+      LOGI(TAG, "Job.items notify: fdir='%s' buf='%.200s'", fdir, buf);
       data_binding_notify_state_changed("Job.items",
           (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = buf});
       free(buf);
@@ -811,6 +820,7 @@ after_files_gcodes: ;
       }
       if (ptr != buf) *(ptr - 1) = '\0';
 
+      LOGI(TAG, "Macro.items notify: fdir='%s' buf='%.200s'", fdir, buf);
       data_binding_notify_state_changed("Macro.items",
           (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = buf});
       free(buf);

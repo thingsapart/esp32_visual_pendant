@@ -384,7 +384,7 @@ static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect) {
 
 static void _dwc_list_files_impl(machine_rrf_t *self, const char *path) {
   char request_path[128];
-  char response_buffer[4096];
+ char response_buffer[4096];
   int status_code;
 
   snprintf(request_path, sizeof(request_path), "/rr_filelist?dir=%s", path);
@@ -458,6 +458,95 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
   }
 }
 
+// --- M20 response parser ---
+// M20 S2 P"/gcodes/" returns:
+//   {"dir":"0:/gcodes/","first":0,"last":N,"files":[{"type":"f","name":"job.gcode",...},...]}
+// Normalize the dir (strip leading "V:/" volume prefix and trailing '/')
+// then find or allocate a filelists slot and call machine_interface_files_updated.
+static bool _serial_parse_m20_response(machine_rrf_t *self, cJSON *json_obj) {
+  cJSON *dir_json   = cJSON_GetObjectItemCaseSensitive(json_obj, "dir");
+  cJSON *files_json = cJSON_GetObjectItemCaseSensitive(json_obj, "files");
+
+  if (!cJSON_IsString(dir_json) || !cJSON_IsArray(files_json)) {
+    LOGW(TAG, "M20: invalid dir/files fields");
+    return false;
+  }
+
+  // Normalize "0:/gcodes/" -> "gcodes"
+  const char *raw_dir = dir_json->valuestring;
+  const char *dir_start = raw_dir;
+  // Skip leading volume prefix like "0:/"
+  if (dir_start[0] && dir_start[1] == ':' && dir_start[2] == '/') {
+    dir_start += 3;
+  }
+  // Strip leading slashes
+  while (*dir_start == '/') dir_start++;
+  char fdir[128];
+  strncpy(fdir, dir_start, sizeof(fdir) - 1);
+  fdir[sizeof(fdir) - 1] = '\0';
+  // Strip trailing slashes
+  size_t fdir_len = strlen(fdir);
+  while (fdir_len > 0 && fdir[fdir_len - 1] == '/') {
+    fdir[--fdir_len] = '\0';
+  }
+
+  // Find or allocate a filelists slot for this directory path.
+  size_t idx = MAX_FILE_LISTS;
+  size_t empty_slot = MAX_FILE_LISTS;
+  for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+    if (self->base.filelists[i].fdir &&
+        strcmp(fdir, self->base.filelists[i].fdir) == 0) {
+      idx = i;
+      break;
+    }
+    if (!self->base.filelists[i].fdir && empty_slot == MAX_FILE_LISTS) {
+      empty_slot = i;
+    }
+  }
+  if (idx == MAX_FILE_LISTS) {
+    idx = empty_slot;
+  }
+  if (idx == MAX_FILE_LISTS) {
+    LOGW(TAG, "M20: no filelists slot available for '%s'", fdir);
+    return false;
+  }
+
+  // Free existing files array.
+  if (self->base.filelists[idx].files) {
+    for (size_t i = 0; self->base.filelists[idx].files[i]; ++i) {
+      free(self->base.filelists[idx].files[i]);
+    }
+    free(self->base.filelists[idx].files);
+    self->base.filelists[idx].files = NULL;
+  }
+  if (self->base.filelists[idx].fdir) {
+    free((void *)self->base.filelists[idx].fdir);
+  }
+  self->base.filelists[idx].fdir = strdup(fdir);
+
+  int num_files = cJSON_GetArraySize(files_json);
+  self->base.filelists[idx].files =
+      (char **)calloc(num_files + 1, sizeof(char *));
+  if (!self->base.filelists[idx].files) {
+    LOGE(TAG, "M20: OOM for files array");
+    return false;
+  }
+
+  int j = 0;
+  cJSON *file_item;
+  cJSON_ArrayForEach(file_item, files_json) {
+    cJSON *name_json = cJSON_GetObjectItemCaseSensitive(file_item, "name");
+    if (cJSON_IsString(name_json) && name_json->valuestring) {
+      self->base.filelists[idx].files[j++] = strdup(name_json->valuestring);
+    }
+  }
+  self->base.filelists[idx].files[j] = NULL;  // NULL-terminate
+
+  LOGI(TAG, "M20: stored %d files for '%s' (slot %zu)", j, fdir, idx);
+  machine_interface_files_updated(&self->base, self->base.filelists[idx].fdir);
+  return true;
+}
+
 static bool _serial_parse_json_response(machine_rrf_t *self,
                                         const char *json_response) {
   LOGD(TAG, "Serial: RESPONSE \n\n%s\n\n", json_response);
@@ -485,6 +574,13 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
     succ = machine_rrf_parse_m409_response(self, root);
     if (!succ) {
       LOGW(TAG, "Serial: m409 parse returned false for: %s", json_response);
+    }
+  } else if (cJSON_GetObjectItemCaseSensitive(root, "dir") &&
+             cJSON_GetObjectItemCaseSensitive(root, "files")) {
+    // M20 S2 file listing response: {"dir":"0:/gcodes/","first":0,"files":[...]}
+    succ = _serial_parse_m20_response(self, root);
+    if (!succ) {
+      LOGW(TAG, "Serial: M20 parse returned false for: %s", json_response);
     }
   } else if (cJSON_GetObjectItemCaseSensitive(root, "seq") &&
              cJSON_GetObjectItemCaseSensitive(root, "resp")) {
@@ -652,6 +748,15 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
                                  "M409 K\"state.currentTool\" F\"v\"", 0);
     machine_interface_send_gcode(&self->base, "M409 K\"tools[]\" F\"v\"", 0);
   }
+  // Periodic file listing: issue M20 for gcodes and macros directories.
+  if (poll_state & LIST_FILES) {
+    LOGI(TAG, "Serial: listing gcodes (M20)");
+    _machine_rrf_list_files(&self->base, "gcodes");
+  }
+  if (poll_state & LIST_MACROS) {
+    LOGI(TAG, "Serial: listing macros (M20)");
+    _machine_rrf_list_files(&self->base, "macros");
+  }
 
 #ifdef ESP32_HW
   // Track that we just sent a poll cycle for back-off bookkeeping.
@@ -671,6 +776,10 @@ static void _serial_set_connected_impl(machine_rrf_t *self, bool connect) {
       self->last_response_ms = millis();
 #endif
       LOGI(TAG, "Serial: Connected.");
+      // Immediately request file listings so the pendant has files without
+      // waiting up to 9973 poll cycles (~minutes at typical poll rates).
+      _machine_rrf_list_files(&self->base, "gcodes");
+      _machine_rrf_list_files(&self->base, "macros");
     } else {
       self->last_response_ms = 0;
     }

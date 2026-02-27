@@ -614,11 +614,20 @@ void machine_interface_spindles_tools_updated(machine_interface_t *self) {
 
 void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir) {
+  // Find the filelist entry that matches fdir to pass the correct files pointer.
+  char **files = NULL;
+  for (int j = 0; j < MAX_FILE_LISTS; ++j) {
+    if (self->filelists[j].fdir && strcmp(fdir, self->filelists[j].fdir) == 0) {
+      files = self->filelists[j].files;
+      break;
+    }
+  }
   for (int i = 0; i < MAX_CALLBACKS; i++) {
-    if (self->files_changed_cb[0].path != NULL &&
+    // Bug fix: was incorrectly checking index 0 for non-NULL instead of index i.
+    if (self->files_changed_cb[i].path != NULL &&
         strcmp(fdir, self->files_changed_cb[i].path) == 0) {
       self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data,
-                                      fdir, self->filelists[i].files);
+                                      fdir, files);
     }
   }
 }

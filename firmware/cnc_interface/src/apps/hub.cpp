@@ -243,11 +243,12 @@ void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
 }
 
 void on_files_changed(machine_interface_t *mach, void *user_data,
-                      const char *path, const char **files) {
+                      const char *path, char **files) {
   LOGI(TAG, "Files change detected.");
 
   size_t idx = MAX_FILE_LISTS;
   for (size_t i = 0; i < MAX_FILE_LISTS; i++) {
+    if (!mach->filelists[i].fdir) continue;  // NULL guard: uninitialized slot
     if (strcmp(mach->filelists[i].fdir, path) == 0) {
       idx = i;
       break;
@@ -274,8 +275,12 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
     ++i;
   }
 
-  uint8_t buf[total_size];
-  memset(buf, 0, sizeof(buf));
+  uint8_t *buf = (uint8_t *)malloc(total_size);
+  if (!buf) {
+    LOGE(TAG, "on_files_changed: OOM (%zu bytes)", total_size);
+    return;
+  }
+  memset(buf, 0, total_size);
 
   header = (file_list_payload_t *)buf;
   header->total_size = total_size;
@@ -298,6 +303,7 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
     LOGI(TAG, "Failed to send binary file list to %u bytes.", total_size);
     led_status_error();
   }
+  free(buf);
 }
 
 bool on_log_message_received(machine_interface_t *machine, void *user_data, const char *message) {
@@ -1097,6 +1103,14 @@ void setup_machine_interface() {
                                                   on_spindles_tools_change);
   machine_interface_add_connected_changed_cb(mach, mach, on_connected_change);
   machine_interface_add_log_message_cb(mach, mach, on_log_message_received);
+
+  // Pre-initialize filelist directory slots so the M20 parser and
+  // on_files_changed can find them by name.  Also register the callback that
+  // serialises and forwards file lists to the pendant over ESP-NOW.
+  mach->filelists[0].fdir = strdup("gcodes");
+  mach->filelists[1].fdir = strdup("macros");
+  machine_interface_add_files_changed_cb(mach, "gcodes", mach, on_files_changed);
+  machine_interface_add_files_changed_cb(mach, "macros", mach, on_files_changed);
 
 
   remote_recv_task_run();
