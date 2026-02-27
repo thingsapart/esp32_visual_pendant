@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "lvgl_ui.h"
 
 // SET_LOOP_TASK_STACK_SIZE(1024 * 48);
 
@@ -270,6 +271,9 @@ void lvgl_task(void *pv_params) {
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
     vTaskDelay(sleep_time / portTICK_PERIOD_MS);
+
+    // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
+    lvgl_ui_task_handler();
 
     if ((ctr++ % 500) == 0) {
       LOGE(TAG, "LVGL task stack size high: %d\n",

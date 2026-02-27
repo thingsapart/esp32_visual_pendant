@@ -134,7 +134,7 @@ static const char *machine_status_to_string(machine_status_t status) {
     case MACHINE_STATUS_PAUSED_RESUME:
       return "PAUSED";
     case MACHINE_STATUS_TOOL_CHANGING:
-      return "TOOL CHANGE";
+      return "TOOL CHG";
     case MACHINE_STATUS_IDLE:
       return "IDLE";
     case MACHINE_STATUS_INITIALIZING:
@@ -144,7 +144,7 @@ static const char *machine_status_to_string(machine_status_t status) {
     case MACHINE_STATUS_OFF:
       return "OFF";
     case MACHINE_STATUS_WAITING_FOR_MACHINE:
-      return "NO MACHINE";
+      return "--X--";
     default:
       return "IDLE";
   }
@@ -455,6 +455,13 @@ void interface_tick(interface_t *interface) {
         "machine.connection_status",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
                           .as.b_val = connected});
+    if (!connected) {
+      const char *wait_msg = "< waiting for connection to list files... >";
+      data_binding_notify_state_changed("Job.items",
+        (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = wait_msg});
+      data_binding_notify_state_changed("Macro.items",
+        (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = wait_msg});
+    }
   }
 
   if (flags_to_process & UI_DIRTY_MACHINE_STATE) {
@@ -484,7 +491,7 @@ void interface_tick(interface_t *interface) {
         (binding_value_t){.type = BINDING_TYPE_STRING,
                           .as.s_val = machine_reachable
                               ? machine_status_to_string(machine->machine_status)
-                              : "-xxx-"});
+                              : "--XX--"});
     data_binding_notify_state_changed(
         "machine.program_is_running",
         (binding_value_t){.type = BINDING_TYPE_BOOL,
@@ -722,6 +729,94 @@ void interface_tick(interface_t *interface) {
     data_binding_notify_state_changed(
         "motion.jog.step_z", (binding_value_t){.type = BINDING_TYPE_FLOAT,
                                                .as.f_val = machine->current_move_step_z});
+  }
+
+  // --- File lists: build newline-delimited strings for Job.items and Macro.items
+  if (flags_to_process & UI_DIRTY_FILES_GCODES) {
+    if (!machine->is_connected(machine)) {
+      const char *wait_msg = "< waiting for connection to list files... >";
+      data_binding_notify_state_changed("Job.items",
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = wait_msg});
+      goto after_files_gcodes;
+    }
+    // Find the filelist entry that corresponds to gcodes
+    for (int i = 0; i < MAX_FILE_LISTS; ++i) {
+      const char *fdir = machine->filelists[i].fdir;
+      char **files = machine->filelists[i].files;
+      if (!fdir || !files) continue;
+      if (!strstr(fdir, "gcode") && !strstr(fdir, "gcodes")) continue;
+
+      // Compute whether we should add a parent-entry ("..")
+      bool add_parent = false;
+      const char *p = strchr(fdir + 1, '/');
+      if (p) add_parent = true;  // deeper than root (e.g. /gcodes/sub)
+
+      // Calculate total buffer size
+      size_t total = 1; // final NUL
+      if (add_parent) total += 3; // "..\n"
+      for (size_t j = 0; files[j]; ++j) total += strlen(files[j]) + 1;
+
+      char *buf = malloc(total);
+      if (!buf) break;
+      buf[0] = '\0';
+      char *ptr = buf;
+      if (add_parent) { memcpy(ptr, "..\n", 3); ptr += 3; }
+      for (size_t j = 0; files[j]; ++j) {
+        size_t L = strlen(files[j]);
+        memcpy(ptr, files[j], L);
+        ptr += L;
+        *ptr++ = '\n';
+      }
+      if (ptr != buf) *(ptr - 1) = '\0'; // replace last newline with NUL
+
+      data_binding_notify_state_changed("Job.items",
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = buf});
+      free(buf);
+      break;
+    }
+after_files_gcodes: ;
+  }
+
+  if (flags_to_process & UI_DIRTY_FILES_MACROS) {
+    if (!machine->is_connected(machine)) {
+      const char *wait_msg = "< waiting for connection to list files... >";
+      data_binding_notify_state_changed("Macro.items",
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = wait_msg});
+      goto after_files_macros;
+    }
+    for (int i = 0; i < MAX_FILE_LISTS; ++i) {
+      const char *fdir = machine->filelists[i].fdir;
+      char **files = machine->filelists[i].files;
+      if (!fdir || !files) continue;
+      if (!strstr(fdir, "macro") && !strstr(fdir, "macros")) continue;
+
+      bool add_parent = false;
+      const char *p = strchr(fdir + 1, '/');
+      if (p) add_parent = true;
+
+      size_t total = 1;
+      if (add_parent) total += 3;
+      for (size_t j = 0; files[j]; ++j) total += strlen(files[j]) + 1;
+
+      char *buf = malloc(total);
+      if (!buf) break;
+      buf[0] = '\0';
+      char *ptr = buf;
+      if (add_parent) { memcpy(ptr, "..\n", 3); ptr += 3; }
+      for (size_t j = 0; files[j]; ++j) {
+        size_t L = strlen(files[j]);
+        memcpy(ptr, files[j], L);
+        ptr += L;
+        *ptr++ = '\n';
+      }
+      if (ptr != buf) *(ptr - 1) = '\0';
+
+      data_binding_notify_state_changed("Macro.items",
+          (binding_value_t){.type = BINDING_TYPE_STRING, .as.s_val = buf});
+      free(buf);
+      break;
+    }
+after_files_macros: ;
   }
 }
 

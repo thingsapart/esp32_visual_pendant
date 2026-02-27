@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "debug.h"
 #include "lvgl_ui.h"
@@ -62,6 +63,35 @@ void show_home_all_modal(machine_interface_t * machine) {
     lv_obj_t *close_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
     lv_obj_add_event_cb(close_btn, home_all_modal_event_handler, LV_EVENT_CLICKED, mbox);
     lv_obj_center(mbox);
+}
+
+typedef struct {
+  machine_interface_t *machine;
+  char *name; // strdup'd filename
+  bool is_macro; // true => macro, false => job
+} execute_confirm_ctx_t;
+
+static void execute_confirm_event_handler(lv_event_t * e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_obj_t *btn = lv_event_get_current_target(e);
+  lv_obj_t *mbox = lv_obj_get_parent(lv_obj_get_parent(btn));
+  lv_obj_t *label = lv_obj_get_child(btn, 0);
+  const char *lbl = lv_label_get_text(label);
+  execute_confirm_ctx_t *ctx = (execute_confirm_ctx_t *)lv_obj_get_user_data(mbox);
+  if (!ctx || !ctx->machine) {
+    lv_msgbox_close(mbox);
+    return;
+  }
+  if (strcmp(lbl, "OK") == 0 || strcmp(lbl, "Ok") == 0 || strcmp(lbl, "Yes") == 0) {
+    if (ctx->is_macro) {
+      ctx->machine->run_macro(ctx->machine, ctx->name);
+    } else {
+      ctx->machine->start_job(ctx->machine, ctx->name);
+    }
+  }
+  lv_msgbox_close(mbox);
+  free(ctx->name);
+  free(ctx);
 }
 
 /**
@@ -172,6 +202,91 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   // Forward all "MDI.*" actions to the MDI handler.
   else if (strncmp(action_name, "MDI.", 4) == 0) {
     mdi_handle_action(&interface->mdi, action_name, value);
+  }
+
+  // --- File list actions: Jobs and Macros ---
+  else if (strcmp(action_name, "Job.execute") == 0 || strcmp(action_name, "Macro.execute") == 0) {
+    // value is a float index (0-based)
+    if (value.type != BINDING_TYPE_FLOAT) return;
+    int row = (int)(value.as.f_val + 0.001f);
+    bool is_macro = (strcmp(action_name, "Macro.execute") == 0);
+
+    // Find the matching filelist index
+    int fl_idx = -1;
+    for (int i = 0; i < MAX_FILE_LISTS; ++i) {
+      const char *fdir = machine->filelists[i].fdir;
+      if (!fdir) continue;
+      if (is_macro) {
+        if (strstr(fdir, "macro") || strstr(fdir, "macros")) { fl_idx = i; break; }
+      } else {
+        if (strstr(fdir, "gcode") || strstr(fdir, "gcodes")) { fl_idx = i; break; }
+      }
+    }
+    if (fl_idx < 0) {
+      LOGW(TAG, "No filelist for %s", is_macro ? "macros" : "gcodes");
+      return;
+    }
+
+    char **files = machine->filelists[fl_idx].files;
+    const char *fdir = machine->filelists[fl_idx].fdir ? machine->filelists[fl_idx].fdir : "";
+
+    // Account for optional ".." parent entry added by UI
+    int adjust = 0;
+    if (strchr(fdir + 1, '/')) adjust = 1;
+    int file_idx = row - adjust;
+    if (file_idx < 0) {
+      // ".." selected — compute parent directory
+      // compute parent of fdir (strip after last '/')
+      char parent[256];
+      strncpy(parent, fdir, sizeof(parent)-1);
+      parent[sizeof(parent)-1] = '\0';
+      char *last = strrchr(parent, '/');
+      if (last && last != parent) {
+        *last = '\0';
+      } else {
+        // already at root — nothing to do
+        return;
+      }
+      machine->list_files(machine, parent);
+      return;
+    }
+    if (!files || !files[file_idx]) return;
+
+    const char *sel = files[file_idx];
+    size_t L = strlen(sel);
+    bool is_dir = (L > 0 && sel[L-1] == '/');
+
+    if (is_dir) {
+      // Build new path: join fdir and sel (strip trailing '/')
+      char newpath[512];
+      char name[256];
+      strncpy(name, sel, sizeof(name)-1); name[sizeof(name)-1] = '\0';
+      if (name[strlen(name)-1] == '/') name[strlen(name)-1] = '\0';
+      if (fdir[0] == '\0') snprintf(newpath, sizeof(newpath), "/%s", name);
+      else snprintf(newpath, sizeof(newpath), "%s/%s", fdir, name);
+      machine->list_files(machine, newpath);
+      return;
+    }
+
+    // It's a file — show confirmation then execute
+    const char *title = is_macro ? "Run Macro?" : "Run Job?";
+    const char *text = sel;
+    lv_obj_t *mbox = lv_msgbox_create(lv_screen_active());
+    lv_msgbox_add_title(mbox, title);
+    lv_msgbox_add_text(mbox, text);
+    lv_obj_t *ok_btn = lv_msgbox_add_footer_button(mbox, "OK");
+    lv_obj_t *cancel_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+
+    execute_confirm_ctx_t *ctx = malloc(sizeof(execute_confirm_ctx_t));
+    if (!ctx) { lv_msgbox_close(mbox); return; }
+    ctx->machine = machine;
+    ctx->is_macro = is_macro;
+    ctx->name = strdup(sel);
+    lv_obj_set_user_data(mbox, ctx);
+    lv_obj_add_event_cb(ok_btn, execute_confirm_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(cancel_btn, execute_confirm_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_center(mbox);
+    return;
   }
 
   // --- Probe dimension settings (from the probe-mode tab numeric dialogs) ---
