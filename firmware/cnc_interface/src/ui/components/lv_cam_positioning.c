@@ -7,6 +7,7 @@
 #include "lv_cam_stream.h"
 #include "probe/probe_api.h"
 #include "config/probe_settings.h"
+#include "ui/assets.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -196,6 +197,15 @@ typedef struct {
     bool                    wiz_zref_set;      ///< zref collected
     int                     wiz_step_idx;      ///< Currently active step index (0-based)
     int                     wiz_drag_pt;       ///< Point being dragged: -1=none 0=pt1 1=pt2 2=zref
+
+    // Move-point mode: overrides the normal wizard step placement flow.
+    // When wiz_move_pt_active, the next overlay tap repositions the point
+    // identified by wiz_move_pt_which and then resumes the normal wizard flow.
+    bool                    wiz_move_pt_active;       ///< Move-point mode active
+    int8_t                  wiz_move_pt_which;        ///< -1=none 0=pt1 1=pt2 2=zref
+    bool                    wiz_move_pt_blink_on;     ///< Blink phase (toggled by timer)
+    lv_timer_t             *wiz_move_pt_blink_timer;  ///< Drives blink; NULL when mode inactive
+
     // Sidebar LVGL objects (permanent children of right_panel; contents rebuilt on state change)
     lv_obj_t               *right_panel;       ///< 80 px right panel container
     lv_obj_t               *coord_panel;       ///< Coordinate display (top of sidebar)
@@ -234,6 +244,16 @@ typedef struct {
     // first post-zoom grid update arrives (confirming the zoomed keyframe
     // is on its way).  Until cleared, points are still in pre-zoom coords.
     volatile bool           wiz_zoom_remap_pending;
+
+    // ---- Local camera-connection status label ----
+    // A small semi-transparent label overlaid on the cam area.  The widget
+    // automatically shows "Connecting to camera..." when no frame has arrived
+    // yet and hides once the camera starts streaming.  Callers can also show
+    // an explicit message via lv_cam_positioning_show_status_text() — in that
+    // case status_locked=true prevents the auto-clear until the caller calls
+    // lv_cam_positioning_clear_status_text().
+    lv_obj_t               *status_label;   ///< Semi-transparent overlay label
+    bool                    status_locked;  ///< true: caller controls the text
 } lv_cam_pos_priv_t;
 
 // ---------------------------------------------------------------------------
@@ -268,6 +288,10 @@ static void sidebar_update_coords(lv_cam_pos_priv_t *priv);
 // Zoom helpers
 static void wiz_activate_zoom(lv_cam_pos_priv_t *priv);
 static void wiz_deactivate_zoom(lv_cam_pos_priv_t *priv);
+
+// Move-point mode helpers
+static void wiz_start_move_pt(lv_cam_pos_priv_t *priv, int8_t which);
+static void wiz_cancel_move_pt(lv_cam_pos_priv_t *priv);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -562,6 +586,22 @@ static void draw_wiz_marker(lv_layer_t *layer, int32_t cx, int32_t cy,
     txt.text_local = 0;  // ROM string literal — no copy needed
     lv_area_t tarea = { BX + 1, BY + 2, BX + BW - 2, BY + BH - 2 };
     lv_draw_label(layer, &txt, &tarea);
+}
+
+/// Draw an amber ring around a wizard marker to indicate it is selected for
+/// repositioning.  Called for the blink-on phase while move-point mode is active.
+static void draw_move_pt_halo(lv_layer_t *layer, int32_t cx, int32_t cy)
+{
+    const int32_t R = POINT_RADIUS + 5;
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa       = LV_OPA_TRANSP;
+    dsc.border_color = lv_color_hex(0xFFAA00);  // amber
+    dsc.border_width = 2;
+    dsc.border_opa   = LV_OPA_COVER;
+    dsc.radius       = LV_RADIUS_CIRCLE;
+    lv_area_t a = { cx - R, cy - R, cx + R, cy + R };
+    lv_draw_rect(layer, &dsc, &a);
 }
 
 /// draw_calib_grid: not called from overlay_draw_cb.
@@ -1249,8 +1289,52 @@ static void wiz_deactivate_zoom(lv_cam_pos_priv_t *priv)
 
 /// Reset wizard to idle state — cancels any running op, clears all points,
 /// rebuilds the sidebar.  Safe to call at any time including from on_delete.
+// ---------------------------------------------------------------------------
+// Move-point mode helpers
+// ---------------------------------------------------------------------------
+
+/// Timer callback that toggles the blink phase and triggers an overlay repaint.
+static void _move_pt_blink_cb(lv_timer_t *t)
+{
+    lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_timer_get_user_data(t);
+    if (!priv) return;
+    priv->wiz_move_pt_blink_on = !priv->wiz_move_pt_blink_on;
+    if (priv->overlay && lv_obj_is_valid(priv->overlay))
+        lv_obj_invalidate(priv->overlay);
+}
+
+/// Enter move-point mode for the given point index (0=pt1, 1=pt2, 2=zref).
+/// Starts the blink timer and immediately repaints the overlay.
+static void wiz_start_move_pt(lv_cam_pos_priv_t *priv, int8_t which)
+{
+    priv->wiz_move_pt_active   = true;
+    priv->wiz_move_pt_which    = which;
+    priv->wiz_move_pt_blink_on = true;
+    if (!priv->wiz_move_pt_blink_timer) {
+        priv->wiz_move_pt_blink_timer =
+            lv_timer_create(_move_pt_blink_cb, 400, priv);
+    }
+    if (priv->overlay && lv_obj_is_valid(priv->overlay))
+        lv_obj_invalidate(priv->overlay);
+}
+
+/// Exit move-point mode, stop the blink timer and repaint.
+static void wiz_cancel_move_pt(lv_cam_pos_priv_t *priv)
+{
+    priv->wiz_move_pt_active   = false;
+    priv->wiz_move_pt_which    = -1;
+    priv->wiz_move_pt_blink_on = false;
+    if (priv->wiz_move_pt_blink_timer) {
+        lv_timer_delete(priv->wiz_move_pt_blink_timer);
+        priv->wiz_move_pt_blink_timer = NULL;
+    }
+}
+
 static void wiz_reset(lv_cam_pos_priv_t *priv)
 {
+    // Exit move-point mode first (stops blink timer, clears flags).
+    wiz_cancel_move_pt(priv);
+
     // Deactivate any active zoom so the camera returns to its normal view.
     wiz_deactivate_zoom(priv);
 
@@ -1324,6 +1408,7 @@ static void _probe_done_async(void *user_data)
     priv->wiz_pt2_set  = false;  memset(&priv->wiz_pt2,  0, sizeof(priv->wiz_pt2));
     priv->wiz_zref_set = false;  memset(&priv->wiz_zref, 0, sizeof(priv->wiz_zref));
     priv->wiz_step_idx = 0;
+    wiz_cancel_move_pt(priv);    // clear any pending move-point mode
     wiz_deactivate_zoom(priv);   // ensure camera returns to normal view
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
@@ -2027,6 +2112,54 @@ static void wiz_execute(lv_cam_pos_priv_t *priv)
 
 static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt)
 {
+    // -----------------------------------------------------------------------
+    // Move-point mode (set when the user taps near an existing point).
+    // The next tap repositions that specific point and exits the mode,
+    // resuming the wizard at whatever step was already active.
+    // -----------------------------------------------------------------------
+    if (priv->wiz_move_pt_active && priv->wiz_move_pt_which >= 0) {
+        int16_t img_x = 0, img_y = 0;
+        bool ok = pixel_to_image_coords(priv, scr_pt, &img_x, &img_y);
+        lv_cam_pos_point_t new_pt = ok ? make_point(priv, img_x, img_y)
+                                       : (lv_cam_pos_point_t){0};
+        switch (priv->wiz_move_pt_which) {
+        case 0: priv->wiz_pt1  = new_pt; break;
+        case 1: priv->wiz_pt2  = new_pt; break;
+        case 2: priv->wiz_zref = new_pt; break;
+        default: break;
+        }
+        wiz_cancel_move_pt(priv);
+        sidebar_update_coords(priv);
+        lv_obj_invalidate(priv->overlay);
+        return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Extended hit detection: if the tap is within (POINT_RADIUS + 5) px of
+    // any already-placed wizard point, enter move-point mode instead of
+    // placing a new point in the normal wizard flow.
+    // -----------------------------------------------------------------------
+    if (priv->wiz_state >= WIZ_OP_SELECT) {
+        typedef struct { lv_cam_pos_point_t *pt; bool set; } pt_hit_t;
+        pt_hit_t pts[3] = {
+            { &priv->wiz_pt1,  priv->wiz_pt1_set  },
+            { &priv->wiz_pt2,  priv->wiz_pt2_set  },
+            { &priv->wiz_zref, priv->wiz_zref_set },
+        };
+        const int32_t HIT_R = POINT_RADIUS + 5;
+        for (int i = 0; i < 3; i++) {
+            if (!pts[i].set) continue;
+            int32_t sx, sy;
+            if (!image_to_screen_coords(priv,
+                    pts[i].pt->px_x, pts[i].pt->px_y, &sx, &sy)) continue;
+            int32_t dx = sx - scr_pt.x, dy = sy - scr_pt.y;
+            if (dx * dx + dy * dy <= HIT_R * HIT_R) {
+                wiz_start_move_pt(priv, (int8_t)i);
+                return;
+            }
+        }
+    }
+
     switch (priv->wiz_state) {
 
     case WIZ_IDLE: {
@@ -2054,18 +2187,34 @@ static void wiz_handle_click(lv_cam_pos_priv_t *priv, lv_point_t scr_pt)
         if (priv->wiz_step_idx < 0 || priv->wiz_step_idx >= n) break;
 
         wiz_step_kind_t kind = steps[priv->wiz_step_idx].kind;
-        int16_t img_x, img_y;
-        if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
+        int16_t img_x = 0, img_y = 0;
+        bool has_img_coords = pixel_to_image_coords(priv, scr_pt, &img_x, &img_y);
 
+        // Allow wizard collection even when image/grid coords are unavailable
+        // (camera offline / connecting).  In that case store a zeroed point
+        // and record the raw screen tap for pt1 so the UI can still show a
+        // meaningful marker and advance the flow.
         if (kind == WIZ_SK_PT1) {
-            priv->wiz_pt1     = make_point(priv, img_x, img_y);
+            if (has_img_coords) {
+                priv->wiz_pt1 = make_point(priv, img_x, img_y);
+            } else {
+                priv->wiz_pt1 = (lv_cam_pos_point_t){0};
+            }
             priv->wiz_pt1_set = true;
             priv->wiz_scr_tap = scr_pt;
         } else if (kind == WIZ_SK_PT2) {
-            priv->wiz_pt2     = make_point(priv, img_x, img_y);
+            if (has_img_coords) {
+                priv->wiz_pt2 = make_point(priv, img_x, img_y);
+            } else {
+                priv->wiz_pt2 = (lv_cam_pos_point_t){0};
+            }
             priv->wiz_pt2_set = true;
         } else if (kind == WIZ_SK_ZREF) {
-            priv->wiz_zref     = make_point(priv, img_x, img_y);
+            if (has_img_coords) {
+                priv->wiz_zref = make_point(priv, img_x, img_y);
+            } else {
+                priv->wiz_zref = (lv_cam_pos_point_t){0};
+            }
             priv->wiz_zref_set = true;
         }
 
@@ -2153,6 +2302,13 @@ static void overlay_draw_cb(lv_event_t *e)
     if (!layer) return;
 
     (void)obj;
+
+    // If the camera receiver isn't attached or hasn't produced a frame yet,
+    // skip interactive visuals.  The status_label widget shows the connecting
+    // message (managed by grid_dirty_timer_cb).
+    if (!priv->receiver || !cam_receiver_has_frame(priv->receiver)) {
+        return;
+    }
 
     // --- Axis-aligned physical grid (idealized straight lines). ---
     // Previously disabled due to DRAM/draw-task heap exhaustion.  With the
@@ -2259,6 +2415,10 @@ static void overlay_draw_cb(lv_event_t *e)
             }
         }
         draw_wiz_marker(layer, sx1, sy1, sym1);
+        // Blink halo when this point is selected for repositioning
+        if (priv->wiz_move_pt_active && priv->wiz_move_pt_which == 0 &&
+                priv->wiz_move_pt_blink_on)
+            draw_move_pt_halo(layer, sx1, sy1);
 
         // pt2 marker + shape overlay (shown once wiz_pt2 is collected)
         if (priv->wiz_pt2_set) {
@@ -2271,6 +2431,9 @@ static void overlay_draw_cb(lv_event_t *e)
                 // Second point: POWER symbol (second corner / circumference)
                 bool rect_mode = priv->wiz_op == PROBE_OP_PROBE_RECT || priv->wiz_op == PROBE_OP_PROBE_POCKET;
                 draw_wiz_marker(layer, sx2, sy2, (rect_mode ? LV_SYMBOL_PLUS : LV_SYMBOL_POWER));
+                if (priv->wiz_move_pt_active && priv->wiz_move_pt_which == 1 &&
+                        priv->wiz_move_pt_blink_on)
+                    draw_move_pt_halo(layer, sx2, sy2);
             }
         }
 
@@ -2281,6 +2444,9 @@ static void overlay_draw_cb(lv_event_t *e)
             if (image_to_screen_coords(priv,
                     priv->wiz_zref.px_x, priv->wiz_zref.px_y, &szx, &szy)) {
                 draw_wiz_marker(layer, szx, szy, LV_SYMBOL_DOWNLOAD);
+                if (priv->wiz_move_pt_active && priv->wiz_move_pt_which == 2 &&
+                        priv->wiz_move_pt_blink_on)
+                    draw_move_pt_halo(layer, szx, szy);
             }
         }
     }
@@ -2294,6 +2460,12 @@ static void overlay_click_cb(lv_event_t *e)
 {
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
     if (!priv) return;
+
+        /* If camera not ready, ignore non-wizard clicks to disable interactive UI
+        * for now.  Allow wizard-mode taps (mode == LV_CAM_POS_MODE_NONE) even
+        * if no frame is available so the user can start the probe flow. */
+        if ((!priv->receiver || !cam_receiver_has_frame(priv->receiver)) &&
+            priv->mode != LV_CAM_POS_MODE_NONE) return;
 
     // Ignore clicks that originated from a child widget (e.g. zoom badge).
     // Without this guard the click would bubble up and wiz_handle_click would
@@ -2405,6 +2577,12 @@ static void overlay_press_cb(lv_event_t *e)
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_event_get_user_data(e);
     if (!priv) return;
 
+        /* If camera not ready, ignore non-wizard presses to disable interactive UI
+        * for now.  Allow wizard-mode presses (mode == LV_CAM_POS_MODE_NONE) so
+        * dragging to adjust points still works while offline. */
+        if ((!priv->receiver || !cam_receiver_has_frame(priv->receiver)) &&
+            priv->mode != LV_CAM_POS_MODE_NONE) return;
+
     // Same child-propagation guard as overlay_click_cb.
     if (lv_event_get_target(e) != lv_event_get_current_target(e)) {
         lv_event_stop_bubbling(e);
@@ -2425,6 +2603,10 @@ static void overlay_press_cb(lv_event_t *e)
     // → wiz_handle_click → sidebar_update_coords) when the finger lifts.
     if (priv->mode == LV_CAM_POS_MODE_NONE && priv->wiz_state == WIZ_READY) {
         lv_event_stop_bubbling(e);
+        // Move-point mode is active: a tap on the overlay is being held for
+        // the confirm click.  Suppress drag so we don't accidentally displace
+        // a different point while waiting for the lift-up CLICKED event.
+        if (priv->wiz_move_pt_active) return;
         int16_t img_x, img_y;
         if (!pixel_to_image_coords(priv, scr_pt, &img_x, &img_y)) return;
         // Find and move nearest collected point — same logic as wiz_handle_click.
@@ -2492,6 +2674,21 @@ static void grid_dirty_timer_cb(lv_timer_t *t)
 {
     lv_cam_pos_priv_t *priv = (lv_cam_pos_priv_t *)lv_timer_get_user_data(t);
     if (!priv) return;
+
+    // Auto-manage the local camera-connection status label.
+    // Runs every 50 ms regardless of grid_dirty so the label appears / hides
+    // promptly as the camera comes online.
+    if (priv->status_label && !priv->status_locked) {
+        bool has_frame = priv->receiver && cam_receiver_has_frame(priv->receiver);
+        if (has_frame) {
+            if (!lv_obj_has_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_add_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            if (lv_obj_has_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_clear_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     if (!priv->grid_dirty) return;
     priv->grid_dirty = false;
 
@@ -2547,6 +2744,15 @@ static void on_delete(lv_event_t *e)
     // probe_api_cancel does not fire into already-freed memory.
     wiz_reset(priv);
 
+    // Ensure sidebar and coord panel children are deleted now so no button
+    // event callbacks remain pointing at `priv` after we free it.  This is
+    // necessary because the component may be destroyed and recreated when
+    // tab-view pages are deferred; lingering callbacks can call into freed
+    // `priv` and cause incorrect wizard behaviour.
+    if (priv->step_panel && lv_obj_is_valid(priv->step_panel)) lv_obj_clean(priv->step_panel);
+    if (priv->coord_panel && lv_obj_is_valid(priv->coord_panel)) lv_obj_clean(priv->coord_panel);
+    if (priv->right_panel && lv_obj_is_valid(priv->right_panel)) lv_obj_clean(priv->right_panel);
+
     // Remove all callbacks from the overlay that hold `priv` as raw user_data.
     if (priv->overlay && lv_obj_is_valid(priv->overlay)) {
         lv_obj_remove_event_cb_with_user_data(priv->overlay, overlay_draw_cb,  priv);
@@ -2566,7 +2772,8 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
 {
     lv_cam_pos_priv_t *priv = calloc(1, sizeof(*priv));
     if (!priv) return NULL;
-    priv->wiz_drag_pt = -1;  // calloc gives 0, which must not default to "pt1"
+    priv->wiz_drag_pt       = -1;  // calloc gives 0, which must not default to "pt1"
+    priv->wiz_move_pt_which = -1;  // same: 0 maps to pt1, must default to none
 
     // Root container — fills parent, flex row: [cam_area | right_panel]
     lv_obj_t *root = lv_obj_create(parent);
@@ -2623,6 +2830,31 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
                          LV_EVENT_PRESSING, priv);
     priv->overlay = overlay;
 
+    // -------------------------------------------------------------------------
+    // Local camera-connection status label.
+    // Created as a direct child of the overlay so it renders above the stream
+    // and shares the same event-clipping area.
+    // -------------------------------------------------------------------------
+    lv_obj_t *status_lbl = lv_label_create(overlay);
+    lv_obj_remove_style_all(status_lbl);
+    lv_label_set_text(status_lbl, "Connecting to camera...");
+    lv_label_set_long_mode(status_lbl, LV_LABEL_LONG_WRAP);
+    /* Style: white text on a semi-transparent dark pill */
+    lv_obj_set_style_text_color(status_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(status_lbl, &font_kode_20, 0);
+    lv_obj_set_style_text_align(status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_bg_color(status_lbl, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(status_lbl, LV_OPA_60, 0);
+    lv_obj_set_style_radius(status_lbl, 8, 0);
+    lv_obj_set_style_pad_hor(status_lbl, 16, 0);
+    lv_obj_set_style_pad_ver(status_lbl, 8, 0);
+    lv_obj_set_width(status_lbl, LV_PCT(80));
+    lv_obj_set_height(status_lbl, LV_SIZE_CONTENT);
+    lv_obj_align(status_lbl, LV_ALIGN_CENTER, 0, 0);
+    /* Start visible — the timer will hide it once a frame arrives. */
+    priv->status_label  = status_lbl;
+    priv->status_locked = false;
+
     // Register grid-update callback (overlay ptr must be set first)
     if (priv->receiver)
         cam_receiver_add_grid_cb(priv->receiver, on_grid_update, priv);
@@ -2675,6 +2907,8 @@ lv_obj_t *lv_cam_positioning_create(lv_obj_t *parent)
     // Initial sidebar render
     sidebar_rebuild(priv);
     sidebar_update_coords(priv);
+
+    lv_cam_positioning_set_mode(root, LV_CAM_POS_MODE_NONE);
 
     LOGI(TAG, "cam_positioning widget created");
     return root;
@@ -2898,4 +3132,35 @@ void lv_cam_positioning_wizard_cancel(lv_obj_t *obj)
     lv_cam_pos_priv_t *priv = get_priv(obj);
     if (!priv) return;
     wiz_reset(priv);
+}
+
+// ---------------------------------------------------------------------------
+// Local camera-connection status label — public API
+// ---------------------------------------------------------------------------
+
+void lv_cam_positioning_show_status_text(lv_obj_t *obj, const char *text)
+{
+    lv_cam_pos_priv_t *priv = get_priv(obj);
+    if (!priv || !priv->status_label) return;
+
+    if (text && text[0]) {
+        lv_label_set_text(priv->status_label, text);
+        lv_obj_clear_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN);
+        priv->status_locked = true;   /* Prevent auto-clear by the timer */
+    } else {
+        /* Empty string: behave like clear */
+        priv->status_locked = false;
+        lv_obj_add_flag(priv->status_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void lv_cam_positioning_clear_status_text(lv_obj_t *obj)
+{
+    lv_cam_pos_priv_t *priv = get_priv(obj);
+    if (!priv) return;
+    priv->status_locked = false;
+    /* Restore the auto-managed "Connecting..." default text for next time. */
+    if (priv->status_label)
+        lv_label_set_text(priv->status_label, "Connecting to camera...");
+    /* Visibility will be corrected by grid_dirty_timer_cb on the next tick. */
 }

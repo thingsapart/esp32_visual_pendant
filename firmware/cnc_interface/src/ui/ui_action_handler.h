@@ -15,4 +15,15 @@
  */
 void ui_action_handler_init(interface_t *interface);
 
+/**
+ * @brief Creates and displays a "Home all axes?" confirmation modal.
+ *
+ * If the user confirms, machines->home_all() is called.
+ * This function is also invoked from the long-press callback on the
+ * "all axes homed" LED in the title bar.
+ *
+ * @param machine A pointer to the machine interface.
+ */
+void show_home_all_modal(machine_interface_t *machine);
+
 #endif  // UI_ACTION_HANDLER_H

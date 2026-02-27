@@ -188,6 +188,37 @@ void lv_cam_positioning_set_probe_cbs(lv_obj_t *obj,
 /// Calling this while a probe operation is in-flight also cancels the op.
 void lv_cam_positioning_wizard_cancel(lv_obj_t *obj);
 
+// ---------------------------------------------------------------------------
+// Local camera-connection status label
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Show a status message overlaid on the camera area.
+ *
+ * Displays a semi-transparent label centred on the camera view.  The message
+ * is "locked in" — the auto-managed "Connecting to camera..." text will not
+ * appear until lv_cam_positioning_clear_status_text() is called.
+ *
+ * Pass an empty string or call lv_cam_positioning_clear_status_text() to
+ * return to automatic management (label shows when no frame, hides when
+ * the camera starts streaming).
+ *
+ * @param obj  The lv_cam_positioning widget.
+ * @param text The message to display, or NULL / "" to clear.
+ */
+void lv_cam_positioning_show_status_text(lv_obj_t *obj, const char *text);
+
+/**
+ * @brief Clear any manually set status message and return to auto-management.
+ *
+ * After this call the widget manages the label automatically: the
+ * "Connecting to camera..." message is shown when no frame has arrived and
+ * hidden once the stream is live.
+ *
+ * @param obj  The lv_cam_positioning widget.
+ */
+void lv_cam_positioning_clear_status_text(lv_obj_t *obj);
+
 #ifdef __cplusplus
 }
 #endif

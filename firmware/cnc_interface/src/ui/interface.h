@@ -8,6 +8,7 @@ extern "C" {
 #include "lvgl.h"
 #include "machine/machine_interface.h"
 #include "probe/mos_probe_handler.h"
+#include "ui/mdi_handler.h"
 
 #ifdef DWC_MACHINE_MODE
 #include "config/dwc_settings.h"
@@ -31,6 +32,7 @@ typedef enum {
   UI_DIRTY_FILES_GCODES = (1 << 10),
   UI_DIRTY_FILES_MACROS = (1 << 11),
   UI_DIRTY_LOG_MESSAGE  = (1 << 12),  // Verbatim message from hub to toast
+  UI_DIRTY_MDI_LOG      = (1 << 13),  // New MDI log content / busy-state change
   UI_DIRTY_ALL = 0xFFFFFFFF,
 } ui_dirty_flags_t;
 
@@ -44,6 +46,7 @@ typedef struct {
   lv_obj_t *toast_bar;        // Currently visible toast bar, or NULL.
 
   mos_probe_handler_t probe_handler;  ///< MOS back-end for cam_positioning probe wizard
+  mdi_handler_t mdi;                  ///< MDI (Manual Data Input) back-end
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow

@@ -6,6 +6,7 @@
 
 #include "debug.h"
 #include "lvgl_ui.h"
+#include "ui/mdi_handler.h"
 
 static const char *TAG = "UI_ACTION_HANDLER";
 
@@ -50,7 +51,7 @@ static void home_all_modal_event_handler(lv_event_t * e) {
  * @brief Creates and displays a modal dialog asking the user to home all axes.
  * @param machine A pointer to the machine interface, passed to the event handler.
  */
-static void show_home_all_modal(machine_interface_t * machine) {
+void show_home_all_modal(machine_interface_t * machine) {
     static const char * btns[] = {"Ok", "Cancel", ""};
     lv_obj_t * mbox = lv_msgbox_create(lv_screen_active());
     lv_msgbox_add_title(mbox, "Home all?");
@@ -165,6 +166,54 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     LOGI(TAG, "Starting probe sequence: %s", probe_type);
     snprintf(gcode, sizeof(gcode), "M98 P\"/macros/probe_%s.g\"", probe_type);
     machine->probe(machine, gcode);
+  }
+
+  // --- MDI Actions ---
+  // Forward all "MDI.*" actions to the MDI handler.
+  else if (strncmp(action_name, "MDI.", 4) == 0) {
+    mdi_handle_action(&interface->mdi, action_name, value);
+  }
+
+  // --- Probe dimension settings (from the probe-mode tab numeric dialogs) ---
+  // Each action receives the user-entered float value and:
+  //   1. Notifies the bound observable so the label refreshes.
+  //   2. (Future) Could persist the value here.
+  else if (strcmp(action_name, "set_probe_width") == 0 &&
+           value.type == BINDING_TYPE_FLOAT) {
+    data_binding_notify_state_changed(
+        "probe_w",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
+  }
+  else if (strcmp(action_name, "set_probe_height") == 0 &&
+           value.type == BINDING_TYPE_FLOAT) {
+    data_binding_notify_state_changed(
+        "probe_h",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
+  }
+  else if (strcmp(action_name, "set_probe_cl") == 0 &&
+           value.type == BINDING_TYPE_FLOAT) {
+    data_binding_notify_state_changed(
+        "probe_cl",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
+  }
+  else if (strcmp(action_name, "set_probe_ov") == 0 &&
+           value.type == BINDING_TYPE_FLOAT) {
+    data_binding_notify_state_changed(
+        "probe_ov",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
+  }
+  else if (strcmp(action_name, "set_probe_quick") == 0) {
+    // Boolean toggle from the quick-mode switch widget.
+    bool quick = (value.type == BINDING_TYPE_BOOL) ? value.as.b_val
+                                                    : (value.as.f_val != 0.0f);
+    data_binding_notify_state_changed(
+        "probe_quick",
+        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = quick});
+  }
+
+  // --- ask_home_all: programmatically triggered (e.g. from C callbacks) ---
+  else if (strcmp(action_name, "action.ask_home_all") == 0) {
+    show_home_all_modal(machine);
   }
 
   else {

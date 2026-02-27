@@ -269,6 +269,11 @@ static bool on_log_message(machine_interface_t *machine, void *user_data,
   interface_t *interface = (interface_t *)user_data;
   // Log verbatim to the pendant's serial output regardless.
   LOGI(TAG, "Hub msg: %s", message);
+
+  // Let the MDI handler append to its log buffer and check for 'ok' acks.
+  // This runs in the machine thread: mdi_handler_on_log() only sets flags.
+  mdi_handler_on_log(&interface->mdi, message);
+
   // Suppress noisy "Error: Bad command:" lines from the toast bar — these are
   // echoed back by the machine when it doesn't recognise a polled M409 query
   // and do not represent actionable errors for the operator.
@@ -278,6 +283,7 @@ static bool on_log_message(machine_interface_t *machine, void *user_data,
 
   // If a prior handler already claimed this message, avoid showing the toast.
   if (machine && machine->last_log_message_handled) {
+    LOGI(TAG, "Skipped log entry: %s", message);
     return false; // not handled by UI
   }
 
@@ -286,6 +292,15 @@ static bool on_log_message(machine_interface_t *machine, void *user_data,
            "%s", message);
   interface->dirty_flags |= UI_DIRTY_LOG_MESSAGE;
   return true;
+}
+
+/**
+ * @brief Long-press handler on the "all axes homed" LED in the title bar.
+ * Opens the "Home all axes?" confirmation modal.
+ */
+static void homed_led_longpress_cb(lv_event_t *e) {
+  machine_interface_t *machine = (machine_interface_t *)lv_event_get_user_data(e);
+  if (machine) show_home_all_modal(machine);
 }
 
 // --- Public API ---
@@ -308,6 +323,10 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   }
 
   ui_action_handler_init(interface);
+
+  // Initialise the MDI backend (allocates log buffer, finds widget IDs,
+  // registers the LV_EVENT_READY handler on the input textarea).
+  mdi_handler_init(&interface->mdi, machine);
 
   // Register callbacks to get state updates from the machine
   machine_interface_add_state_change_cb(machine, interface,
@@ -340,6 +359,15 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   lv_obj_t* disconnected_overlay = obj_registry_get("disconnected_overlay");
   if (disconnected_overlay) {
       lv_obj_add_event_cb(disconnected_overlay, disconnected_overlay_event_handler, LV_EVENT_LONG_PRESSED, NULL);
+  }
+
+  // Attach long-press handler to the "all axes homed" LED in the title bar
+  // so the operator can quickly trigger a home-all confirmation.
+  lv_obj_t* homed_led = obj_registry_get("homed_all_led");
+  if (homed_led) {
+      lv_obj_add_flag(homed_led, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(homed_led, homed_led_longpress_cb,
+                          LV_EVENT_LONG_PRESSED, machine);
   }
 
   // Wire the machine's axis limits into the cam_positioning overlay so the
@@ -391,6 +419,9 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
 }
 
 void interface_tick(interface_t *interface) {
+  // Flush MDI log-buffer and busy-state to data-binding observers every tick.
+  mdi_handler_tick(&interface->mdi);
+
   if (interface->dirty_flags == UI_DIRTY_NONE) {
     return;
   }
