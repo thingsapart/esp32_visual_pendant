@@ -761,7 +761,7 @@ void interface_tick(interface_t *interface) {
 
       // Calculate total buffer size
       size_t total = 1; // final NUL
-      if (add_parent) total += strlen(fdir) + 4; // "<fdir>/../\n"
+      if (add_parent) total += strlen(fdir) + 5; // "<fdir>/../\n"
       for (size_t j = 0; files[j]; ++j) {
         size_t L = strlen(files[j]);
         total += L + 1; // name + '\n'
@@ -775,8 +775,8 @@ void interface_tick(interface_t *interface) {
         size_t fl = strlen(fdir);
         memcpy(ptr, fdir, fl);
         ptr += fl;
-        memcpy(ptr, "/../\n", 4);
-        ptr += 4;
+        memcpy(ptr, "/../\n", 5);
+        ptr += 5;
       }
       for (size_t j = 0; files[j]; ++j) {
         size_t L = strlen(files[j]);
@@ -813,7 +813,7 @@ after_files_gcodes: ;
       if (p) add_parent = true;
 
       size_t total = 1;
-      if (add_parent) total += strlen(fdir) + 4;
+      if (add_parent) total += strlen(fdir) + 5;
       for (size_t j = 0; files[j]; ++j) {
         size_t L = strlen(files[j]);
         total += L + 1;

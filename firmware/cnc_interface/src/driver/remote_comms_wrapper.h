@@ -162,6 +162,7 @@ typedef enum {
   CMD_TYPE_RUN_MACRO,
   CMD_TYPE_START_JOB,
   CMD_TYPE_LIST_FILES,
+  CMD_TYPE_PENDANT_CONNECT,
   CMD_TYPE_PROBE,
   // Modal response commands (Pendant -> Hub)
   CMD_TYPE_MODAL_OK,
