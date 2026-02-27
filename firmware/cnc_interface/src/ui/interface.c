@@ -761,14 +761,23 @@ void interface_tick(interface_t *interface) {
 
       // Calculate total buffer size
       size_t total = 1; // final NUL
-      if (add_parent) total += 3; // "..\n"
-      for (size_t j = 0; files[j]; ++j) total += strlen(files[j]) + 1;
+      if (add_parent) total += strlen(fdir) + 4; // "<fdir>/../\n"
+      for (size_t j = 0; files[j]; ++j) {
+        size_t L = strlen(files[j]);
+        total += L + 1; // name + '\n'
+      }
 
       char *buf = malloc(total);
       if (!buf) break;
       buf[0] = '\0';
       char *ptr = buf;
-      if (add_parent) { memcpy(ptr, "..\n", 3); ptr += 3; }
+      if (add_parent) {
+        size_t fl = strlen(fdir);
+        memcpy(ptr, fdir, fl);
+        ptr += fl;
+        memcpy(ptr, "/../\n", 4);
+        ptr += 4;
+      }
       for (size_t j = 0; files[j]; ++j) {
         size_t L = strlen(files[j]);
         memcpy(ptr, files[j], L);
@@ -804,14 +813,23 @@ after_files_gcodes: ;
       if (p) add_parent = true;
 
       size_t total = 1;
-      if (add_parent) total += 3;
-      for (size_t j = 0; files[j]; ++j) total += strlen(files[j]) + 1;
+      if (add_parent) total += strlen(fdir) + 4;
+      for (size_t j = 0; files[j]; ++j) {
+        size_t L = strlen(files[j]);
+        total += L + 1;
+      }
 
       char *buf = malloc(total);
       if (!buf) break;
       buf[0] = '\0';
       char *ptr = buf;
-      if (add_parent) { memcpy(ptr, "..\n", 3); ptr += 3; }
+      if (add_parent) {
+        size_t fl = strlen(fdir);
+        memcpy(ptr, fdir, fl);
+        ptr += fl;
+        memcpy(ptr, "/../\n", 5);
+        ptr += 5;
+      }
       for (size_t j = 0; files[j]; ++j) {
         size_t L = strlen(files[j]);
         memcpy(ptr, files[j], L);

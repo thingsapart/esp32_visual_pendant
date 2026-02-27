@@ -230,16 +230,13 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     char **files = machine->filelists[fl_idx].files;
     const char *fdir = machine->filelists[fl_idx].fdir ? machine->filelists[fl_idx].fdir : "";
 
-    // Account for optional ".." parent entry added by UI
-    int adjust = 0;
-    if (strchr(fdir + 1, '/')) adjust = 1;
-    int file_idx = row - adjust;
-    if (file_idx < 0) {
-      // ".." selected — compute parent directory
-      // compute parent of fdir (strip after last '/')
+    // Account for optional parent entry added by UI (inserted when deeper than root)
+    bool add_parent = (strchr(fdir + 1, '/') != NULL);
+    if (add_parent && row == 0) {
+      // Parent selected — compute parent of fdir (strip after last '/')
       char parent[256];
-      strncpy(parent, fdir, sizeof(parent)-1);
-      parent[sizeof(parent)-1] = '\0';
+      strncpy(parent, fdir, sizeof(parent) - 1);
+      parent[sizeof(parent) - 1] = '\0';
       char *last = strrchr(parent, '/');
       if (last && last != parent) {
         *last = '\0';
@@ -250,18 +247,47 @@ static void app_action_handler(const char *action_name, binding_value_t value,
       machine->list_files(machine, parent);
       return;
     }
-    if (!files || !files[file_idx]) return;
+
+    int file_idx = row - (add_parent ? 1 : 0);
+    if (!files || file_idx < 0 || !files[file_idx]) return;
 
     const char *sel = files[file_idx];
     size_t L = strlen(sel);
-    bool is_dir = (L > 0 && sel[L-1] == '/');
+
+    // If the selected entry itself encodes a parent (e.g. "<fullpath>/../"),
+    // handle it by computing the parent from the selection string.
+    if (L >= 3 && L >= 3 && strcmp(sel + (L - 3), "../") == 0) {
+      // copy sel without trailing "/../"
+      char tmp[256];
+      size_t tlen = L - 3; // leave room for NUL
+      if (tlen >= sizeof(tmp)) tlen = sizeof(tmp) - 1;
+      memcpy(tmp, sel, tlen);
+      tmp[tlen] = '\0';
+      // strip trailing '/'
+      if (tlen > 0 && tmp[tlen - 1] == '/') tmp[tlen - 1] = '\0';
+      // compute parent of tmp
+      char parent[256];
+      strncpy(parent, tmp, sizeof(parent) - 1);
+      parent[sizeof(parent) - 1] = '\0';
+      char *last = strrchr(parent, '/');
+      if (last && last != parent) {
+        *last = '\0';
+        machine->list_files(machine, parent);
+      }
+      return;
+    }
+
+    // Directory selection is indicated by trailing '/'
+    bool is_dir = (L > 0 && sel[L - 1] == '/');
 
     if (is_dir) {
       // Build new path: join fdir and sel (strip trailing '/')
       char newpath[512];
       char name[256];
-      strncpy(name, sel, sizeof(name)-1); name[sizeof(name)-1] = '\0';
-      if (name[strlen(name)-1] == '/') name[strlen(name)-1] = '\0';
+      strncpy(name, sel, sizeof(name) - 1);
+      name[sizeof(name) - 1] = '\0';
+      size_t nl = strlen(name);
+      if (nl > 0 && name[nl - 1] == '/') name[nl - 1] = '\0';
       if (fdir[0] == '\0') snprintf(newpath, sizeof(newpath), "/%s", name);
       else snprintf(newpath, sizeof(newpath), "%s/%s", fdir, name);
       machine->list_files(machine, newpath);

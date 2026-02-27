@@ -1321,10 +1321,17 @@ void process_binary_msg_file_list(machine_interface_remote_t *mach,
   size_t empty_slot = MAX_FILE_LISTS;
 
   for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
-    if (mach->base.filelists[i].fdir &&
-        strcmp(fdir, mach->base.filelists[i].fdir) == 0) {
-      idx = i;
-      break;
+    if (mach->base.filelists[i].fdir) {
+      size_t slot_len = strlen(mach->base.filelists[i].fdir);
+      if (strcmp(fdir, mach->base.filelists[i].fdir) == 0) {
+        idx = i;
+        break;
+      }
+      // Prefix match: incoming fdir is a subdir of the stored slot root.
+      if (slot_len > 0 && strncmp(fdir, mach->base.filelists[i].fdir, slot_len) == 0 && fdir[slot_len] == '/') {
+        idx = i;
+        break;
+      }
     }
     if (!mach->base.filelists[i].fdir && empty_slot == MAX_FILE_LISTS) {
       empty_slot = i;

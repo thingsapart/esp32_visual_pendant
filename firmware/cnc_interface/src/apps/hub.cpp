@@ -81,6 +81,7 @@ static machine_interface_t *g_machine_base = NULL;
 static int g_full_state_counter = 0;
 static uint16_t g_binary_seq_id =
     0;  // Sequence ID counter for sending binary payloads
+static bool g_sent_filelists_to_display = false;
 
 #define PAYLOAD_MAX (ESP_NOW_MAX_DATA_LEN + 1)
 
@@ -263,14 +264,23 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
 
   LOGI(TAG, "Files present, attempting to serialize and send.");
 
+  // Determine which files pointer to use: prefer the provided `files`
+  // parameter (may be supplied by callers), otherwise fall back to the
+  // stored slot in the machine struct. Guard against NULL.
+  char **slot_files = files ? files : mach->filelists[idx].files;
+  if (!slot_files) {
+    LOGI(TAG, "No files present for '%s' (slot %u) — nothing to send.", path, (unsigned)idx);
+    return;
+  }
+
   // Compute size of all strings + header.
   file_list_payload_t *header;
   size_t total_size = sizeof(*header);
   total_size += strlen(path) + 1;
   size_t num_files = 0;
   size_t i = 0;
-  while (mach->filelists[idx].files[i] != NULL) {
-    total_size += strlen(mach->filelists[idx].files[i]) + 1;
+  while (slot_files[i] != NULL) {
+    total_size += strlen(slot_files[i]) + 1;
     ++num_files;
     ++i;
   }
@@ -289,10 +299,10 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
   memcpy(offset, path, strlen(path) + 1);
   offset += strlen(path) + 1;
 
-  i=0;
-  while (mach->filelists[idx].files[i] != NULL) {
-    size_t sz = strlen(mach->filelists[idx].files[i]) + 1;
-    memcpy(offset, mach->filelists[idx].files[i], sz);
+  i = 0;
+  while (slot_files[i] != NULL) {
+    size_t sz = strlen(slot_files[i]) + 1;
+    memcpy(offset, slot_files[i], sz);
     offset += sz;
     ++i;
   }
@@ -667,12 +677,27 @@ static void process_modal_str_cmd(const uint8_t *data, int data_len) {
 
 void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
   LOGV(TAG, "ESP-NOW send status: %s", status == 0 ? "success" : "fail");
-  if (status != 0) {
-    LOGW(TAG, "ESP-NOW send status: fail");
-    led_status_error();
-  } else {
-    // Sending succeeded - brief blue flash already shown by led_status_sending()
-    // Will return to green in the next LED update cycle
+  // If sending to the display failed, mark that we need to re-send filelists
+  // when the display becomes reachable again.
+  if (memcmp(mac_addr, display_mac_address, 6) == 0) {
+    if (status != 0) {
+      LOGW(TAG, "ESP-NOW send to display failed; will resend filelists on reconnect");
+      g_sent_filelists_to_display = false;
+      led_status_error();
+      return;
+    }
+    // Send succeeded to the display. If we haven't yet sent the initial
+    // file lists (or a reconnect reset the flag), push them now so the
+    // client gets up-to-date views.
+    if (!g_sent_filelists_to_display && g_machine_base) {
+      for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+        const char *p = g_machine_base->filelists[i].fdir;
+        if (!p) continue;
+        on_files_changed(g_machine_base, NULL, p, g_machine_base->filelists[i].files);
+      }
+      g_sent_filelists_to_display = true;
+      LOGI(TAG, "Sent initial filelists to display after successful send.");
+    }
   }
 }
 
@@ -793,6 +818,21 @@ void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
                          int data_len, void *user_data) {
   LOGI(TAG, "Remote message received (len %d)", data_len);
 
+  // If this is the first message seen from the display, push the full
+  // file lists to it even if they haven't changed so the client has
+  // an up-to-date view after (re)connect.
+  if (!g_sent_filelists_to_display && memcmp(mac_addr, display_mac_address, 6) == 0) {
+    if (g_machine_base) {
+      for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+        const char *p = g_machine_base->filelists[i].fdir;
+        if (!p) continue;
+        on_files_changed(g_machine_base, NULL, p, g_machine_base->filelists[i].files);
+      }
+      g_sent_filelists_to_display = true;
+      LOGI(TAG, "Sent initial filelists to display after connect.");
+    }
+  }
+
   size_t msgbuf_len = message_buffer_len;
   ++message_buffer_len;
   if (msgbuf_len >= MAX_MSG_BUFFER) {
@@ -845,6 +885,21 @@ void process_buffered_messages() {}
 
 void on_remote_data_recv(const uint8_t *mac_addr, const uint8_t *data,
                          int data_len, void *user_data) {
+  // If this is the first message seen from the display, push the full
+  // file lists to it even if they haven't changed so the client has
+  // an up-to-date view after (re)connect.
+  if (!g_sent_filelists_to_display && memcmp(mac_addr, display_mac_address, 6) == 0) {
+    if (g_machine_base) {
+      for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+        const char *p = g_machine_base->filelists[i].fdir;
+        if (!p) continue;
+        on_files_changed(g_machine_base, NULL, p, g_machine_base->filelists[i].files);
+      }
+      g_sent_filelists_to_display = true;
+      LOGI(TAG, "Sent initial filelists to display after connect.");
+    }
+  }
+
   uint8_t buf[PAYLOAD_MAX + 2];
 
   memset(buf, 0, PAYLOAD_MAX + 2);

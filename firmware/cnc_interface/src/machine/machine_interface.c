@@ -614,10 +614,19 @@ void machine_interface_spindles_tools_updated(machine_interface_t *self) {
 
 void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir) {
-  // Find the filelist entry that matches fdir to pass the correct files pointer.
+  // Find the filelist entry that corresponds to fdir. Since fdir may be a
+  // subdirectory (eg. "gcodes/sub"), prefer an exact match but accept a
+  // prefix match where the stored slot root is a prefix of the requested
+  // path (eg. stored "gcodes" -> incoming "gcodes/sub").
   char **files = NULL;
   for (int j = 0; j < MAX_FILE_LISTS; ++j) {
-    if (self->filelists[j].fdir && strcmp(fdir, self->filelists[j].fdir) == 0) {
+    if (!self->filelists[j].fdir) continue;
+    size_t slot_len = strlen(self->filelists[j].fdir);
+    if (strcmp(fdir, self->filelists[j].fdir) == 0) {
+      files = self->filelists[j].files;
+      break;
+    }
+    if (slot_len > 0 && strncmp(fdir, self->filelists[j].fdir, slot_len) == 0 && fdir[slot_len] == '/') {
       files = self->filelists[j].files;
       break;
     }
@@ -625,11 +634,21 @@ void machine_interface_files_updated(machine_interface_t *self,
   for (int i = 0; i < MAX_CALLBACKS; i++) {
     if (!self->files_changed_cb[i].cb_fn) continue;
     // NULL path = wildcard: fire for any fdir (used by multi_machine aggregator).
-    // Non-NULL path = fire only when fdir matches exactly.
-    if (self->files_changed_cb[i].path == NULL ||
-        strcmp(fdir, self->files_changed_cb[i].path) == 0) {
-      self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data,
-                                      fdir, files);
+    // Non-NULL path = fire when fdir exactly matches the registered path or
+    // when fdir is a subdirectory of the registered path (prefix match).
+    if (self->files_changed_cb[i].path == NULL) {
+      self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data, fdir, files);
+      continue;
+    }
+    const char *reg = self->files_changed_cb[i].path;
+    size_t reg_len = strlen(reg);
+    if (strcmp(fdir, reg) == 0) {
+      self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data, fdir, files);
+      continue;
+    }
+    if (reg_len > 0 && strncmp(fdir, reg, reg_len) == 0 && fdir[reg_len] == '/') {
+      self->files_changed_cb[i].cb_fn(self, self->files_changed_cb[i].user_data, fdir, files);
+      continue;
     }
   }
 }

@@ -504,13 +504,23 @@ static bool _serial_parse_m20_response(machine_rrf_t *self, cJSON *json_obj) {
   }
 
   // Find or allocate a filelists slot for this directory path.
+  // Allow matching a requested subdirectory to an existing root slot
+  // (e.g. 'gcodes/test' -> slot 'gcodes').
   size_t idx = MAX_FILE_LISTS;
   size_t empty_slot = MAX_FILE_LISTS;
   for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
-    if (self->base.filelists[i].fdir &&
-        strcmp(fdir, self->base.filelists[i].fdir) == 0) {
-      idx = i;
-      break;
+    if (self->base.filelists[i].fdir) {
+      size_t slot_len = strlen(self->base.filelists[i].fdir);
+      // Exact match
+      if (strcmp(fdir, self->base.filelists[i].fdir) == 0) {
+        idx = i;
+        break;
+      }
+      // Prefix match where incoming fdir is a subdir of the slot
+      if (slot_len > 0 && strncmp(fdir, self->base.filelists[i].fdir, slot_len) == 0 && fdir[slot_len] == '/') {
+        idx = i;
+        break;
+      }
     }
     if (!self->base.filelists[i].fdir && empty_slot == MAX_FILE_LISTS) {
       empty_slot = i;
@@ -551,12 +561,21 @@ static bool _serial_parse_m20_response(machine_rrf_t *self, cJSON *json_obj) {
     // S2 format: each item is a plain string; subdirs are prefixed with '*'.
     if (!cJSON_IsString(file_item) || !file_item->valuestring) continue;
     const char *name = file_item->valuestring;
-    // Include subdirectory entries but strip the leading '*' so the UI sees
-    // a plain name.  The file list is purely flat for now; navigation into
-    // subdirs can be added later.
-    if (name[0] == '*') name++;
-    if (*name == '\0') continue;  // shouldn't happen, but be safe
-    self->base.filelists[idx].files[j++] = strdup(name);
+    if (name[0] == '*') {
+      // Directory entry: store as "name/" so UI can detect it as a dir
+      const char *bare = name + 1;
+      if (*bare == '\0') continue;
+      size_t L = strlen(bare);
+      char *entry = (char *)malloc(L + 2); // name + '/' + NUL
+      if (!entry) continue;
+      memcpy(entry, bare, L);
+      entry[L] = '/';
+      entry[L+1] = '\0';
+      self->base.filelists[idx].files[j++] = entry;
+    } else {
+      if (*name == '\0') continue;  // shouldn't happen, but be safe
+      self->base.filelists[idx].files[j++] = strdup(name);
+    }
   }
   self->base.filelists[idx].files[j] = NULL;  // NULL-terminate
 
