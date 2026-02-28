@@ -793,6 +793,367 @@ void remote_wrapper_deinit()
     uart_driver_delete(C6_BRIDGE_UART_NUM);
 }
 
+#elif defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_SDIO_BRIDGE)
+
+// =============================================================================
+// ESP32-P4 + ESP32-C6 SDIO bridge implementation
+//
+// The C6 sidecar runs c6_espnow_bridge firmware compiled with
+// -D C6_BRIDGE_TRANSPORT_SDIO.  The P4 acts as the SDIO host and the C6 as
+// the SDIO slave; c6_bridge_sdio.c handles the low-level SDMMC / ESSL layer.
+//
+// From the application's perspective this backend is identical to the UART
+// bridge: the same recv/send callbacks, MAC management and frame parser apply.
+// =============================================================================
+
+#include <string.h>
+#include "c6_bridge_sdio.h"
+#include "debug.h"
+
+static const char *TAG = "remote_comms_wrapper (SDIO)";
+
+// ---- Bridge protocol constants (mirror bridge_protocol.h) ------------------
+#define BRIDGE_SOF0           0xAB
+#define BRIDGE_SOF1           0xCD
+#define BRIDGE_DIR_INCOMING   0x01
+#define BRIDGE_DIR_OUTGOING   0x02
+#define BRIDGE_DIR_DEBUG      0x44
+#define BRIDGE_DEBUG_TRIGGER  0x3F
+#define BRIDGE_MAC_LEN        6
+#define BRIDGE_MAX_PAYLOAD    250
+#define BRIDGE_FRAME_OVERHEAD 12
+#define BRIDGE_MAX_FRAME_SIZE (BRIDGE_FRAME_OVERHEAD + BRIDGE_MAX_PAYLOAD)
+
+static const uint8_t broadcast_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+static remote_wrapper_send_cb_t g_send_cb        = NULL;
+static void                    *g_send_user_data  = NULL;
+static TaskHandle_t             g_rx_task         = NULL;
+
+// Multi-receiver table
+typedef struct { remote_wrapper_recv_cb_t cb; void *user; } rcb_slot_t;
+static rcb_slot_t g_recv_cbs[REMOTE_WRAPPER_MAX_RECV_CBS];
+
+bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data)
+{
+    if (!recv_cb) return false;
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) return true;
+        if (!g_recv_cbs[i].cb) {
+            g_recv_cbs[i].cb   = recv_cb;
+            g_recv_cbs[i].user = user_data;
+            return true;
+        }
+    }
+    LOGE(TAG, "remote_wrapper_add_recv_cb: table full");
+    return false;
+}
+
+void remote_wrapper_remove_recv_cb(remote_wrapper_recv_cb_t recv_cb)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb == recv_cb) {
+            g_recv_cbs[i].cb   = NULL;
+            g_recv_cbs[i].user = NULL;
+            return;
+        }
+    }
+}
+
+static void dispatch_recv(const uint8_t *mac, const uint8_t *data, int len)
+{
+    for (int i = 0; i < REMOTE_WRAPPER_MAX_RECV_CBS; i++) {
+        if (g_recv_cbs[i].cb)
+            g_recv_cbs[i].cb(mac, data, len, g_recv_cbs[i].user);
+    }
+}
+
+// ---- CRC8 -------------------------------------------------------------------
+static uint8_t bridge_crc8(const uint8_t *mac, uint16_t len,
+                             const uint8_t *data)
+{
+    uint8_t crc = 0;
+    for (int i = 0; i < BRIDGE_MAC_LEN; i++) crc ^= mac[i];
+    crc ^= (uint8_t)(len & 0xFF);
+    crc ^= (uint8_t)(len >> 8);
+    for (uint16_t i = 0; i < len; i++) crc ^= data[i];
+    return crc;
+}
+
+// ---- Frame encoder ----------------------------------------------------------
+static size_t bridge_encode_frame(uint8_t *out, uint8_t dir,
+                                   const uint8_t *mac,
+                                   const uint8_t *payload, uint16_t len)
+{
+    size_t i = 0;
+    out[i++] = BRIDGE_SOF0;
+    out[i++] = BRIDGE_SOF1;
+    out[i++] = dir;
+    memcpy(&out[i], mac, BRIDGE_MAC_LEN); i += BRIDGE_MAC_LEN;
+    out[i++] = (uint8_t)(len & 0xFF);
+    out[i++] = (uint8_t)(len >> 8);
+    memcpy(&out[i], payload, len); i += len;
+    out[i++] = bridge_crc8(mac, len, payload);
+    return i;
+}
+
+// ---- RX task: reads frames from C6 via SDIO and dispatches to callbacks ----
+
+typedef enum {
+    RX_SOF0, RX_SOF1, RX_DIR,
+    RX_MAC, RX_LEN_LO, RX_LEN_HI,
+    RX_DATA, RX_CRC,
+} sdio_rx_state_t;
+
+static void c6_sdio_rx_task(void *arg)
+{
+    (void)arg;
+
+    sdio_rx_state_t state       = RX_SOF0;
+    uint8_t         dir         = 0;
+    uint8_t         mac[BRIDGE_MAC_LEN];
+    uint8_t         mac_pos     = 0;
+    uint16_t        payload_len = 0;
+    uint16_t        data_pos    = 0;
+    uint8_t         data_buf[BRIDGE_MAX_PAYLOAD];
+
+    LOGI(TAG, "SDIO RX task started");
+
+    while (true) {
+        /* Receive one complete SDIO packet (= one bridge frame). */
+        uint8_t  pkt[BRIDGE_MAX_FRAME_SIZE];
+        size_t   pkt_len = 0;
+
+        if (!c6_sdio_bridge_read(pkt, sizeof(pkt), &pkt_len,
+                                  /*timeout_ms=*/ 20)) {
+            /* Timeout — no frame ready, loop back. */
+            continue;
+        }
+
+        /* Feed the received bytes through the same state machine used by the
+         * UART bridge so that framing errors and CRC mismatches are caught. */
+        for (size_t bi = 0; bi < pkt_len; bi++) {
+            uint8_t b = pkt[bi];
+
+            switch (state) {
+                case RX_SOF0:
+                    if (b == BRIDGE_SOF0) state = RX_SOF1;
+                    /* '?' probe bytes are silently dropped on SDIO. */
+                    break;
+                case RX_SOF1:
+                    state = (b == BRIDGE_SOF1) ? RX_DIR : RX_SOF0;
+                    break;
+                case RX_DIR:
+                    dir     = b;
+                    mac_pos = 0;
+                    state   = RX_MAC;
+                    break;
+                case RX_MAC:
+                    mac[mac_pos++] = b;
+                    if (mac_pos == BRIDGE_MAC_LEN) state = RX_LEN_LO;
+                    break;
+                case RX_LEN_LO:
+                    payload_len = b;
+                    state       = RX_LEN_HI;
+                    break;
+                case RX_LEN_HI:
+                    payload_len |= ((uint16_t)b << 8);
+                    if (payload_len == 0 || payload_len > BRIDGE_MAX_PAYLOAD) {
+                        LOGW(TAG, "SDIO RX: bad length %u — resyncing",
+                             payload_len);
+                        state = RX_SOF0;
+                    } else {
+                        data_pos = 0;
+                        state    = RX_DATA;
+                    }
+                    break;
+                case RX_DATA:
+                    data_buf[data_pos++] = b;
+                    if (data_pos == payload_len) state = RX_CRC;
+                    break;
+                case RX_CRC: {
+                    uint8_t expected = bridge_crc8(mac, payload_len, data_buf);
+                    if (b == expected) {
+                        if (dir == BRIDGE_DIR_INCOMING) {
+                            dispatch_recv(mac, data_buf, (int)payload_len);
+                        } else if (dir == BRIDGE_DIR_DEBUG) {
+                            uint16_t safe = payload_len < BRIDGE_MAX_PAYLOAD
+                                            ? payload_len
+                                            : (uint16_t)(BRIDGE_MAX_PAYLOAD - 1);
+                            data_buf[safe] = '\0';
+                            LOGI(TAG, "Debug from C6: %s", (char *)data_buf);
+                        }
+                    } else {
+                        LOGW(TAG, "SDIO RX: CRC mismatch (got 0x%02X exp 0x%02X)",
+                             b, expected);
+                    }
+                    state = RX_SOF0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// ---- Public API -------------------------------------------------------------
+
+bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
+                          remote_wrapper_send_cb_t send_cb, void *user_data)
+{
+    g_send_cb        = send_cb;
+    g_send_user_data = user_data;
+    remote_wrapper_add_recv_cb(recv_cb, user_data);
+
+    if (!c6_sdio_bridge_init()) {
+        LOGE(TAG, "c6_sdio_bridge_init() failed");
+        return false;
+    }
+
+    LOGI(TAG, "C6 SDIO bridge initialised — starting RX task");
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        c6_sdio_rx_task,
+        "c6_sdio_rx",
+        1024 * 5,
+        NULL,
+        tskIDLE_PRIORITY + 2,
+        &g_rx_task,
+        TASK_MACHINE_STATE_PROC_CORE);
+
+    if (ok != pdPASS) {
+        LOGE(TAG, "Failed to start C6 SDIO RX task");
+        return false;
+    }
+
+    LOGI(TAG, "C6 SDIO ESP-NOW bridge ready");
+    return true;
+}
+
+bool remote_wrapper_add_peer(const uint8_t *mac_addr)
+{
+    // Peer management is handled transparently by the C6 bridge firmware.
+    LOGI(TAG, "add_peer " MACSTR " (delegated to C6)", MAC2STR(mac_addr));
+    return true;
+}
+
+bool remote_wrapper_add_peer_if_not_known(const uint8_t *received_mac_addr,
+                                           uint8_t *stored_mac_addr)
+{
+    bool is_uninit = (memcmp(stored_mac_addr, "\0\0\0\0\0\0", 6) == 0) ||
+                     (memcmp(stored_mac_addr, broadcast_mac, 6) == 0);
+
+    LOGI(TAG,
+         "RECV hub MAC " MACSTR " == new MAC " MACSTR " => is_unknown %d",
+         MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr), is_uninit);
+
+    if (is_uninit || memcmp(received_mac_addr, stored_mac_addr, 6) == 0) {
+        if (is_uninit) {
+            memcpy(stored_mac_addr, received_mac_addr, 6);
+            LOGI(TAG, "Learned hub MAC: " MACSTR, MAC2STR(stored_mac_addr));
+        }
+        return true;
+    }
+    LOGI(TAG,
+         "Received broadcast from different hub! Stored: " MACSTR
+         ", Received: " MACSTR,
+         MAC2STR(stored_mac_addr), MAC2STR(received_mac_addr));
+    return false;
+}
+
+bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
+                              size_t len)
+{
+    if (len > BRIDGE_MAX_PAYLOAD) {
+        LOGE(TAG, "send_now: payload %zu > max %d", len, BRIDGE_MAX_PAYLOAD);
+        return false;
+    }
+    uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
+    size_t  frame_len = bridge_encode_frame(frame, BRIDGE_DIR_OUTGOING,
+                                             mac_addr, data, (uint16_t)len);
+    if (!c6_sdio_bridge_write(frame, frame_len)) {
+        LOGE(TAG, "send_now: c6_sdio_bridge_write failed");
+        return false;
+    }
+    LOGV(TAG, "send_now: %zu payload bytes → %zu frame bytes", len, frame_len);
+    return true;
+}
+
+bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
+                          size_t len)
+{
+    // SDIO writes are packet-based and complete quickly.
+    return remote_wrapper_send_now(mac_addr, data, len);
+}
+
+bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr,
+                                             uint8_t sub_type,
+                                             const uint8_t *data, size_t len)
+{
+    static uint16_t seq_id_counter = 0;
+    const size_t max_payload_per_fragment =
+        REMOTE_COMMS_DATA_MAX - BINARY_FRAGMENT_MSG_HEADER_SIZE;
+
+    if (max_payload_per_fragment == 0) {
+        LOGE(TAG, "Cannot send fragmented message: max payload too small");
+        return false;
+    }
+
+    uint16_t total_fragments =
+        (uint16_t)((len + max_payload_per_fragment - 1) /
+                   max_payload_per_fragment);
+    uint16_t current_seq_id = seq_id_counter++;
+
+    LOGI(TAG,
+         "Sending fragmented message: seq=%u, total_size=%zu, "
+         "fragments=%u to " MACSTR,
+         current_seq_id, len, total_fragments, MAC2STR(mac_addr));
+
+    for (uint16_t i = 0; i < total_fragments; i++) {
+        size_t offset       = i * max_payload_per_fragment;
+        size_t fragment_len = (i == total_fragments - 1)
+                                  ? (len - offset)
+                                  : max_payload_per_fragment;
+        size_t total_msg_len = BINARY_FRAGMENT_MSG_HEADER_SIZE + fragment_len;
+
+        uint8_t buf[BRIDGE_MAX_PAYLOAD];
+        binary_fragment_msg_t *frag = (binary_fragment_msg_t *)buf;
+        frag->type               = MSG_TYPE_BINARY;
+        frag->sub_type           = sub_type;
+        frag->seq_id             = current_seq_id;
+        frag->total_payload_size = (uint32_t)len;
+        frag->total_fragments    = total_fragments;
+        frag->fragment_index     = i;
+        frag->fragment_offset    = (uint32_t)offset;
+        frag->fragment_len       = (uint16_t)fragment_len;
+        memcpy(frag->data, data + offset, fragment_len);
+
+        if (!remote_wrapper_send(mac_addr, (const uint8_t *)frag,
+                                  total_msg_len)) {
+            LOGW(TAG, "Failed to send fragment %u of seq %u", i,
+                 current_seq_id);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool remote_wrapper_broadcast_fragmented_message(uint8_t sub_type,
+                                                  const uint8_t *data,
+                                                  size_t len)
+{
+    return remote_wrapper_send_fragmented_message(broadcast_mac, sub_type,
+                                                   data, len);
+}
+
+void remote_wrapper_deinit()
+{
+    if (g_rx_task) {
+        vTaskDelete(g_rx_task);
+        g_rx_task = NULL;
+    }
+    c6_sdio_bridge_deinit();
+}
+
 #else
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data) {

@@ -1,17 +1,31 @@
 /**
- * main.cpp  —  ESP32-C6 ESP-NOW ↔ UART Bridge
+ * main.cpp  —  ESP32-C6 ESP-NOW ↔ Bridge Firmware
  *
- * Receives ESP-NOW frames from the wireless hub and forwards them over UART to
- * the ESP32-P4 main chip using the bridge_protocol frame format.
+ * Bridges ESP-NOW wireless frames to the ESP32-P4 main chip using a binary
+ * framing protocol (bridge_protocol.h).  The physical transport to the P4 is
+ * selectable at build time:
  *
- * Receives UART frames from the P4 and transmits them via ESP-NOW.
+ *   Default (no flag)           → UART  (bridge_transport_uart.cpp)
+ *   -D C6_BRIDGE_TRANSPORT_SDIO → SDIO slave (bridge_transport_sdio.cpp)
  *
- * Build-time configuration (set via platformio.ini build_flags):
- *   C6_BRIDGE_UART_NUM    – Arduino UART number to use for bridge (default 1)
- *   C6_BRIDGE_UART_TX     – C6 GPIO for TX → P4 RX (default 6)
- *   C6_BRIDGE_UART_RX     – C6 GPIO for RX ← P4 TX (default 7)
- *   C6_BRIDGE_UART_BAUD   – Baud rate (default 921600)
- *   C6_BRIDGE_WIFI_CHANNEL – ESP-NOW channel (default 1)
+ * Both transports share the same bridge_protocol.h frame format and the same
+ * parsing state machine in this file.  Only the call sites that do I/O differ.
+ *
+ * Build-time knobs (set via platformio.ini build_flags):
+ *
+ *   UART transport:
+ *     C6_BRIDGE_UART_NUM      – Arduino HardwareSerial number (default 0)
+ *     C6_BRIDGE_UART_TX       – C6 GPIO for TX (default 16)
+ *     C6_BRIDGE_UART_RX       – C6 GPIO for RX (default 17)
+ *     C6_BRIDGE_UART_BAUD     – baud rate (default 921600)
+ *
+ *   SDIO transport:
+ *     C6_BRIDGE_SDIO_BUS_WIDTH     – 1 or 4 (default 4)
+ *     C6_BRIDGE_SDIO_RX_BUF_COUNT – host→slave buffer pool depth (default 4)
+ *     C6_BRIDGE_SDIO_TX_BUF_COUNT – slave→host buffer pool depth (default 4)
+ *
+ *   Common:
+ *     C6_BRIDGE_WIFI_CHANNEL  – ESP-NOW channel (default 1)
  */
 
 #include <Arduino.h>
@@ -21,24 +35,9 @@
 #include <string.h>
 
 #include "bridge_protocol.h"
+#include "bridge_transport.h"
 
-// ---- Default configuration overridable via build_flags ----
-
-#ifndef C6_BRIDGE_UART_NUM
-#define C6_BRIDGE_UART_NUM    1
-#endif
-
-#ifndef C6_BRIDGE_UART_TX
-#define C6_BRIDGE_UART_TX     6
-#endif
-
-#ifndef C6_BRIDGE_UART_RX
-#define C6_BRIDGE_UART_RX     7
-#endif
-
-#ifndef C6_BRIDGE_UART_BAUD
-#define C6_BRIDGE_UART_BAUD   921600
-#endif
+// ---- Common default ----
 
 #ifndef C6_BRIDGE_WIFI_CHANNEL
 #define C6_BRIDGE_WIFI_CHANNEL 1
@@ -46,22 +45,10 @@
 
 // ---- Globals ----
 
-/**
- * Bridge UART to P4.  With ARDUINO_USB_CDC_ON_BOOT=1, Arduino maps:
- *   Serial  → USB-CDC (console)
- *   Serial0 → UART0   (physical pins, used for bridge)
- * We alias Serial0 so the rest of the code reads naturally.
- */
-#if C6_BRIDGE_UART_NUM == 0
-#define BridgeSerial Serial0
-#else
-static HardwareSerial BridgeSerial(C6_BRIDGE_UART_NUM);
-#endif
-
 static const uint8_t k_broadcast_mac[BRIDGE_MAC_LEN] =
     {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// ---- Low-level helpers (used by debug helpers too) --------------------------
+// ---- Low-level helpers ------------------------------------------------------
 
 static bool peer_is_known(const uint8_t *mac)
 {
@@ -87,8 +74,8 @@ static bool peer_add(const uint8_t *mac)
 }
 
 /**
- * @brief Encode one frame into @p out_buf.
- * @return Total frame length in bytes.
+ * @brief Encode one bridge frame into @p out_buf.
+ * @return Total encoded byte count.
  */
 static size_t encode_frame(uint8_t *out_buf, uint8_t dir,
                             const uint8_t *mac, const uint8_t *payload,
@@ -98,48 +85,40 @@ static size_t encode_frame(uint8_t *out_buf, uint8_t dir,
     out_buf[idx++] = BRIDGE_SOF0;
     out_buf[idx++] = BRIDGE_SOF1;
     out_buf[idx++] = dir;
-    memcpy(&out_buf[idx], mac, BRIDGE_MAC_LEN);
-    idx += BRIDGE_MAC_LEN;
+    memcpy(&out_buf[idx], mac, BRIDGE_MAC_LEN); idx += BRIDGE_MAC_LEN;
     out_buf[idx++] = (uint8_t)(len & 0xFF);
     out_buf[idx++] = (uint8_t)(len >> 8);
-    memcpy(&out_buf[idx], payload, len);
-    idx += len;
+    memcpy(&out_buf[idx], payload, len);        idx += len;
     out_buf[idx++] = bridge_crc8(mac, len, payload);
     return idx;
 }
 
-// ---- Debug / hello helpers --------------------------------------------------
+// ---- Hello / debug helpers --------------------------------------------------
 
-/**
- * Send a plain-text info dump to the given stream.  Used both for the USB-CDC
- * console (Serial) and as the body of BRIDGE_DIR_DEBUG frames.
- * @p buf / @p buf_size: caller-provided scratch buffer for the string.
- * Returns the number of bytes written into buf (excluding NUL).
- */
 static size_t build_hello_text(char *buf, size_t buf_size)
 {
+    char transport_desc[80];
+    bridge_transport_describe(transport_desc, sizeof(transport_desc));
+
     return (size_t)snprintf(buf, buf_size,
         "\r\n"
         "=== C6 ESP-NOW Bridge ===\r\n"
         "Protocol version : %d\r\n"
         "Build            : " __DATE__ " " __TIME__ "\r\n"
-        "Bridge UART      : UART%d, TX=GPIO%d, RX=GPIO%d, %d baud\r\n"
+        "%s\r\n"
         "WiFi channel     : %d\r\n"
         "C6 MAC           : %s\r\n"
         "Status           : ready\r\n"
         "Send '?' for this info again\r\n"
         "=========================\r\n",
         BRIDGE_PROTOCOL_VERSION,
-        C6_BRIDGE_UART_NUM, C6_BRIDGE_UART_TX, C6_BRIDGE_UART_RX,
-        C6_BRIDGE_UART_BAUD,
+        transport_desc,
         C6_BRIDGE_WIFI_CHANNEL,
         WiFi.macAddress().c_str());
 }
 
 /**
- * Encode @p text as a BRIDGE_DIR_DEBUG frame and write it to BridgeSerial.
- * The P4 will parse it, log the payload text, and discard it without calling
- * the application recv callback.
+ * Encode @p text as a BRIDGE_DIR_DEBUG frame and write it via the transport.
  */
 static void send_debug_frame(const char *text)
 {
@@ -149,23 +128,30 @@ static void send_debug_frame(const char *text)
     size_t   frame_len = encode_frame(frame, BRIDGE_DIR_DEBUG,
                                       debug_mac,
                                       (const uint8_t *)text, len);
-    BridgeSerial.write(frame, frame_len);
+    bridge_transport_write(frame, frame_len);
 }
 
 /**
- * Respond to a '?' probe received on @p stream with a plain-text dump.
- * Also sends the same info as a BRIDGE_DIR_DEBUG frame toward the P4 so it
- * appears in the P4's log too.
+ * Respond to a '?' probe received on the bridge link.
+ *
+ * For UART, also writes plain ASCII so a human with a serial monitor sees it.
+ * For SDIO, only the framed DEBUG packet is sent (the P4 would not parse
+ * plain ASCII).
  */
-static void send_hello(Stream &stream)
+static void send_hello_probe_response(void)
 {
     char buf[BRIDGE_MAX_PAYLOAD];
     build_hello_text(buf, sizeof(buf));
-    stream.print(buf);
-    send_debug_frame(buf);  // also notify P4
+    Serial.print(buf);  // USB-CDC always
+#ifndef C6_BRIDGE_TRANSPORT_SDIO
+    // UART only: plain ASCII is safe; P4 parser discards non-SOF0 bytes.
+    extern void bridge_transport_uart_write_raw(const uint8_t *b, size_t l);
+    bridge_transport_uart_write_raw((const uint8_t *)buf, strlen(buf));
+#endif
+    send_debug_frame(buf);
 }
 
-// ---- ESP-NOW → UART ----
+// ---- ESP-NOW → transport (C6 relays received frame to P4) ------------------
 
 static void on_espnow_recv(const esp_now_recv_info_t *info,
                             const uint8_t *data, int len)
@@ -175,16 +161,17 @@ static void on_espnow_recv(const esp_now_recv_info_t *info,
         return;
     }
 
-    // Opportunistically register sender as a peer so we can reply.
-    peer_add(info->src_addr);
+    peer_add(info->src_addr);   // remember sender so we can reply
 
     uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
     size_t frame_len = encode_frame(frame, BRIDGE_DIR_INCOMING,
                                     info->src_addr, data, (uint16_t)len);
-    BridgeSerial.write(frame, frame_len);
+    bridge_transport_write(frame, frame_len);
 }
 
-// ---- UART → ESP-NOW parser ----
+// ---- Frame parser (transport → ESP-NOW) ------------------------------------
+// Byte-oriented state machine — works identically for UART (bytes trickle in)
+// and SDIO (a complete frame arrives at once, then fed byte-by-byte here).
 
 typedef enum {
     ST_SOF0,
@@ -197,7 +184,7 @@ typedef enum {
     ST_CRC,
 } parse_state_t;
 
-static parse_state_t s_rx_state   = ST_SOF0;
+static parse_state_t s_rx_state    = ST_SOF0;
 static uint8_t       s_rx_dir;
 static uint8_t       s_rx_mac[BRIDGE_MAC_LEN];
 static uint8_t       s_rx_mac_pos;
@@ -207,7 +194,7 @@ static uint8_t       s_rx_data[BRIDGE_MAX_PAYLOAD];
 
 static void dispatch_to_espnow(uint8_t *mac, uint8_t *data, uint16_t len)
 {
-    peer_add(mac);   // guaranteed present before sending
+    peer_add(mac);
     esp_err_t err = esp_now_send(mac, data, len);
     if (err != ESP_OK) {
         Serial.printf("[BRIDGE] esp_now_send err=%d\n", err);
@@ -221,11 +208,9 @@ static void process_byte(uint8_t b)
             if (b == BRIDGE_SOF0) {
                 s_rx_state = ST_SOF1;
             } else if (b == BRIDGE_DEBUG_TRIGGER) {
-                // '?' typed on the bridge wire — respond with plain text
-                // (no binary framing).  The P4's parser ignores non-0xAB bytes.
-                send_hello(BridgeSerial);
+                send_hello_probe_response();
             }
-            // All other bytes are silently discarded while idle — normal.
+            // All other bytes silently discarded while idle.
             break;
 
         case ST_SOF1:
@@ -233,9 +218,9 @@ static void process_byte(uint8_t b)
             break;
 
         case ST_DIR:
-            s_rx_dir    = b;
+            s_rx_dir     = b;
             s_rx_mac_pos = 0;
-            s_rx_state  = ST_MAC;
+            s_rx_state   = ST_MAC;
             break;
 
         case ST_MAC:
@@ -244,7 +229,7 @@ static void process_byte(uint8_t b)
             break;
 
         case ST_LEN_LO:
-            s_rx_len  = b;
+            s_rx_len   = b;
             s_rx_state = ST_LEN_HI;
             break;
 
@@ -270,13 +255,15 @@ static void process_byte(uint8_t b)
                 if (s_rx_dir == BRIDGE_DIR_OUTGOING) {
                     dispatch_to_espnow(s_rx_mac, s_rx_data, s_rx_len);
                 } else if (s_rx_dir == BRIDGE_DIR_DEBUG) {
-                    // Human-readable info frame from P4 — log it, ignore it.
-                    s_rx_data[s_rx_len < BRIDGE_MAX_PAYLOAD
-                               ? s_rx_len : BRIDGE_MAX_PAYLOAD - 1] = '\0';
+                    // Human-readable frame from P4 — log it, don't relay.
+                    uint16_t safe = s_rx_len < BRIDGE_MAX_PAYLOAD
+                                    ? s_rx_len
+                                    : (uint16_t)(BRIDGE_MAX_PAYLOAD - 1);
+                    s_rx_data[safe] = '\0';
                     Serial.printf("[BRIDGE] Debug from P4: %s\n",
                                   (char *)s_rx_data);
                 } else {
-                    Serial.printf("[BRIDGE] Unexpected DIR=0x%02X from P4\n",
+                    Serial.printf("[BRIDGE] Unexpected DIR=0x%02X\n",
                                   s_rx_dir);
                 }
             } else {
@@ -289,73 +276,85 @@ static void process_byte(uint8_t b)
     }
 }
 
-// ---- Arduino entry points ----
+// ---- Arduino entry points ---------------------------------------------------
 
 void setup()
 {
-    // USB-CDC console (with ARDUINO_USB_CDC_ON_BOOT=1, Serial = USB-CDC).
+    // USB-CDC console (with ARDUINO_USB_CDC_ON_BOOT=1 Serial = USB-CDC).
     Serial.begin(115200);
     Serial.println("[BRIDGE] Booting ESP32-C6 ESP-NOW bridge...");
 
-    // Bridge UART to P4.
-    BridgeSerial.begin(C6_BRIDGE_UART_BAUD, SERIAL_8N1,
-                       C6_BRIDGE_UART_RX, C6_BRIDGE_UART_TX);
+#ifdef C6_BRIDGE_TRANSPORT_SDIO
+    Serial.println("[BRIDGE] Transport: SDIO slave");
+#else
+    Serial.println("[BRIDGE] Transport: UART");
+#endif
+
+    // Initialise the physical transport to the P4.
+    bridge_transport_init();
 
     // Wi-Fi (required by ESP-NOW).
     WiFi.mode(WIFI_STA);
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     esp_wifi_set_channel(C6_BRIDGE_WIFI_CHANNEL, second);
     Serial.printf("[BRIDGE] WiFi channel = %d\n", C6_BRIDGE_WIFI_CHANNEL);
-
-    // Print own MAC so users can configure the hub peer list.
     Serial.printf("[BRIDGE] C6 MAC: %s\n", WiFi.macAddress().c_str());
 
-    // ESP-NOW init.
+    // Initialise ESP-NOW.
     if (esp_now_init() != ESP_OK) {
         Serial.println("[BRIDGE] FATAL: esp_now_init() failed");
         while (true) delay(1000);
     }
 
-    // Pre-register broadcast peer.
     peer_add(k_broadcast_mac);
-
     esp_now_register_recv_cb(on_espnow_recv);
 
-    // -- Startup hello ---------------------------------------------------------
-    // Send plain-text hello on BOTH outputs so that a human with a serial
-    // monitor connected to EITHER port can verify the firmware is running and
-    // the right UART is configured.
-    //
-    //   BridgeSerial  (UART0, GPIO16/17, 921600 baud)
-    //     → confirms the wire-jumped bridge UART works end-to-end
-    //   Serial        (USB-CDC, 115200 baud)
-    //     → confirms the C6 is alive even before the bridge wire is connected
+    // Startup hello — always on USB-CDC, also on bridge transport.
     {
         char buf[BRIDGE_MAX_PAYLOAD];
         build_hello_text(buf, sizeof(buf));
-        BridgeSerial.print(buf);  // primary: the wire that will carry live data
-        Serial.print(buf);        // secondary: USB-CDC debug console
+        Serial.print(buf);
+#ifndef C6_BRIDGE_TRANSPORT_SDIO
+        // UART: plain ASCII hello so a human monitoring the wire sees it.
+        extern void bridge_transport_uart_write_raw(const uint8_t *b, size_t l);
+        bridge_transport_uart_write_raw((const uint8_t *)buf, strlen(buf));
+#endif
+        send_debug_frame(buf);
     }
 }
 
 void loop()
 {
-    // Drain the bridge UART, feeding bytes into the frame parser.
-    int avail = BridgeSerial.available();
-    while (avail-- > 0) {
-        process_byte((uint8_t)BridgeSerial.read());
+    // ---- Transport → ESP-NOW (parse incoming bridge frames) ----------------
+#ifdef C6_BRIDGE_TRANSPORT_SDIO
+    // SDIO: block up to 5 ms for a complete packet, feed bytes to the parser.
+    uint8_t pkt_buf[BRIDGE_MAX_FRAME_SIZE];
+    int     pkt_len = bridge_transport_read(pkt_buf, sizeof(pkt_buf), 5);
+    if (pkt_len > 0) {
+        for (int i = 0; i < pkt_len; i++) process_byte(pkt_buf[i]);
     }
+#else
+    // UART: drain whatever bytes are sitting in the FIFO right now.
+    {
+        uint8_t byte_buf[64];
+        int n = bridge_transport_read(byte_buf, sizeof(byte_buf), 0);
+        for (int i = 0; i < n; i++) process_byte(byte_buf[i]);
+    }
+#endif
 
-    // Handle '?' typed into the USB-CDC console (Serial) by a human.
-    // Respond with plain text on Serial + a DEBUG frame toward the P4.
+    // ---- USB-CDC console → debug / human interaction -----------------------
     while (Serial.available() > 0) {
         uint8_t ch = (uint8_t)Serial.read();
         if (ch == BRIDGE_DEBUG_TRIGGER) {
-            send_hello(Serial);
+            char buf[BRIDGE_MAX_PAYLOAD];
+            build_hello_text(buf, sizeof(buf));
+            Serial.print(buf);
         }
-        // All other console input is silently ignored.
     }
 
-    // Yield briefly so the radio stack gets CPU time.
+    // Yield so the radio stack gets CPU time (SDIO loop already yields via
+    // its 5 ms read timeout).
+#ifndef C6_BRIDGE_TRANSPORT_SDIO
     delay(1);
+#endif
 }

@@ -22,6 +22,12 @@
 /* BRIDGE_MAX_PAYLOAD (250) - 1 byte reserved for the message type prefix.   */
 #define REMOTE_COMMS_DATA_MAX (249)
 
+#elif defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_SDIO_BRIDGE)
+
+/* SDIO bridge uses the same frame format as the UART bridge; payload limit  */
+/* is identical — 250 bytes max, minus 1 byte for the message-type prefix.   */
+#define REMOTE_COMMS_DATA_MAX (249)
+
 #else
 
 #define REMOTE_COMMS_DATA_MAX (251)

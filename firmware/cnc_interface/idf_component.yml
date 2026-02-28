@@ -1,2 +1,9 @@
 dependencies:
   espressif/libsodium: "==1.0.1"
+
+  # esp_serial_slave_link (ESSL) — required for the C6 SDIO bridge backend.
+  # Provides essl_sdio_init_dev / essl_send_packet / essl_get_packet, used in
+  # src/driver/c6_bridge_sdio.c when REMOTE_COMMS_C6_SDIO_BRIDGE is defined.
+  # In ESP-IDF 5.x this component is bundled in-tree; listing it here makes
+  # the dependency explicit for toolchains that don't auto-include it.
+  espressif/esp_serial_slave_link: ">=1.0.0"

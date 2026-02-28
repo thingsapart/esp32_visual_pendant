@@ -25,6 +25,7 @@ static const char *TAG = "ESP32_CNC_HMI";
 #include "tasks/machine_response_proc_task.h"
 #include "tasks/machine_send_task.h"
 #include "tasks/machine_task.h"
+#include "tasks/jog_accumulator_task.h"
 
 extern void ram_usage();
 
@@ -297,7 +298,11 @@ void lvgl_task(void *pv_params) {
         }
 #endif
 
-        machine_interface_step_current_axis(&machine.base, 3000, diff);
+        /* Post to the accumulator queue instead of issuing a G-Code
+         * directly.  The jog_accumulator_task will batch these clicks,
+         * send a single consolidated move, and self-throttle using a
+         * kinematic sleep so the controller is never overwhelmed.       */
+        jog_accumulator_post_clicks(diff);
 
         LOGI(TAG, "ENCODER DIFF %d", diff);
       }
@@ -571,6 +576,17 @@ void setup() {
   }
 #endif
 #endif
+
+  /* Start the adaptive jog accumulator.  Must be called after the G-Code
+   * queue has been created and assigned to machine.base.gcode_queue.    */
+  LOGI(TAG, "Starting jog accumulator task...");
+  if (!abort && !jog_accumulator_init(&machine.base)) {
+    LOGE(TAG, "FAIL: Could not start jog accumulator task");
+    /* Non-fatal: jog_accumulator_post_clicks() is a no-op when not running,
+     * so the pendant still works; the user just loses the batching benefit. */
+  } else if (!abort) {
+    LOGI(TAG, "DONE: Jog accumulator task running.");
+  }
 
   LOGI(TAG, "Machine loaded..\n");
 
