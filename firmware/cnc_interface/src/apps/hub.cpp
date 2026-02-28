@@ -755,16 +755,10 @@ void process_message(const uint8_t *data, const size_t data_len) {
       break;
     case CMD_TYPE_PENDANT_CONNECT:
       LOGI(TAG, "<PENDANT_CONNECT>");
-      // Pendant explicitly requested an initial sync — push all filelists.
-      if (g_machine_base) {
-        for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
-          const char *p = g_machine_base->filelists[i].fdir;
-          if (!p) continue;
-          on_files_changed(g_machine_base, NULL, p, g_machine_base->filelists[i].files);
-        }
-        g_sent_filelists_to_display = true;
-        LOGI(TAG, "Sent filelists to pendant on explicit connect request.");
-      }
+      // Pendant explicitly signalled connection. Mark filelists as not sent
+      // so they will be resent soon (on the next successful send callback).
+      g_sent_filelists_to_display = false;
+      LOGI(TAG, "Pendant connect received; marked filelists unsent for resend.");
       break;
     case CMD_TYPE_PROBE:
       LOGI(TAG, "<PROBE_CMD>");

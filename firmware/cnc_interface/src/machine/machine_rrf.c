@@ -955,6 +955,70 @@ void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
   machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
 }
 
+// Run a Duet/RRF macro by name. Uses M98 P"<macro>".
+static void _machine_rrf_run_macro(machine_interface_t *self,
+                                   const char *macro_name) {
+  char full_name[MAX_GCODE_STR_LEN];
+  // If macro_name already contains a path separator, use as-is. Otherwise
+  // try to prepend the configured macros directory from filelists.
+  if (strchr(macro_name, '/') != NULL) {
+    snprintf(full_name, sizeof(full_name), "%s", macro_name);
+  } else {
+    const char *prefix = NULL;
+    for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+      if (self->filelists[i].fdir) {
+        // Prefer a slot named "macros" or ending with "/macros"
+        const char *p = self->filelists[i].fdir;
+        size_t len = strlen(p);
+        if (strcmp(p, "macros") == 0 || (len >= 6 && strcmp(p + len - 6, "macros") == 0)) {
+          prefix = p;
+          break;
+        }
+      }
+    }
+    if (prefix) {
+      // Join prefix and macro_name with a '/'
+      snprintf(full_name, sizeof(full_name), "%s/%s", prefix, macro_name);
+    } else {
+      snprintf(full_name, sizeof(full_name), "%s", macro_name);
+    }
+  }
+
+  char gcode[MAX_GCODE_STR_LEN];
+  snprintf(gcode, sizeof(gcode), "M98 P\"%s\"\n", full_name);
+  machine_interface_send_gcode(self, gcode, MESSAGES_AND_DIALOGS);
+}
+
+// Start a job (select file then start). Uses M23 then M24 as per RRF/Duet.
+static void _machine_rrf_start_job(machine_interface_t *self,
+                                   const char *job_name) {
+  char full_name[MAX_GCODE_STR_LEN];
+  if (strchr(job_name, '/') != NULL) {
+    snprintf(full_name, sizeof(full_name), "%s", job_name);
+  } else {
+    const char *prefix = NULL;
+    for (size_t i = 0; i < MAX_FILE_LISTS; ++i) {
+      if (self->filelists[i].fdir) {
+        const char *p = self->filelists[i].fdir;
+        size_t len = strlen(p);
+        if (strcmp(p, "gcodes") == 0 || (len >= 6 && strcmp(p + len - 6, "gcodes") == 0)) {
+          prefix = p;
+          break;
+        }
+      }
+    }
+    if (prefix) {
+      snprintf(full_name, sizeof(full_name), "%s/%s", prefix, job_name);
+    } else {
+      snprintf(full_name, sizeof(full_name), "%s", job_name);
+    }
+  }
+
+  char gcode[MAX_GCODE_STR_LEN];
+  snprintf(gcode, sizeof(gcode), "M23 P\"%s\"\nM24\n", full_name);
+  machine_interface_send_gcode(self, gcode, JOB_STATUS);
+}
+
 // --- Common Initializer ---
 
 static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
@@ -983,10 +1047,11 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
 
   // Use default g-code based implementations for these actions, which will call
   // the appropriate transport-specific `_send_gcode`
-  self->base.run_macro = NULL;  // Use base impl
-  self->base.start_job = NULL;  // Use base impl
-  self->base.move_continuous = NULL;
-  self->base.move_continuous_stop = NULL;
+
+  /** TODO
+  -  self->base.move_continuous
+  -  self->base.move_continuous_stop
+  */
 
   // Modals
   self->base.modal_cancel = _machine_rrf_modal_cancel;
@@ -994,8 +1059,13 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->base.modal_choice = _machine_rrf_modal_choice;
   self->base.modal_int = _machine_rrf_modal_int;
   self->base.modal_float = _machine_rrf_modal_float;
+  
   self->base.modal_str = _machine_rrf_modal_str;
   self->base.probe = _machine_rrf_probe;
+
+  // RRF-specific actions: run a macro (M98) and start a job/file (M23 + M24)
+  self->base.run_macro = _machine_rrf_run_macro;
+  self->base.start_job = _machine_rrf_start_job;
 
   /* Respect transport-specific poll/backoff policy (RRF serial implements backoff). */
   self->base.should_poll = NULL; /* will be set below for serial/dwc specific */

@@ -3066,7 +3066,7 @@ void create_ui(lv_obj_t* parent) {
     lv_style_set_border_color(filelist_table_cell_39, lv_color_hex(0x333333));
     lv_style_set_border_width(filelist_table_cell_39, 1);
     lv_style_set_border_opa(filelist_table_cell_39, 200);
-    lv_style_set_text_font(filelist_table_cell_39, font_kode_20_4);
+    lv_style_set_text_font(filelist_table_cell_39, font_kode_14_5);
 
     // filelist_table_cell_selected: filelist_table_cell_selected_40 (style)
     filelist_table_cell_selected_40 = LVGL_UI_MALLOC(sizeof(lv_style_t));
