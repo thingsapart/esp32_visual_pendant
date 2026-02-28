@@ -199,6 +199,12 @@ typedef struct machine_interface_t {
   int polli;
   unsigned long last_continuous_tick;
   bool last_log_message_handled;
+  // When true, gcodes enqueued via machine_interface_send_gcode are placed at
+  // the front of the queue (xQueueSendToFront) so they pre-empt pending poll
+  // commands.  Set this flag before dispatching user-initiated commands and
+  // clear it immediately after.  Not re-entrant / not atomically safe, but
+  // the single-bit benign race (one poll going to front once) is acceptable.
+  bool gcode_queue_priority;
 
   // --- "Virtual" Methods (Function Pointers) ---
   void (*send_gcode)(machine_interface_t *self, const char *gcode,

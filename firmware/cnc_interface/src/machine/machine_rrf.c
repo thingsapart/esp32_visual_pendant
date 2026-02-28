@@ -87,6 +87,8 @@ static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _serial_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _machine_rrf_attempt_connect(machine_interface_t *self);
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode);
+static inline bool _is_m114_body_start(const char *s);
+static bool _serial_parse_m114_body(machine_rrf_t *self, const char *body);
 
 #ifdef ESP32_HW
 // millis() is provided by the Arduino framework; declare it for the C compiler.
@@ -621,17 +623,30 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
     }
   } else if (cJSON_GetObjectItemCaseSensitive(root, "seq") &&
              cJSON_GetObjectItemCaseSensitive(root, "resp")) {
-    // This is a log message or simple response, not a full model query
+    /* PanelDue-mode response wrapper: {"seq":N,"resp":"..."}.
+     * The payload may be an M114 position report or a plain log/status
+     * message.  Detect by checking the start of the resp string. */
     cJSON *resp_json = cJSON_GetObjectItemCaseSensitive(root, "resp");
     if (cJSON_IsString(resp_json) && resp_json->valuestring) {
-      // Trim trailing newline if it exists
       char *resp_str = resp_json->valuestring;
-      size_t len = strlen(resp_str);
-      if (len > 0 && resp_str[len - 1] == '\n') {
-        resp_str[len - 1] = '\0';
+      /* RRF always appends '\n' in PanelDue mode; strip it in-place. */
+      size_t rlen = strlen(resp_str);
+      if (rlen > 0 && resp_str[rlen - 1] == '\n') resp_str[--rlen] = '\0';
+
+      if (_is_m114_body_start(resp_str)) {
+        /* M114 response carried inside a PanelDue JSON wrapper.
+         * _serial_parse_m114_body() updates machine state only; bookkeeping
+         * (unanswered_polls, last_response_ms, connected) is handled once
+         * by the common succ/fail block below — not by the body function. */
+        succ = _serial_parse_m114_body(self, resp_str);
+        if (!succ) {
+          LOGW(TAG, "Serial: M114 body parse failed: %.80s", resp_str);
+        }
+      } else {
+        /* Ordinary command acknowledgement or log message — relay as-is. */
+        machine_interface_log_message_updated(&self->base, resp_str);
+        succ = true;
       }
-      machine_interface_log_message_updated(&self->base, resp_str);
-      succ = true;
     }
   } else {
     LOGW(TAG, "Serial: Unrecognized JSON response structure: %s", json_response);
@@ -758,12 +773,15 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
 
   // Commands are sent via the queue. The response is handled asynchronously.
   char cmd[128];
-  if ((poll_state & MACHINE_POSITION) || (poll_state & MACHINE_POSITION_EXT)) {
-    // Use verbose flag ("v") so infrequently-changing fields like "homed" are
-    // always present (with "f" RRF omits them). Use d3 instead of d5 to exclude
-    // workplaceOffsets[9] and other deep arrays — the response at d5 exceeds
-    // the serial line buffer and is silently discarded. All fields we parse
-    // (machinePosition, userPosition, homed, letter) are at depth 1-2.
+  if (poll_state & MACHINE_POSITION) {
+    // Frequent position poll via M114: compact ASCII response, hand-scanned
+    // without cJSON, updating WCS position at ~20 Hz (50 ms base interval).
+    machine_interface_send_gcode(&self->base, "M114", 0);
+  }
+  if (poll_state & MACHINE_POSITION_EXT) {
+    // Full axis poll every ~950 ms (19 × 50 ms): refreshes machine-absolute
+    // position, homed flags, and travel limits — fields M114 does not provide.
+    // Use d3 (not d5) to stay within the serial line buffer.
     snprintf(cmd, sizeof(cmd), "M409 K\"move.axes[]\" F\"d3,v\"");
     machine_interface_send_gcode(&self->base, cmd, 0);
   }
@@ -835,14 +853,173 @@ static void _serial_deinit_impl(machine_rrf_t *self) {
   serial_end(self->transport_state.serial.uart);
 }
 
+/**
+ * @brief True when `s` starts with an M114 position body.
+ *
+ * Recognised prefixes:
+ *   "X:"     – plain WCS axis value (most common, observed on RRF/Duet serial)
+ *   "C:"     – optional prefix documented for some firmware variants
+ *              (e.g. "C: X:10.000 Y:20.000 Z:5.000 ...")
+ */
+static inline bool _is_m114_body_start(const char *s) {
+  if (s[0] == 'X' && s[1] == ':') return true;
+  if (s[0] == 'C' && s[1] == ':') return true;
+  return false;
+}
+
+/**
+ * @brief Parse the text body of an M114 response.  Pure parser — no
+ *        bookkeeping side-effects (unanswered_polls, last_response_ms, …).
+ *
+ * Accepts both the raw-mode text and the "resp" string extracted from a
+ * PanelDue JSON wrapper.  The optional "C: " prefix is silently skipped.
+ *
+ * Full format (optional parts in brackets):
+ *   [C: ]X:v Y:v Z:v [U:v] [E:v …] Count n n n  Machine mx my mz [0.000]  Bed comp bc
+ *
+ *   WCS position  – X:, Y:, Z: values (before "Count" or "Machine" keyword)
+ *   Machine pos   – space-separated floats following the "Machine" keyword;
+ *                   these are the raw stepper/driver coordinates in mm.
+ *   Bed comp      – single float after "Bed comp": the Z bed-surface flatness
+ *                   correction at the current XY position as stored in Duet's
+ *                   mesh grid.  Future use: readout for LDC1612-based eddy-
+ *                   current probe height maps (in-place surface compensation).
+ *
+ * Does NOT update bookkeeping so it can safely be called from both the JSON
+ * path (where _serial_parse_json_response owns bookkeeping) and the raw path
+ * (where _serial_handle_m114_direct owns it), avoiding double-decrements.
+ *
+ * @return true if all three WCS axes (X, Y, Z) were found and parsed.
+ */
+static bool _serial_parse_m114_body(machine_rrf_t *self, const char *body) {
+  const char *p = body;
+
+  /* Skip optional "C:" prefix (with any following spaces). */
+  if (p[0] == 'C' && p[1] == ':') {
+    p += 2;
+    while (*p == ' ') p++;
+  }
+
+  float wcs[3]   = {0.0f, 0.0f, 0.0f};
+  float mach[3]  = {0.0f, 0.0f, 0.0f};
+  float bed_comp = 0.0f;
+  uint8_t wcs_found = 0; /* bit mask: bit0=X, bit1=Y, bit2=Z */
+
+  /* --- WCS axis:value pairs (scan up to first of "Count" or "Machine") --- */
+  {
+    const char *cnt    = strstr(p, "Count");
+    const char *mac_kw = strstr(p, "Machine");
+    const char *wcs_end = p + strlen(p);
+    if (cnt    && cnt    < wcs_end) wcs_end = cnt;
+    if (mac_kw && mac_kw < wcs_end) wcs_end = mac_kw;
+
+    static const char wcs_axes[3] = {'X', 'Y', 'Z'};
+    for (const char *q = p; q < wcs_end; q++) {
+      if (q[1] == ':') {
+        for (int i = 0; i < 3; i++) {
+          if (q[0] == wcs_axes[i]) {
+            char *end = NULL;
+            float v = strtof(q + 2, &end);
+            if (end && end != q + 2) {
+              wcs[i] = v;
+              wcs_found |= (uint8_t)(1u << i);
+              q = end - 1; /* outer loop increments */
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /* --- Machine-absolute position (floats after "Machine" keyword) --- */
+  {
+    const char *mac_kw = strstr(p, "Machine");
+    if (mac_kw) {
+      mac_kw += 7; /* skip "Machine" */
+      while (*mac_kw == ' ') mac_kw++;
+      for (int i = 0; i < 3 && *mac_kw; i++) {
+        char *end = NULL;
+        float v = strtof(mac_kw, &end);
+        if (!end || end == mac_kw) break;
+        mach[i] = v;
+        mac_kw = end;
+        while (*mac_kw == ' ') mac_kw++;
+      }
+    }
+  }
+
+  /* --- Bed compensation (single float after "Bed comp" keyword) ---
+   * Reports the Z surface-flatness correction applied at current XY by
+   * Duet mesh compensation.  Stored for future use with LDC1612-based
+   * eddy-current probes to build in-place height/compensation maps. */
+  {
+    const char *bc = strstr(p, "Bed comp");
+    if (bc) {
+      bc += 8; /* skip "Bed comp" */
+      while (*bc == ' ') bc++;
+      char *end = NULL;
+      bed_comp = strtof(bc, &end);
+      (void)bed_comp; /* not yet stored in machine_interface; suppress warning */
+    }
+  }
+
+  if (wcs_found != 0x7u) {
+    LOGD(TAG, "M114: only %d/3 WCS axes parsed from: %.80s",
+         __builtin_popcount(wcs_found), body);
+    return false;
+  }
+
+  memcpy(self->base.wcs_position, wcs,  sizeof(wcs));
+  memcpy(self->base.position,     mach, sizeof(mach));
+  machine_interface_position_updated(&self->base);
+  return true;
+}
+
+/**
+ * @brief Wrap _serial_parse_m114_body and perform all bookkeeping.
+ *        Used on the raw (non-JSON) receive path so each response is
+ *        counted exactly once.
+ */
+static bool _serial_handle_m114_direct(machine_rrf_t *self, const char *body) {
+  bool ok = _serial_parse_m114_body(self, body);
+  if (ok) {
+#ifdef ESP32_HW
+    self->last_response_ms = millis();
+#endif
+    self->consecutive_parse_failures = 0;
+    if (self->unanswered_polls > 0) {
+      self->unanswered_polls--;
+      LOGD(TAG, "Poll backoff: M114 response — unanswered now %u.",
+           (unsigned)self->unanswered_polls);
+    }
+    if (!self->connected && self->base.set_connected) {
+      self->base.set_connected(&self->base, true);
+    }
+  }
+  return ok;
+}
+
 static void _serial_proc_state_resp_impl(machine_interface_t *iself, void *data,
                                          size_t len) {
   machine_rrf_t *self = (machine_rrf_t *)iself;
-  bool was_connected = self->connected;
-  bool parsed_ok = _serial_parse_json_response(self, (const char *)data);
+  const char *line = (const char *)data;
 
-  // On first successful parse after a disconnected period, push full state so
-  // clients get a complete picture immediately.
+  /* Fast-path: raw-mode M114 response ("X:..." or "C: X:...").
+   * Bypasses cJSON entirely; the hand-scanner runs in ~5 µs.
+   * In PanelDue mode the same body arrives inside a JSON wrapper
+   * ({"seq":N,"resp":"X:..."}) and is handled by _serial_parse_json_response
+   * → _serial_parse_m114_body via the seq+resp branch below. */
+  if (len >= 2 && _is_m114_body_start(line)) {
+    _serial_handle_m114_direct(self, line);
+    return;
+  }
+
+  bool was_connected = self->connected;
+  bool parsed_ok = _serial_parse_json_response(self, line);
+
+  /* On first successful parse after a disconnected period, push full state
+   * so clients get a complete picture immediately. */
   if (parsed_ok && !was_connected && self->connected) {
     machine_interface_position_updated(&self->base);
     machine_interface_wcs_updated(&self->base);

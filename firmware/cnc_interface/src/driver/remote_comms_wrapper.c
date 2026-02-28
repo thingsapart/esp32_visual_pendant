@@ -106,8 +106,9 @@ void remote_send_task(void *args) {
         LOGW(TAG, "Failed to send remote message len %d", item.data_len);
       }
 
-      // Delay a little to avoid ESP_ERR_ESP_NOW_NO_MEM.
-      vTaskDelay(5 / portTICK_PERIOD_MS);
+      // 1 ms inter-packet gap is sufficient to let the ESP-NOW driver release
+      // its internal TX buffer; the original 5 ms was unnecessarily generous.
+      vTaskDelay(1 / portTICK_PERIOD_MS);
     }
   }
 

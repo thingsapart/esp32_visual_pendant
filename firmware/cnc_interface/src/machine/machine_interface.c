@@ -418,7 +418,11 @@ void machine_interface_send_gcode(machine_interface_t *self, const char *gcode,
   buf[len] = '\0';
 
 #ifdef ESP32_HW
-  BaseType_t result = xQueueSend(self->gcode_queue, buf, 0);
+  // Use xQueueSendToFront when gcode_queue_priority is set so user-initiated
+  // gcodes (jog, home, probe, …) pre-empt any pending poll M409 commands.
+  BaseType_t result = self->gcode_queue_priority
+      ? xQueueSendToFront(self->gcode_queue, buf, 0)
+      : xQueueSend(self->gcode_queue, buf, 0);
   if (result != pdTRUE) {
     LOGW(TAG, "Failed to add gcode to the queue: %s", gcode);
   }
@@ -441,12 +445,12 @@ void machine_interface_process_gcode_q(machine_interface_t *self) {
 uint32_t machine_interface_next_poll_state(machine_interface_t *self) {
   uint32_t poll_state =
       (self->polli % 19 == 0) ? MACHINE_POSITION_EXT : MACHINE_POSITION;
-  if (self->polli % 3 == 0) poll_state |= JOB_STATUS;
-  if (self->polli % 5 == 0) poll_state |= MESSAGES_AND_DIALOGS;
-  if (self->polli % 7 == 0) poll_state |= PROBES;
-  if (self->polli % 11 == 0) poll_state |= END_STOPS;
-  if (self->polli % 13 == 0) poll_state |= SPINDLE;
-  if (self->polli % 17 == 0) poll_state |= TOOLS;
+  if (self->polli % 2 == 0) poll_state |= JOB_STATUS;           // ~100 ms at 50 ms base
+  if (self->polli % 5 == 0) poll_state |= MESSAGES_AND_DIALOGS; // ~250 ms
+  if (self->polli % 7 == 0) poll_state |= PROBES;               // ~350 ms
+  if (self->polli % 11 == 0) poll_state |= END_STOPS;           // ~550 ms
+  if (self->polli % 3 == 0) poll_state |= SPINDLE;              // ~150 ms at 50 ms base
+  if (self->polli % 17 == 0) poll_state |= TOOLS;               // ~850 ms
   if (self->polli % 9973 == 0) poll_state |= (LIST_MACROS | LIST_FILES);
   return poll_state;
 }

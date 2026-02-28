@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#define LOG_LOCAL_LEVEL D_WARN
 #include "debug.h"
+
 #include "driver/driver_interface.hpp"
 #include "driver/remote_comms_wrapper.h"
 #include "freertos/FreeRTOS.h"
@@ -28,14 +30,14 @@
 static const char *TAG = "hub_main";
 
 // --- Configuration ---
-// Default poll interval for hub loop (ms). Reduced to ~120ms to improve
-// responsiveness while avoiding excessive polling.
-#define HUB_POLL_INTERVAL_MS 120
+// Default poll interval for hub loop (ms).
+// 50 ms gives ~20 Hz position updates and roughly halves command relay latency.
+#define HUB_POLL_INTERVAL_MS 100
 #define FULL_STATE_INTERVAL \
-  20  // Send full state every nth poll (every n * interval secs)
+  48  // Send full state every nth poll (every n * 50 ms ≈ 2.4 s)
 
 // Print a machine state summary every N ticks (N * HUB_POLL_INTERVAL_MS ms)
-#define STATE_LOG_INTERVAL_TICKS 25  // ~5 s
+#define STATE_LOG_INTERVAL_TICKS 60  // ~3 s at 50 ms base interval
 
 // Replace with the display's MAC address
 static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
@@ -702,6 +704,11 @@ void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
 }
 
 void process_message(const uint8_t *data, const size_t data_len) {
+  // Prioritise user-initiated gcodes over background poll M409 commands:
+  // while processing a pendant command any enqueued gcode goes to the
+  // front of the send queue (xQueueSendToFront) so it is transmitted
+  // before the next pending poll.  The flag is cleared at function exit.
+  if (g_machine_base) g_machine_base->gcode_queue_priority = true;
   // Process incoming commands from the display
   uint8_t command_type = data[0];  // get the command type
   switch (command_type) {
@@ -793,6 +800,7 @@ void process_message(const uint8_t *data, const size_t data_len) {
       LOGW(TAG, "Unknown command type: %d", command_type);
       break;
   }
+  if (g_machine_base) g_machine_base->gcode_queue_priority = false;
 }
 
 #ifndef ASYNC_RESPONSE_PROCESSING
@@ -1030,7 +1038,7 @@ void machine_poll_send_task_iter() {
     // Periodically tell clients so they can show a meaningful state instead
     // of stale coordinates.  We piggyback on the keep-alive slot (iter == 0)
     // plus the status slot (iter == 1) of the round-robin to avoid flooding.
-    const unsigned int iter = ctr++ % 10;
+    const unsigned int iter = ctr++ % 5;
     if (iter == 0 || iter == 1) {
       status_msg_t smsg;
       smsg.type   = MSG_TYPE_STATUS;
@@ -1048,7 +1056,7 @@ void machine_poll_send_task_iter() {
     }
     // Periodic diagnostic logging for serial issues (suppress flooding)
     static int diag_tick = 0;
-    if (++diag_tick >= 25) {  // approx every 25 * HUB_POLL_INTERVAL_MS
+    if (++diag_tick >= 50) {  // approx every 50 * HUB_POLL_INTERVAL_MS (~2.5 s)
       diag_tick = 0;
       if (g_machine) {
         if (g_machine->consecutive_parse_failures > 0) {
@@ -1069,25 +1077,27 @@ void machine_poll_send_task_iter() {
   }
 
   // --- Connected path: round-robin push of real machine state ---
-  const unsigned int iter = ctr++ % 10;
-  if (iter == 1) {
-    on_machine_state_change(mach, mach);
-  } else if (iter == 2) {
+  // Compressed from 10 slots to 5; each category is now refreshed every
+  // 5 × 50 ms = 250 ms (was 10 × 120 ms = 1,200 ms).
+  const unsigned int iter = ctr++ % 5;
+  if (iter == 0) {
+    // Slot 0: position (most time-sensitive)
     on_position_change(mach, mach);
-  } else if (iter == 3) {
+  } else if (iter == 1) {
+    // Slot 1: machine status + homed flags
+    on_machine_state_change(mach, mach);
     on_home_change(mach, mach);
-  } else if (iter == 4) {
-    on_wcs_change(mach, mach);
-  } else if (iter == 5) {
+  } else if (iter == 2) {
+    // Slot 2: feed rate + spindle RPM
     on_feed_change(mach, mach);
-  } else if (iter == 6) {
-    on_sensors_change(mach, mach);
-  } else if (iter == 7) {
-    on_dialogs_change(mach, mach);
-  } else if (iter == 8) {
     on_spindles_tools_change(mach, mach);
+  } else if (iter == 3) {
+    // Slot 3: WCS + active dialogs
+    on_wcs_change(mach, mach);
+    on_dialogs_change(mach, mach);
   } else {
-    // Send keep-alive message
+    // Slot 4: keep-alive + sensors (background)
+    on_sensors_change(mach, mach);
     keep_alive_msg_t keep_alive_msg;
     keep_alive_msg.type = MSG_TYPE_KEEP_ALIVE;
     led_status_sending();
