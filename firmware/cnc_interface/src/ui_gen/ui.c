@@ -2600,6 +2600,27 @@ static void destroy_ui_obj_351(lv_obj_t** obj_ptr) {
     *obj_ptr = NULL;
 }
 
+static void create_ui_obj_354(lv_obj_t* parent) {
+    // settings_panel_contaoner: settings_panel_contaoner_355 (obj)
+    lv_obj_t* settings_panel_contaoner_355 = lv_obj_create(parent);
+
+    obj_registry_add("settings_panel_contaoner", settings_panel_contaoner_355);
+    lv_obj_set_style_size(settings_panel_contaoner_355, lv_pct(100), lv_pct(100), 0);
+    // settings_panel: settings_panel_356 (obj)
+    lv_obj_t* settings_panel_356 = lv_settings_create(settings_panel_contaoner_355);
+
+    obj_registry_add("settings_panel", settings_panel_356);
+    lv_obj_set_style_size(settings_panel_356, lv_pct(100), lv_pct(100), 0);
+
+
+}
+
+static void destroy_ui_obj_354(lv_obj_t** obj_ptr) {
+    if (!obj_ptr || !*obj_ptr) return;
+    lv_obj_clean(*obj_ptr);
+    *obj_ptr = NULL;
+}
+
 void create_ui(lv_obj_t* parent) {
     // --- Static Arrays for LVGL properties ---
     static const int32_t s_static_array_13[] = { 44, 44, 44, 44, 44, 44, 44, LV_GRID_TEMPLATE_LAST };
@@ -3444,106 +3465,115 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_add_style(dropdown_72, container_8, 0);
     lv_obj_set_style_size(dropdown_72, lv_pct(100), lv_pct(100), 0);
     lv_obj_set_ext_click_area(dropdown_72, 20);
-    lv_dropdown_set_options(dropdown_72, "Jog/Pos\nProbe\nProbe Wiz");
+    lv_dropdown_set_options(dropdown_72, "Jog/Pos\nProbe\nProbe Wiz\nCamera\nMDI\nJobs/Macros\nStatus\nI/O Panel\nSetings\n");
+    data_binding_add_action(dropdown_72, "View.select", 4, NULL, 0, NULL);
+    data_binding_add_observer("ui.active_tile_index", dropdown_72, 6, &(bool){NULL}, 0, NULL);
 
 
 
-    // unnamed: tileview_73 (tileview)
-    lv_obj_t* tileview_73 = lv_tileview_create(obj_64);
+    // main_tileview: main_tileview_73 (tileview)
+    lv_obj_t* main_tileview_73 = lv_tileview_create(obj_64);
 
-    lv_obj_add_style(tileview_73, container_8, 0);
-    lv_obj_set_style_flex_grow(tileview_73, 1, 0);
-    lv_obj_set_style_size(tileview_73, lv_pct(100), lv_pct(100), 0);
-    lv_obj_set_style_pad_row(tileview_73, 0, 0);
-    lv_obj_set_style_pad_column(tileview_73, 0, 0);
-    lv_obj_set_scrollbar_mode(tileview_73, LV_SCROLLBAR_MODE_ACTIVE);
+    obj_registry_add("main_tileview", main_tileview_73);
+    lv_obj_add_style(main_tileview_73, container_8, 0);
+    lv_obj_set_style_flex_grow(main_tileview_73, 1, 0);
+    lv_obj_set_style_size(main_tileview_73, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_style_pad_row(main_tileview_73, 0, 0);
+    lv_obj_set_style_pad_column(main_tileview_73, 0, 0);
+    lv_obj_set_scrollbar_mode(main_tileview_73, LV_SCROLLBAR_MODE_ACTIVE);
     // unnamed: obj_74 (obj)
-    lv_obj_t* obj_74 = lv_tileview_add_tile(tileview_73, 0, 0, LV_DIR_RIGHT);
+    lv_obj_t* obj_74 = lv_tileview_add_tile(main_tileview_73, 0, 0, LV_DIR_RIGHT);
 
     lv_obj_add_style(obj_74, container_8, 0);
-    deferred_loader_register(tileview_73, obj_74, create_ui_obj_74);
+    deferred_loader_register(main_tileview_73, obj_74, create_ui_obj_74);
 
     // unnamed: obj_169 (obj)
-    lv_obj_t* obj_169 = lv_tileview_add_tile(tileview_73, 1, 0, 3);
+    lv_obj_t* obj_169 = lv_tileview_add_tile(main_tileview_73, 1, 0, 3);
 
     lv_obj_add_style(obj_169, container_8, 0);
-    deferred_loader_register(tileview_73, obj_169, create_ui_obj_169);
+    deferred_loader_register(main_tileview_73, obj_169, create_ui_obj_169);
 
     // unnamed: obj_251 (obj)
-    lv_obj_t* obj_251 = lv_tileview_add_tile(tileview_73, 2, 0, 3);
+    lv_obj_t* obj_251 = lv_tileview_add_tile(main_tileview_73, 2, 0, 3);
 
     lv_obj_add_style(obj_251, container_8, 0);
-    deferred_loader_register(tileview_73, obj_251, create_ui_obj_251);
+    deferred_loader_register(main_tileview_73, obj_251, create_ui_obj_251);
 
     // unnamed: obj_253 (obj)
-    lv_obj_t* obj_253 = lv_tileview_add_tile(tileview_73, 3, 0, 3);
+    lv_obj_t* obj_253 = lv_tileview_add_tile(main_tileview_73, 3, 0, 3);
 
     lv_obj_add_style(obj_253, container_8, 0);
-    deferred_loader_register(tileview_73, obj_253, create_ui_obj_253);
+    deferred_loader_register(main_tileview_73, obj_253, create_ui_obj_253);
 
     // unnamed: obj_255 (obj)
-    lv_obj_t* obj_255 = lv_tileview_add_tile(tileview_73, 4, 0, 3);
+    lv_obj_t* obj_255 = lv_tileview_add_tile(main_tileview_73, 4, 0, 3);
 
     lv_obj_add_style(obj_255, container_8, 0);
-    deferred_loader_register(tileview_73, obj_255, create_ui_obj_255);
+    deferred_loader_register(main_tileview_73, obj_255, create_ui_obj_255);
 
     // unnamed: obj_311 (obj)
-    lv_obj_t* obj_311 = lv_tileview_add_tile(tileview_73, 5, 0, 3);
+    lv_obj_t* obj_311 = lv_tileview_add_tile(main_tileview_73, 5, 0, 3);
 
     lv_obj_add_style(obj_311, container_8, 0);
-    deferred_loader_register(tileview_73, obj_311, create_ui_obj_311);
+    deferred_loader_register(main_tileview_73, obj_311, create_ui_obj_311);
 
     // unnamed: obj_320 (obj)
-    lv_obj_t* obj_320 = lv_tileview_add_tile(tileview_73, 6, 0, 3);
+    lv_obj_t* obj_320 = lv_tileview_add_tile(main_tileview_73, 6, 0, 3);
 
     lv_obj_add_style(obj_320, container_8, 0);
-    deferred_loader_register(tileview_73, obj_320, create_ui_obj_320);
+    deferred_loader_register(main_tileview_73, obj_320, create_ui_obj_320);
 
     // unnamed: obj_351 (obj)
-    lv_obj_t* obj_351 = lv_tileview_add_tile(tileview_73, 7, 0, LV_DIR_LEFT);
+    lv_obj_t* obj_351 = lv_tileview_add_tile(main_tileview_73, 6, 0, 3);
 
     lv_obj_add_style(obj_351, container_8, 0);
-    deferred_loader_register(tileview_73, obj_351, create_ui_obj_351);
+    deferred_loader_register(main_tileview_73, obj_351, create_ui_obj_351);
 
-    deferred_loader_init(tileview_73);
+    // unnamed: obj_354 (obj)
+    lv_obj_t* obj_354 = lv_tileview_add_tile(main_tileview_73, 7, 0, LV_DIR_LEFT);
 
+    lv_obj_add_style(obj_354, container_8, 0);
+    deferred_loader_register(main_tileview_73, obj_354, create_ui_obj_354);
 
-    // disconnected_overlay: disconnected_overlay_354 (obj)
-    lv_obj_t* disconnected_overlay_354 = lv_obj_create(parent);
-
-    obj_registry_add("disconnected_overlay", disconnected_overlay_354);
-    lv_obj_set_style_size(disconnected_overlay_354, lv_pct(100), lv_pct(100), 0);
-    lv_obj_set_style_bg_color(disconnected_overlay_354, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(disconnected_overlay_354, LV_OPA_70, 0);
-    lv_obj_add_flag(disconnected_overlay_354, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(disconnected_overlay_354, LV_OBJ_FLAG_HIDDEN);
-    data_binding_add_observer("machine.connection_status", disconnected_overlay_354, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, (const void*)&(bool){true});
-    // unnamed: label_355 (label)
-    lv_obj_t* label_355 = lv_label_create(disconnected_overlay_354);
-
-    lv_label_set_text(label_355, "Connecting...");
-    lv_obj_set_style_text_font(label_355, font_kode_34_1, 0);
-    lv_obj_center(label_355);
+    deferred_loader_init(main_tileview_73);
 
 
-    // jog_axis_selector: jog_axis_selector_356 (button)
-    lv_obj_t* jog_axis_selector_356 = lv_button_create(parent);
+    // disconnected_overlay: disconnected_overlay_357 (obj)
+    lv_obj_t* disconnected_overlay_357 = lv_obj_create(parent);
 
-    obj_registry_add("jog_axis_selector", jog_axis_selector_356);
-    lv_obj_set_style_size(jog_axis_selector_356, 55, 55, 0);
-    lv_obj_set_style_radius(jog_axis_selector_356, LV_RADIUS_CIRCLE, 0);
-    lv_obj_align(jog_axis_selector_356, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
-    lv_obj_set_style_shadow_width(jog_axis_selector_356, 10, 0);
-    lv_obj_set_style_shadow_opa(jog_axis_selector_356, 150, 0);
-    lv_obj_set_style_shadow_offset_y(jog_axis_selector_356, 4, 0);
-    data_binding_add_action(jog_axis_selector_356, "action.motion.jog.axis_cycle", 0, NULL, 0, NULL);
-    data_binding_add_observer("ui.active_tile_index", jog_axis_selector_356, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)0 }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)1 }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)2 }, .value = { .b_val = true } } }, 3, NULL);
-    // unnamed: label_357 (label)
-    lv_obj_t* label_357 = lv_label_create(jog_axis_selector_356);
+    obj_registry_add("disconnected_overlay", disconnected_overlay_357);
+    lv_obj_set_style_size(disconnected_overlay_357, lv_pct(100), lv_pct(100), 0);
+    lv_obj_set_style_bg_color(disconnected_overlay_357, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(disconnected_overlay_357, LV_OPA_70, 0);
+    lv_obj_add_flag(disconnected_overlay_357, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(disconnected_overlay_357, LV_OBJ_FLAG_HIDDEN);
+    data_binding_add_observer("machine.connection_status", disconnected_overlay_357, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = true } } }, 2, (const void*)&(bool){true});
+    // unnamed: label_358 (label)
+    lv_obj_t* label_358 = lv_label_create(disconnected_overlay_357);
 
-    lv_obj_set_style_text_font(label_357, font_kode_24_3, 0);
-    lv_obj_center(label_357);
-    data_binding_add_observer("motion.jog.axis_selected_str", label_357, 0, "%s", 0, NULL);
+    lv_label_set_text(label_358, "Connecting...");
+    lv_obj_set_style_text_font(label_358, font_kode_34_1, 0);
+    lv_obj_center(label_358);
+
+
+    // jog_axis_selector: jog_axis_selector_359 (button)
+    lv_obj_t* jog_axis_selector_359 = lv_button_create(parent);
+
+    obj_registry_add("jog_axis_selector", jog_axis_selector_359);
+    lv_obj_set_style_size(jog_axis_selector_359, 55, 55, 0);
+    lv_obj_set_style_radius(jog_axis_selector_359, LV_RADIUS_CIRCLE, 0);
+    lv_obj_align(jog_axis_selector_359, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
+    lv_obj_set_style_shadow_width(jog_axis_selector_359, 10, 0);
+    lv_obj_set_style_shadow_opa(jog_axis_selector_359, 150, 0);
+    lv_obj_set_style_shadow_offset_y(jog_axis_selector_359, 4, 0);
+    data_binding_add_action(jog_axis_selector_359, "action.motion.jog.axis_cycle", 0, NULL, 0, NULL);
+    data_binding_add_observer("ui.active_tile_index", jog_axis_selector_359, 2, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)0 }, .value = { .b_val = false } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)1 }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_FLOAT, .as.f_val=(float)2 }, .value = { .b_val = true } } }, 3, NULL);
+    // unnamed: label_360 (label)
+    lv_obj_t* label_360 = lv_label_create(jog_axis_selector_359);
+
+    lv_obj_set_style_text_font(label_360, font_kode_24_3, 0);
+    lv_obj_center(label_360);
+    data_binding_add_observer("motion.jog.axis_selected_str", label_360, 0, "%s", 0, NULL);
 
 
 }

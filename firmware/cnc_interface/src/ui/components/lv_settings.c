@@ -217,7 +217,7 @@ static void _set_row_focused(lv_settings_priv_t *priv, int idx)
     priv->focused_row = idx;
     if (idx >= 0 && idx < priv->row_count) {
         lv_obj_add_state(priv->rows[idx].row, LV_STATE_FOCUSED);
-        lv_obj_scroll_to_el(priv->rows[idx].row, LV_ANIM_ON);
+        lv_obj_scroll_to_view(priv->rows[idx].row, LV_ANIM_ON);
     }
 }
 

@@ -315,6 +315,16 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     return;
   }
 
+  // --- Titlebar ---
+  else if (strcmp(action_name, "View.select") == 0) {
+    // value is a float index (0-based)
+    if (value.type != BINDING_TYPE_FLOAT) return;
+    int tile = (int)(value.as.f_val + 0.001f);
+    lv_obj_t* tileview = obj_registry_get("main_tileview");
+    if (!tileview) { return; }
+    lv_obj_set_tile_id(tileview, 0, tile, LV_ANIM_ON);
+  }
+
   // --- Probe dimension settings (from the probe-mode tab numeric dialogs) ---
   // Each action receives the user-entered float value and:
   //   1. Notifies the bound observable so the label refreshes.
