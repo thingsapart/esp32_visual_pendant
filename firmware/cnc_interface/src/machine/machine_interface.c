@@ -207,7 +207,7 @@ machine_interface_t *machine_interface_init(machine_interface_t *self,
   // Initialize members
   self->procrate_ms = procrate_ms;
   self->poll_state = (uint32_t)MACHINE_POSITION | SPINDLE | PROBES | TOOLS |
-                     MESSAGES_AND_DIALOGS | END_STOPS;
+                     MESSAGES_AND_DIALOGS | END_STOPS | IO_SENSORS;
   self->machine_status = MACHINE_STATUS_UNKNOWN;
   memset(self->axes_homed, 0,
          sizeof(self->axes_homed));  // Initialize all axes to not homed
@@ -234,6 +234,10 @@ machine_interface_t *machine_interface_init(machine_interface_t *self,
   self->num_end_stops = 0;
   self->spindles = NULL;
   self->num_spindles = 0;
+
+  // I/O panel arrays
+  self->io_channels    = NULL;
+  self->num_io_channels = 0;
 
 #ifdef ASYNC_GCODE_SENDING
 #ifdef ESP32_HW
@@ -284,16 +288,23 @@ machine_interface_t *machine_interface_init(machine_interface_t *self,
 
 void machine_interface_deinit(machine_interface_t *self) {
   if (self) {
-    // Free any dynamically allocated resources here (e.g., probes, end_stops,
-    // etc.)
     free(self->probes);
     free(self->end_stops);
     free(self->spindles);
     free_message_box_t(self->message_box);
 
-    // Free the tool string if it was dynamically allocated
     if (self->tool) {
-      free((void *)self->tool);  // Cast away const for freeing
+      free((void *)self->tool);
+    }
+
+    // Free the generalized I/O channel array.
+    // 'name' is always strdup-owned; 'unit' points to static literals (no free).
+    if (self->io_channels) {
+      for (size_t i = 0; i < self->num_io_channels; i++)
+        free(self->io_channels[i].name);
+      free(self->io_channels);
+      self->io_channels    = NULL;
+      self->num_io_channels = 0;
     }
   }
 }
@@ -451,7 +462,8 @@ uint32_t machine_interface_next_poll_state(machine_interface_t *self) {
   if (self->polli % 11 == 0) poll_state |= END_STOPS;           // ~550 ms
   if (self->polli % 3 == 0) poll_state |= SPINDLE;              // ~150 ms at 50 ms base
   if (self->polli % 17 == 0) poll_state |= TOOLS;               // ~850 ms
-  if (self->polli % 9973 == 0) poll_state |= (LIST_MACROS | LIST_FILES);
+  if (self->polli % 23 == 0) poll_state |= IO_SENSORS;          // ~1150 ms
+  if (self->polli % 89 == 0) poll_state |= (LIST_MACROS | LIST_FILES); // ~ 4.5 s
   return poll_state;
 }
 
@@ -767,6 +779,13 @@ void machine_interface_probe(machine_interface_t *self,
                              const char *probe_gcode) {
   if (self->probe) {
     self->probe(self, probe_gcode);
+  }
+}
+
+void machine_interface_set_io_channel(machine_interface_t *self, uint8_t ch_idx,
+                                      float setpoint, bool setpoint_bool) {
+  if (self && self->set_io_channel) {
+    self->set_io_channel(self, ch_idx, setpoint, setpoint_bool);
   }
 }
 

@@ -798,6 +798,26 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
     snprintf(cmd, sizeof(cmd), "M409 K\"spindles[]\" F\"d2,v\"");
     machine_interface_send_gcode(&self->base, cmd, 0);
   }
+  if (poll_state & PROBES) {
+    // Sensor probes (e.g. Z-probe, BLTouch): sensors.probes[]
+    snprintf(cmd, sizeof(cmd), "M409 K\"sensors.probes[]\" F\"v\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+  }
+  if (poll_state & END_STOPS) {
+    snprintf(cmd, sizeof(cmd), "M409 K\"endstops[]\" F\"v\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+  }
+  if (poll_state & IO_SENSORS) {
+    // Fans
+    snprintf(cmd, sizeof(cmd), "M409 K\"fans[]\" F\"v\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+    // Heaters & temperature sensors
+    snprintf(cmd, sizeof(cmd), "M409 K\"heat\" F\"v\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+    // GPIO inputs
+    snprintf(cmd, sizeof(cmd), "M409 K\"sensors.gpIn[]\" F\"v\"");
+    machine_interface_send_gcode(&self->base, cmd, 0);
+  }
   if (poll_state & TOOLS) {
     machine_interface_send_gcode(&self->base,
                                  "M409 K\"state.currentTool\" F\"v\"", 0);
@@ -1198,6 +1218,72 @@ static void _machine_rrf_start_job(machine_interface_t *self,
 
 // --- Common Initializer ---
 
+// --- I/O channel control --------------------------------------------------
+//
+// Translates a set_io_channel() call into the appropriate RRF G-code command
+// based on the channel's role and source_index.
+// -------------------------------------------------------------------------
+
+static void _machine_rrf_set_io_channel(machine_interface_t *base,
+                                         uint8_t ch_idx,
+                                         float setpoint,
+                                         bool setpoint_bool) {
+  if (ch_idx >= base->num_io_channels) return;
+  const mc_io_channel_t *ch = &base->io_channels[ch_idx];
+
+  // Only output channels are writable
+  if (ch->direction != MC_IO_DIR_OUTPUT) return;
+
+  char cmd[64];
+  cmd[0] = '\0';
+
+  if (ch->signal == MC_IO_SIG_ANALOG) {
+    switch (ch->role) {
+      case MC_IO_ROLE_FAN: {
+        int s255 = (int)((setpoint / 100.f) * 255.f);
+        if (setpoint_bool && s255 > 0)
+          snprintf(cmd, sizeof(cmd), "M106 P%d S%d", (int)ch->source_index, s255);
+        else
+          snprintf(cmd, sizeof(cmd), "M107 P%d", (int)ch->source_index);
+        break;
+      }
+      case MC_IO_ROLE_HEATER:
+        if (ch->source_index == 0)
+          snprintf(cmd, sizeof(cmd), "M140 S%.1f",
+                   setpoint_bool ? (double)setpoint : 0.0);
+        else
+          snprintf(cmd, sizeof(cmd), "M104 T%d S%.1f",
+                   (int)(ch->source_index - 1),
+                   setpoint_bool ? (double)setpoint : 0.0);
+        break;
+      case MC_IO_ROLE_SPINDLE:
+        if (setpoint_bool)
+          snprintf(cmd, sizeof(cmd), "M3 S%.0f", (double)setpoint);
+        else
+          snprintf(cmd, sizeof(cmd), "M5");
+        break;
+      default:
+        break;  // No command for other analog types
+    }
+  } else {
+    // Digital output
+    switch (ch->role) {
+      case MC_IO_ROLE_COOLANT:
+        snprintf(cmd, sizeof(cmd), setpoint_bool ? "M8" : "M9");
+        break;
+      default:
+        // Generic GPIO: M42 P{src} S{0|1}
+        snprintf(cmd, sizeof(cmd), "M42 P%d S%d",
+                 (int)ch->source_index, setpoint_bool ? 1 : 0);
+        break;
+    }
+  }
+
+  if (cmd[0] != '\0') {
+    machine_interface_send_gcode(base, cmd, 0);
+  }
+}
+
 static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
                                                uint16_t sleep_ms) {
   machine_interface_init(&self->base, sleep_ms);
@@ -1211,6 +1297,15 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->consecutive_parse_failures = 0;
   self->last_poll_sent_ms = 0;
   self->unanswered_polls = 0;
+
+  // Zero the private I/O state arrays
+  self->rrf_fans          = NULL; self->num_rrf_fans          = 0;
+  self->rrf_heaters       = NULL; self->num_rrf_heaters       = 0;
+  self->rrf_temp_sensors  = NULL; self->num_rrf_temp_sensors  = 0;
+  self->rrf_gpins         = NULL; self->num_rrf_gpins         = 0;
+  self->rrf_gpouts        = NULL; self->num_rrf_gpouts        = 0;
+  self->rrf_endstops      = NULL; self->num_rrf_endstops      = 0;
+  self->rrf_probes_ex     = NULL; self->num_rrf_probes_ex     = 0;
 
   // Assign generic virtual methods
   self->base._send_gcode = _machine_rrf_send_gcode;
@@ -1243,6 +1338,9 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   // RRF-specific actions: run a macro (M98) and start a job/file (M23 + M24)
   self->base.run_macro = _machine_rrf_run_macro;
   self->base.start_job = _machine_rrf_start_job;
+
+  // I/O channel control
+  self->base.set_io_channel = _machine_rrf_set_io_channel;
 
   /* Respect transport-specific poll/backoff policy (RRF serial implements backoff). */
   self->base.should_poll = NULL; /* will be set below for serial/dwc specific */
@@ -1378,6 +1476,14 @@ machine_rrf_t *machine_rrf_init_dwc(machine_rrf_t *self, const char *host,
 
 // --- Destructor ---
 
+// Free a private RRF array where every element has a strdup-owned ->name.
+#define _FREE_RRF_ARRAY(arr, count) do { \
+  if ((arr)) { \
+    for (size_t _fi = 0; _fi < (count); _fi++) free((arr)[_fi].name); \
+    free((arr)); (arr) = NULL; (count) = 0; \
+  } \
+} while (0)
+
 void machine_rrf_deinit(machine_rrf_t *self) {
   if (self) {
     if (self->_deinit_impl) {
@@ -1386,6 +1492,24 @@ void machine_rrf_deinit(machine_rrf_t *self) {
     if (self->input_sel) {
       free((void *)self->input_sel);
     }
+
+    // Free private RRF I/O state arrays
+    _FREE_RRF_ARRAY(self->rrf_fans,    self->num_rrf_fans);
+    _FREE_RRF_ARRAY(self->rrf_heaters, self->num_rrf_heaters);
+    if (self->rrf_temp_sensors) {
+      for (size_t i = 0; i < self->num_rrf_temp_sensors; i++) {
+        free(self->rrf_temp_sensors[i].name);
+        free(self->rrf_temp_sensors[i].type);
+      }
+      free(self->rrf_temp_sensors);
+      self->rrf_temp_sensors    = NULL;
+      self->num_rrf_temp_sensors = 0;
+    }
+    _FREE_RRF_ARRAY(self->rrf_gpins,     self->num_rrf_gpins);
+    _FREE_RRF_ARRAY(self->rrf_gpouts,    self->num_rrf_gpouts);
+    _FREE_RRF_ARRAY(self->rrf_endstops,  self->num_rrf_endstops);
+    _FREE_RRF_ARRAY(self->rrf_probes_ex, self->num_rrf_probes_ex);
+
     machine_interface_deinit(&self->base);
   }
 }
@@ -1395,6 +1519,148 @@ void machine_rrf_destroy(machine_rrf_t *self) {
     machine_rrf_deinit(self);
     free(self);
   }
+}
+
+// --- RRF → mc_io_channel_t conversion -----------------------------------
+//
+// Called after every M409 handler that updates private rrf_* arrays.
+// Converts the full set of private arrays into the flat mc_io_channel_t[]
+// stored on machine_interface_t, so the UI sees controller-agnostic data.
+// -------------------------------------------------------------------------
+
+static mc_io_health_t _rrf_heater_health(rrf_heater_state_t s) {
+  return (s == RRF_HEATER_FAULT) ? MC_IO_HEALTH_FAULT : MC_IO_HEALTH_OK;
+}
+
+static mc_io_health_t _rrf_sensor_health(int8_t s) {
+  return (s == 0) ? MC_IO_HEALTH_OK : MC_IO_HEALTH_FAULT;
+}
+
+static void _rrf_rebuild_io_channels(machine_rrf_t *self) {
+  machine_interface_t *base = &self->base;
+
+  // Free previous channels (name is strdup-owned; unit is a static literal)
+  if (base->io_channels) {
+    for (size_t i = 0; i < base->num_io_channels; i++)
+      free(base->io_channels[i].name);
+    free(base->io_channels);
+    base->io_channels     = NULL;
+    base->num_io_channels = 0;
+  }
+
+  size_t total = self->num_rrf_endstops   + self->num_rrf_probes_ex +
+                 self->num_rrf_gpins      + self->num_rrf_fans      +
+                 self->num_rrf_heaters    + self->num_rrf_temp_sensors;
+  if (total == 0) return;
+
+  mc_io_channel_t *ch = (mc_io_channel_t *)calloc(total, sizeof(mc_io_channel_t));
+  if (!ch) return;
+
+  size_t idx = 0;
+
+  // --- Endstops → DIGITAL INPUT / LIMIT ---
+  for (size_t i = 0; i < self->num_rrf_endstops; i++) {
+    rrf_endstop_t   *ep = &self->rrf_endstops[i];
+    mc_io_channel_t *c  = &ch[idx++];
+    c->name         = strdup(ep->name && ep->name[0] ? ep->name : "Stop");
+    c->direction    = MC_IO_DIR_INPUT;
+    c->signal       = MC_IO_SIG_DIGITAL;
+    c->role         = MC_IO_ROLE_LIMIT;
+    c->health       = MC_IO_HEALTH_OK;
+    c->active       = (ep->low  == RRF_ENDSTOP_TRIGGERED ||
+                       ep->high == RRF_ENDSTOP_TRIGGERED);
+    c->value        = c->active ? 1.0f : 0.0f;
+    c->source_index = (uint8_t)i;
+  }
+
+  // --- Probes → DIGITAL INPUT / PROBE ---
+  for (size_t i = 0; i < self->num_rrf_probes_ex; i++) {
+    rrf_probe_ex_t  *p = &self->rrf_probes_ex[i];
+    mc_io_channel_t *c  = &ch[idx++];
+    c->name         = strdup(p->name && p->name[0] ? p->name : "Probe");
+    c->direction    = MC_IO_DIR_INPUT;
+    c->signal       = MC_IO_SIG_DIGITAL;
+    c->role         = MC_IO_ROLE_PROBE;
+    c->health       = MC_IO_HEALTH_OK;
+    c->active       = (p->state == RRF_PROBE_TRIGGERED);
+    c->value        = p->value;  // normalised ADC reading for display
+    c->source_index = (uint8_t)i;
+  }
+
+  // --- GPIO Inputs → DIGITAL INPUT / GENERIC ---
+  for (size_t i = 0; i < self->num_rrf_gpins; i++) {
+    rrf_gpin_t      *gp = &self->rrf_gpins[i];
+    mc_io_channel_t *c  = &ch[idx++];
+    c->name         = strdup(gp->name && gp->name[0] ? gp->name : "gpIn");
+    c->direction    = MC_IO_DIR_INPUT;
+    c->signal       = MC_IO_SIG_DIGITAL;
+    c->role         = MC_IO_ROLE_GENERIC;
+    c->health       = MC_IO_HEALTH_OK;
+    c->active       = (gp->value >= 0.5f);
+    c->value        = gp->value;
+    c->source_index = (uint8_t)i;
+  }
+
+  // --- Fans → ANALOG OUTPUT / FAN (% scale, actual + requested) ---
+  for (size_t i = 0; i < self->num_rrf_fans; i++) {
+    rrf_fan_t       *f = &self->rrf_fans[i];
+    mc_io_channel_t *c  = &ch[idx++];
+    c->name         = strdup(f->name && f->name[0] ? f->name : "Fan");
+    c->direction    = MC_IO_DIR_OUTPUT;
+    c->signal       = MC_IO_SIG_ANALOG;
+    c->role         = MC_IO_ROLE_FAN;
+    c->health       = MC_IO_HEALTH_OK;
+    c->min_value    = 0.0f;
+    c->max_value    = 100.0f;
+    c->unit         = "%";
+    c->value        = f->actual_speed    * 100.0f;
+    c->setpoint     = f->requested_speed * 100.0f;
+    c->active       = (f->requested_speed > 0.0f);
+    c->setpoint_bool= c->active;
+    c->source_index = (uint8_t)i;
+    // Abuse health to communicate thermostatic mode to the UI
+    if (f->thermostatic) c->health = MC_IO_HEALTH_UNKNOWN; // "auto"
+  }
+
+  // --- Heaters → ANALOG OUTPUT / HEATER (°C scale, feedback + setpoint) ---
+  for (size_t i = 0; i < self->num_rrf_heaters; i++) {
+    rrf_heater_t    *h = &self->rrf_heaters[i];
+    mc_io_channel_t *c  = &ch[idx++];
+    c->name         = strdup(h->name && h->name[0] ? h->name : "Heater");
+    c->direction    = MC_IO_DIR_OUTPUT;
+    c->signal       = MC_IO_SIG_ANALOG;
+    c->role         = MC_IO_ROLE_HEATER;
+    c->health       = _rrf_heater_health(h->state);
+    c->min_value    = 0.0f;
+    c->max_value    = 400.0f;
+    c->unit         = "\xC2\xB0" "C";  // UTF-8 °C
+    c->value        = h->current_temp;  // actual (feedback from sensor)
+    c->setpoint     = h->active_temp;   // commanded setpoint
+    c->active       = (h->state == RRF_HEATER_ACTIVE ||
+                       h->state == RRF_HEATER_STANDBY);
+    c->setpoint_bool= c->active;
+    c->source_index = (uint8_t)i;
+  }
+
+  // --- Temperature sensors → ANALOG INPUT / TEMP_SENSOR ---
+  for (size_t i = 0; i < self->num_rrf_temp_sensors; i++) {
+    rrf_temp_sensor_t *s = &self->rrf_temp_sensors[i];
+    mc_io_channel_t   *c  = &ch[idx++];
+    c->name         = strdup(s->name && s->name[0] ? s->name : "Sensor");
+    c->direction    = MC_IO_DIR_INPUT;
+    c->signal       = MC_IO_SIG_ANALOG;
+    c->role         = MC_IO_ROLE_TEMP_SENSOR;
+    c->health       = _rrf_sensor_health(s->state);
+    c->min_value    = -273.0f;
+    c->max_value    = 500.0f;
+    c->unit         = "\xC2\xB0" "C";
+    c->value        = s->temperature;
+    c->active       = (s->state == 0);
+    c->source_index = (uint8_t)i;
+  }
+
+  base->io_channels     = ch;
+  base->num_io_channels = idx;
 }
 
 // --- JSON Parsing (Common) ---
@@ -1654,6 +1920,230 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
         machine_interface_feed_updated(&self->base);
       }
     }
+    return true;
+  } else if (strcmp(key, "endstops[]") == 0 || strcmp(key, "endstops") == 0) {
+    // Free existing array
+    if (self->rrf_endstops) {
+      for (size_t i = 0; i < self->num_rrf_endstops; i++)
+        free(self->rrf_endstops[i].name);
+      free(self->rrf_endstops);
+    }
+    int n = cJSON_IsArray(result_json) ? cJSON_GetArraySize(result_json) : 0;
+    self->rrf_endstops = (rrf_endstop_t *)calloc(n, sizeof(rrf_endstop_t));
+    self->num_rrf_endstops = 0;
+    if (self->rrf_endstops) {
+      int idx = 0;
+      cJSON *item;
+      cJSON_ArrayForEach(item, result_json) {
+        rrf_endstop_t *ep = &self->rrf_endstops[idx];
+        // 'triggered' = low-end triggered; 'highEnd' = high-end triggered
+        cJSON *trig = cJSON_GetObjectItemCaseSensitive(item, "triggered");
+        cJSON *high = cJSON_GetObjectItemCaseSensitive(item, "highEnd");
+        ep->low  = (cJSON_IsBool(trig) && cJSON_IsTrue(trig))
+                     ? RRF_ENDSTOP_TRIGGERED : RRF_ENDSTOP_NOT_TRIG;
+        ep->high = (cJSON_IsBool(high) && cJSON_IsTrue(high))
+                     ? RRF_ENDSTOP_TRIGGERED : RRF_ENDSTOP_NOT_TRIG;
+        // Use axis index as name e.g. "0", "1", "2"
+        char nbuf[8]; snprintf(nbuf, sizeof(nbuf), "%d", idx);
+        ep->name = strdup(nbuf);
+        idx++;
+      }
+      self->num_rrf_endstops = (size_t)idx;
+    }
+    _rrf_rebuild_io_channels(self);
+    machine_interface_sensors_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "sensors.probes[]") == 0 || strcmp(key, "sensors.probes") == 0) {
+    if (self->rrf_probes_ex) {
+      for (size_t i = 0; i < self->num_rrf_probes_ex; i++)
+        free(self->rrf_probes_ex[i].name);
+      free(self->rrf_probes_ex);
+    }
+    int n = cJSON_IsArray(result_json) ? cJSON_GetArraySize(result_json) : 0;
+    self->rrf_probes_ex = (rrf_probe_ex_t *)calloc(n, sizeof(rrf_probe_ex_t));
+    self->num_rrf_probes_ex = 0;
+    if (self->rrf_probes_ex) {
+      int idx = 0;
+      cJSON *item;
+      cJSON_ArrayForEach(item, result_json) {
+        rrf_probe_ex_t *p = &self->rrf_probes_ex[idx];
+        cJSON *val = cJSON_GetObjectItemCaseSensitive(item, "value");
+        cJSON *st  = cJSON_GetObjectItemCaseSensitive(item, "lastStopHeight");
+        (void)st;
+        // RRF returns "value" as a 1-element array for the last reading
+        if (cJSON_IsArray(val)) {
+          cJSON *v0 = cJSON_GetArrayItem(val, 0);
+          p->value = v0 && cJSON_IsNumber(v0) ? (float)v0->valuedouble : 0.f;
+        } else if (cJSON_IsNumber(val)) {
+          p->value = (float)val->valuedouble;
+        }
+        cJSON *disp = cJSON_GetObjectItemCaseSensitive(item, "disableDuringHoming");
+        p->state = (p->value >= 0.5f) ? RRF_PROBE_TRIGGERED : RRF_PROBE_NOT_TRIG;
+        (void)disp;
+        char nbuf[8]; snprintf(nbuf, sizeof(nbuf), "P%d", idx);
+        p->name = strdup(nbuf);
+        idx++;
+      }
+      self->num_rrf_probes_ex = (size_t)idx;
+    }
+    _rrf_rebuild_io_channels(self);
+    machine_interface_sensors_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "sensors.gpIn[]") == 0 || strcmp(key, "sensors.gpIn") == 0) {
+    if (self->rrf_gpins) {
+      for (size_t i = 0; i < self->num_rrf_gpins; i++)
+        free(self->rrf_gpins[i].name);
+      free(self->rrf_gpins);
+    }
+    int n = cJSON_IsArray(result_json) ? cJSON_GetArraySize(result_json) : 0;
+    self->rrf_gpins = (rrf_gpin_t *)calloc(n, sizeof(rrf_gpin_t));
+    self->num_rrf_gpins = 0;
+    if (self->rrf_gpins) {
+      int idx = 0;
+      cJSON *item;
+      cJSON_ArrayForEach(item, result_json) {
+        rrf_gpin_t *gp = &self->rrf_gpins[idx];
+        cJSON *val = cJSON_GetObjectItemCaseSensitive(item, "value");
+        gp->value = (val && cJSON_IsNumber(val)) ? (float)val->valuedouble : 0.f;
+        cJSON *nm = cJSON_GetObjectItemCaseSensitive(item, "name");
+        if (nm && cJSON_IsString(nm) && nm->valuestring && nm->valuestring[0])
+          gp->name = strdup(nm->valuestring);
+        else {
+          char nbuf[12]; snprintf(nbuf, sizeof(nbuf), "gpIn[%d]", idx);
+          gp->name = strdup(nbuf);
+        }
+        idx++;
+      }
+      self->num_rrf_gpins = (size_t)idx;
+    }
+    _rrf_rebuild_io_channels(self);
+    machine_interface_sensors_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "fans[]") == 0 || strcmp(key, "fans") == 0) {
+    if (self->rrf_fans) {
+      for (size_t i = 0; i < self->num_rrf_fans; i++)
+        free(self->rrf_fans[i].name);
+      free(self->rrf_fans);
+    }
+    int n = cJSON_IsArray(result_json) ? cJSON_GetArraySize(result_json) : 0;
+    self->rrf_fans = (rrf_fan_t *)calloc(n, sizeof(rrf_fan_t));
+    self->num_rrf_fans = 0;
+    if (self->rrf_fans) {
+      int idx = 0;
+      cJSON *item;
+      cJSON_ArrayForEach(item, result_json) {
+        rrf_fan_t *f = &self->rrf_fans[idx];
+        cJSON *av  = cJSON_GetObjectItemCaseSensitive(item, "actualValue");
+        cJSON *rv  = cJSON_GetObjectItemCaseSensitive(item, "requestedValue");
+        cJSON *nm  = cJSON_GetObjectItemCaseSensitive(item, "name");
+        cJSON *rpm_j = cJSON_GetObjectItemCaseSensitive(item, "actualRpm");
+        cJSON *therm = cJSON_GetObjectItemCaseSensitive(item, "thermostatic");
+        f->actual_speed    = (av && cJSON_IsNumber(av))  ? (float)av->valuedouble  : 0.f;
+        f->requested_speed = (rv && cJSON_IsNumber(rv))  ? (float)rv->valuedouble  : 0.f;
+        f->rpm             = (rpm_j && cJSON_IsNumber(rpm_j)) ? (int8_t)rpm_j->valueint : -1;
+        f->thermostatic    = false;
+        if (therm && cJSON_IsObject(therm)) {
+          cJSON *ctrl = cJSON_GetObjectItemCaseSensitive(therm, "control");
+          f->thermostatic = ctrl && cJSON_IsTrue(ctrl);
+        }
+        if (nm && cJSON_IsString(nm) && nm->valuestring && nm->valuestring[0])
+          f->name = strdup(nm->valuestring);
+        else {
+          char nbuf[12]; snprintf(nbuf, sizeof(nbuf), "Fan %d", idx);
+          f->name = strdup(nbuf);
+        }
+        idx++;
+      }
+      self->num_rrf_fans = (size_t)idx;
+    }
+    _rrf_rebuild_io_channels(self);
+    machine_interface_sensors_updated(&self->base);
+    return true;
+  } else if (strcmp(key, "heat") == 0) {
+    // ------------------------------------------------------------------------
+    // heat: { "heaters": [...], "beds": [...], "chambers": [...],
+    //         "extra": [...] }
+    // Each heater: { "active":200, "standby":0, "state":2, "sensor":0 }
+    // sensors are stored separately via heat.coldExtrude / heat.sensors
+    // We read the top-level "heat" result which includes everything.
+    // ------------------------------------------------------------------------
+    if (!cJSON_IsObject(result_json)) return false;
+
+    // --- Heaters ---
+    cJSON *heaters_arr = cJSON_GetObjectItemCaseSensitive(result_json, "heaters");
+    if (cJSON_IsArray(heaters_arr)) {
+      if (self->rrf_heaters) {
+        for (size_t i = 0; i < self->num_rrf_heaters; i++)
+          free(self->rrf_heaters[i].name);
+        free(self->rrf_heaters);
+      }
+      int n = cJSON_GetArraySize(heaters_arr);
+      self->rrf_heaters = (rrf_heater_t *)calloc(n, sizeof(rrf_heater_t));
+      self->num_rrf_heaters = 0;
+      if (self->rrf_heaters) {
+        int idx = 0;
+        cJSON *h;
+        cJSON_ArrayForEach(h, heaters_arr) {
+          rrf_heater_t *rh = &self->rrf_heaters[idx];
+          cJSON *act = cJSON_GetObjectItemCaseSensitive(h, "active");
+          cJSON *stby= cJSON_GetObjectItemCaseSensitive(h, "standby");
+          cJSON *st  = cJSON_GetObjectItemCaseSensitive(h, "state");
+          cJSON *cur = cJSON_GetObjectItemCaseSensitive(h, "current");
+          rh->active_temp  = (act  && cJSON_IsNumber(act))  ? (float)act->valuedouble  : 0.f;
+          rh->standby_temp = (stby && cJSON_IsNumber(stby)) ? (float)stby->valuedouble : 0.f;
+          rh->state  = (rrf_heater_state_t)((st && cJSON_IsNumber(st)) ? st->valueint : 0);
+          rh->current_temp = (cur && cJSON_IsNumber(cur)) ? (float)cur->valuedouble : -273.f;
+          char nbuf[16]; snprintf(nbuf, sizeof(nbuf), "H%d", idx);
+          rh->name = strdup(nbuf);
+          idx++;
+        }
+        self->num_rrf_heaters = (size_t)idx;
+      }
+    }
+
+    // --- Temperature sensors ---
+    cJSON *sens_arr = cJSON_GetObjectItemCaseSensitive(result_json, "sensors");
+    if (!cJSON_IsArray(sens_arr)) {
+      // RRF 3.3+ wraps under a sensors sub-object key
+      // Fallback: not available in this response depth
+    } else {
+      if (self->rrf_temp_sensors) {
+        for (size_t i = 0; i < self->num_rrf_temp_sensors; i++) {
+          free(self->rrf_temp_sensors[i].name);
+          free(self->rrf_temp_sensors[i].type);
+        }
+        free(self->rrf_temp_sensors);
+      }
+      int n = cJSON_GetArraySize(sens_arr);
+      self->rrf_temp_sensors = (rrf_temp_sensor_t *)calloc(n, sizeof(rrf_temp_sensor_t));
+      self->num_rrf_temp_sensors = 0;
+      if (self->rrf_temp_sensors) {
+        int idx = 0;
+        cJSON *s;
+        cJSON_ArrayForEach(s, sens_arr) {
+          rrf_temp_sensor_t *rs = &self->rrf_temp_sensors[idx];
+          cJSON *nm  = cJSON_GetObjectItemCaseSensitive(s, "name");
+          cJSON *tmp = cJSON_GetObjectItemCaseSensitive(s, "lastReading");
+          cJSON *tp  = cJSON_GetObjectItemCaseSensitive(s, "type");
+          cJSON *st  = cJSON_GetObjectItemCaseSensitive(s, "state");
+          rs->temperature = (tmp && cJSON_IsNumber(tmp)) ? (float)tmp->valuedouble : -273.f;
+          rs->state = (st && cJSON_IsNumber(st)) ? (int8_t)st->valueint : 0;
+          if (nm && cJSON_IsString(nm) && nm->valuestring && nm->valuestring[0])
+            rs->name = strdup(nm->valuestring);
+          else {
+            char nbuf[12]; snprintf(nbuf, sizeof(nbuf), "S%d", idx);
+            rs->name = strdup(nbuf);
+          }
+          rs->type = (tp && cJSON_IsString(tp) && tp->valuestring)
+                       ? strdup(tp->valuestring) : strdup("?");
+          idx++;
+        }
+        self->num_rrf_temp_sensors = (size_t)idx;
+      }
+    }
+
+    _rrf_rebuild_io_channels(self);
+    machine_interface_sensors_updated(&self->base);
     return true;
   }
 

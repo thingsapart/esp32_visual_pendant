@@ -62,6 +62,7 @@ typedef enum {
   MSG_SUB_TYPE_MESSAGE_BOX,
   MSG_SUB_TYPE_FILE_LIST,
   MSG_SUB_TYPE_LOG_MESSAGE,
+  MSG_SUB_TYPE_IO_CHANNELS,  ///< Serialised mc_io_channel_t[] (hub → pendant)
 } binary_payload_sub_type_t;
 
 typedef struct {
@@ -177,6 +178,8 @@ typedef enum {
   CMD_TYPE_MODAL_INT,
   CMD_TYPE_MODAL_FLOAT,
   CMD_TYPE_MODAL_STR,
+  // I/O control (Pendant -> Hub)
+  CMD_TYPE_SET_IO_CHANNEL,   ///< Set analog/digital output channel
 } remote_command_type_t;
 
 typedef struct {
@@ -288,6 +291,36 @@ typedef struct {
   uint16_t len;
   char value[];  // Flexible array member
 } modal_str_cmd_t;
+
+typedef struct {
+  uint8_t type;          // CMD_TYPE_SET_IO_CHANNEL
+  uint8_t  ch_idx;       // index into io_channels[]
+  float    setpoint;     // analog setpoint (ignored for pure digital)
+  uint8_t  setpoint_bool;// digital setpoint (ignored for pure analog)
+} __attribute__((packed)) set_io_channel_cmd_t;
+
+/// Wire representation of a single mc_io_channel_t for hub→pendant transport.
+/// Strings are truncated to fit fixed-size fields.
+typedef struct {
+  uint8_t  source_index;
+  uint8_t  direction;      // mc_io_direction_t
+  uint8_t  signal;         // mc_io_signal_t
+  uint8_t  role;           // mc_io_role_t
+  uint8_t  health;         // mc_io_health_t
+  float    value;
+  float    setpoint;
+  uint8_t  active;
+  uint8_t  setpoint_bool;
+  float    min_value;
+  float    max_value;
+  char     name[24];
+  char     unit[8];
+} __attribute__((packed)) io_channel_wire_t;
+
+/// Header prepended to MSG_SUB_TYPE_IO_CHANNELS payload.
+typedef struct {
+  uint16_t count;          // number of io_channel_wire_t entries that follow
+} __attribute__((packed)) io_channels_payload_hdr_t;
 
 typedef struct {
   uint8_t type;

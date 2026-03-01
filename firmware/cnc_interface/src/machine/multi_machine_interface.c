@@ -473,6 +473,33 @@ static void _mach_copy_end_stops(multi_machine_interface_t *mm,
   MACH_ARRCPY(end_stops);
 }
 
+static void _mach_copy_io_channels(multi_machine_interface_t *mm,
+                                    machine_interface_t *mach) {
+  // Free existing deep-copied channels
+  if (mm->base.io_channels) {
+    for (size_t i = 0; i < mm->base.num_io_channels; i++)
+      free(mm->base.io_channels[i].name);
+    free(mm->base.io_channels);
+    mm->base.io_channels     = NULL;
+    mm->base.num_io_channels = 0;
+  }
+  if (!mach->io_channels || mach->num_io_channels == 0) return;
+  mc_io_channel_t *dst =
+      (mc_io_channel_t *)calloc(mach->num_io_channels, sizeof(mc_io_channel_t));
+  if (!dst) return;
+  memcpy(dst, mach->io_channels,
+         mach->num_io_channels * sizeof(mc_io_channel_t));
+  // Deep-copy heap-allocated name strings
+  for (size_t i = 0; i < mach->num_io_channels; i++) {
+    dst[i].name = mach->io_channels[i].name
+                      ? strdup(mach->io_channels[i].name)
+                      : NULL;
+    // unit is a static literal — shallow copy is safe
+  }
+  mm->base.io_channels     = dst;
+  mm->base.num_io_channels = mach->num_io_channels;
+}
+
 static void _mach_copy_spindles(multi_machine_interface_t *mm,
                                 machine_interface_t *mach) {
   MACH_ARRCPY(spindles);
@@ -523,6 +550,7 @@ static void _mach_copy_state(multi_machine_interface_t *mm,
   MACH_ARRCPY(probes);
   MACH_ARRCPY(end_stops);
   MACH_ARRCPY(spindles);
+  _mach_copy_io_channels(mm, mach);
   _mach_copy_message_box(mm, mach);
 }
 
@@ -571,6 +599,7 @@ void _mach_cb_sensors(machine_interface_t *mach, void *user_data) {
   if (!IS_ACTIVE_MACHINE(self, mach)) return;
   _mach_copy_probes(self, mach);
   _mach_copy_end_stops(self, mach);
+  _mach_copy_io_channels(self, mach);
   machine_interface_sensors_updated(&self->base);
 }
 

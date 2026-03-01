@@ -26,6 +26,7 @@ static const char *TAG = "ESP32_CNC_HMI";
 #include "tasks/machine_send_task.h"
 #include "tasks/machine_task.h"
 #include "tasks/jog_accumulator_task.h"
+#include "config/app_settings.h"
 
 extern void ram_usage();
 
@@ -164,6 +165,13 @@ int rrf_uart_num = -1;
 #endif
 
 bool machine_init() {
+  // Initialise and load persisted user-editable settings first so that later
+  // subsystems (jog_accumulator, etc.) pick up NVS values.
+  app_settings_init();
+  if (!app_settings_load()) {
+    LOGW(TAG, "app_settings: one or more groups fell back to defaults");
+  }
+
   if (!multi_machine_interface_init(&machine)) {
     LOGE(TAG, "Failed to create multi machine interface");
     return false;

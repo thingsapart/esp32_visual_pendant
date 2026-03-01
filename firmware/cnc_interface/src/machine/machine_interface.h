@@ -34,6 +34,7 @@ typedef enum {
   JOB_STATUS = (1 << 8),
   LIST_FILES = (1 << 9),
   LIST_MACROS = (1 << 10),
+  IO_SENSORS = (1 << 11),   ///< Fans, heaters, temperature sensors, GPIO in/out, endstops
 } poll_state_t;
 
 typedef enum {
@@ -80,6 +81,104 @@ typedef struct {
   int min_rpm;
   int max_rpm;
 } spindle_t;
+
+// ---------------------------------------------------------------------------
+// Generalized I/O Channel Model
+//
+// Every CNC controller — RRF, GRBL, FlexiHAL, Masso, Mach4 — can be mapped
+// to one of four (direction × signal) combinations:
+//
+//   MC_IO_DIR_INPUT  + MC_IO_SIG_DIGITAL  → limit switches, probes, e-stop,
+//                                           door, gpin, cycle-start …
+//   MC_IO_DIR_INPUT  + MC_IO_SIG_ANALOG   → temperature sensors, 0-10 V
+//                                           position/speed feedback …
+//   MC_IO_DIR_OUTPUT + MC_IO_SIG_DIGITAL  → coolant relay, ATC solenoid,
+//                                           status LED, gpout …
+//   MC_IO_DIR_OUTPUT + MC_IO_SIG_ANALOG   → fan PWM, heater setpoint, spindle
+//                                           speed (VFD 0-10 V), laser power …
+//
+// The 'role' field refines the classification for icons / grouping.
+// RRF-specific intermediate state lives in machine_rrf.h / machine_rrf.c.
+// ---------------------------------------------------------------------------
+
+///< Signal direction
+typedef enum {
+  MC_IO_DIR_INPUT  = 0,  ///< Read-only input (sensor, switch, encoder)
+  MC_IO_DIR_OUTPUT = 1,  ///< Writable output (relay, PWM, analog command)
+} mc_io_direction_t;
+
+///< Signal value type
+typedef enum {
+  MC_IO_SIG_DIGITAL = 0,  ///< Binary on/off; 'value' is 0.0 or 1.0
+  MC_IO_SIG_ANALOG  = 1,  ///< Scalar float with physical range and unit
+} mc_io_signal_t;
+
+///< Functional role — what does this channel do?
+///< Controllers map their native types here; UI uses it for icons / grouping.
+typedef enum {
+  MC_IO_ROLE_GENERIC      =  0,  ///< Unassigned / user GPIO
+  MC_IO_ROLE_LIMIT        =  1,  ///< Endstop / limit switch
+  MC_IO_ROLE_PROBE        =  2,  ///< Work or tool probe, touch plate
+  MC_IO_ROLE_ESTOP        =  3,  ///< Emergency stop
+  MC_IO_ROLE_FEED_HOLD    =  4,  ///< Feed hold / pause
+  MC_IO_ROLE_CYCLE_START  =  5,  ///< Cycle start / resume
+  MC_IO_ROLE_DOOR         =  6,  ///< Machine guard / safety door
+  MC_IO_ROLE_COOLANT      =  7,  ///< Coolant (flood, mist, air blast)
+  MC_IO_ROLE_FAN          =  8,  ///< Cooling or exhaust fan (PWM)
+  MC_IO_ROLE_HEATER       =  9,  ///< Thermal heater with PID control
+  MC_IO_ROLE_TEMP_SENSOR  = 10,  ///< Temperature measurement (read-only)
+  MC_IO_ROLE_SPINDLE      = 11,  ///< Spindle speed or enable
+  MC_IO_ROLE_STATUS_LED   = 12,  ///< Status indicator light
+  MC_IO_ROLE_TOOL_CHANGER = 13,  ///< ATC / tool changer signal
+} mc_io_role_t;
+
+///< Channel health / fault indicator
+typedef enum {
+  MC_IO_HEALTH_OK      = 0,
+  MC_IO_HEALTH_FAULT   = 1,
+  MC_IO_HEALTH_UNKNOWN = 2,
+} mc_io_health_t;
+
+///< Universal I/O channel — controller-independent representation.
+///
+/// RRF mapping (populated by machine_rrf.c → _rrf_rebuild_io_channels):
+///   fans[]           → ANALOG  OUTPUT  FAN         (setpoint=%,  value=actual%)
+///   heat.heaters[]   → ANALOG  OUTPUT  HEATER      (setpoint=°C, value=actual°C)
+///   heat.sensors[]   → ANALOG  INPUT   TEMP_SENSOR (value=°C)
+///   sensors.gpIn[]   → DIGITAL INPUT   GENERIC
+///   endstops[]       → DIGITAL INPUT   LIMIT
+///   sensors.probes[] → DIGITAL INPUT   PROBE
+///
+/// GRBL mapping: limit pins→DIGITAL INPUT LIMIT, probe→DIGITAL INPUT PROBE,
+///   spindle PWM→ANALOG OUTPUT SPINDLE, M8/M9→DIGITAL OUTPUT COOLANT.
+///
+/// Masso mapping: digital inputs (24 pins)→DIGITAL INPUT/role,
+///   digital outputs→DIGITAL OUTPUT/role, analog I/O→ANALOG INPUT|OUTPUT.
+typedef struct {
+  char             *name;          ///< Human-readable label (always non-NULL)
+  mc_io_direction_t direction;
+  mc_io_signal_t    signal;
+  mc_io_role_t      role;
+  mc_io_health_t    health;
+
+  // --- Current reading ---
+  float  value;       ///< DIGITAL: 0.0/1.0 │ ANALOG INPUT: physical read
+                      ///< ANALOG OUTPUT: actual feedback (else == setpoint)
+  bool   active;      ///< true when input is triggered or output is on
+
+  // --- ANALOG range metadata ---
+  float       min_value;   ///< Minimum physical value
+  float       max_value;   ///< Maximum physical value
+  const char *unit;        ///< "%", "°C", "RPM", "V" … static string, never freed
+
+  // --- OUTPUT: commanded value ---
+  float  setpoint;         ///< Requested analog output value (OUTPUT only)
+  bool   setpoint_bool;    ///< Requested state (DIGITAL OUTPUT only)
+
+  // --- Implementation hint ---
+  uint8_t source_index;    ///< Index in the controller's native array;
+                           ///<   used to generate the correct G-code command
+} mc_io_channel_t;
 
 typedef enum {
   MESSAGE_INFO = 0,         // Non-blocking info.
@@ -169,6 +268,13 @@ typedef struct machine_interface_t {
   size_t num_end_stops;
   spindle_t *spindles;
   size_t num_spindles;
+
+  // --- Generalized I/O channels (controller-independent) ---
+  // Populated by the active driver (e.g. _rrf_rebuild_io_channels in machine_rrf.c)
+  // whenever IO_SENSORS data arrives. Read by the UI via lv_cnc_io_panel.
+  mc_io_channel_t *io_channels;       ///< Flat array of all I/O channels
+  size_t           num_io_channels;
+
   message_box_t *message_box;
 
 #ifdef ASYNC_GCODE_SENDING
@@ -247,6 +353,12 @@ typedef struct machine_interface_t {
   void (*modal_str)(machine_interface_t *self, const char *val, int modal_id);
   void (*probe)(machine_interface_t *self, const char *probe_gcode);
   void (*set_connected)(machine_interface_t *self, bool connected);
+  /// Set the value / state of an I/O output channel.
+  /// @param ch_idx       Index into self->io_channels[]
+  /// @param setpoint     Analog target value (0–100 or physical unit)
+  /// @param setpoint_bool Digital on/off state (for digital outputs)
+  void (*set_io_channel)(machine_interface_t *self, uint8_t ch_idx,
+                         float setpoint, bool setpoint_bool);
 } machine_interface_t;
 
 machine_interface_t *machine_interface_create(uint16_t procrate_ms);
@@ -306,6 +418,8 @@ void machine_interface_modal_str(machine_interface_t *self, const char *val,
                                  int modal_id);
 void machine_interface_probe(machine_interface_t *self,
                              const char *probe_gcode);
+void machine_interface_set_io_channel(machine_interface_t *self, uint8_t ch_idx,
+                                      float setpoint, bool setpoint_bool);
 void machine_interface_process_machine_state_response(machine_interface_t *self,
                                                       void *data, size_t len);
 

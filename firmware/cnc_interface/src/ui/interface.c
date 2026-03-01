@@ -11,6 +11,7 @@
 #include "ui/ui_setup_dwc.h"
 #include "ui/components/mos_machine_handler.h"
 #include "ui/components/lv_cam_positioning.h"
+#include "ui/components/lv_cnc_io_panel.h"
 #include "machine/machine_interface.h"
 
 static const char *TAG = "UI_INTERFACE";
@@ -107,6 +108,10 @@ static void on_connected_change(machine_interface_t *machine, void *user_data) {
   ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_CONNECTION;
 }
 
+static void on_sensors_change(machine_interface_t *machine, void *user_data) {
+  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_IO_SENSORS;
+}
+
 static void on_current_move_axis_change(machine_interface_t *machine,
                                         void *user_data) {
   ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_JOG_STATE;
@@ -163,6 +168,7 @@ static const char *machine_status_to_string(machine_status_t status) {
  */
 static void tileview_event_handler(lv_event_t * e) {
     lv_obj_t * tileview = lv_event_get_target(e);
+    interface_t *iface = (interface_t *)lv_event_get_user_data(e);
     if (tileview) {
         lv_obj_t *o = lv_tileview_get_tile_active(tileview);
         float x = lv_obj_get_x(o), y = lv_obj_get_y(o);
@@ -349,6 +355,8 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
                                            on_dialogs_change);
   machine_interface_add_connected_changed_cb(machine, interface,
                                              on_connected_change);
+  machine_interface_add_sensors_changed_cb(machine, interface,
+                                            on_sensors_change);
   machine_interface_add_current_move_axis_changed_cb(
       machine, interface, on_current_move_axis_change);
   machine_interface_add_files_changed_cb(machine, "gcodes", interface,
@@ -360,7 +368,7 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   // Find the main tileview and attach an event handler to track its state
   lv_obj_t* tileview = obj_registry_get("main_tileview");
   if (tileview) {
-      lv_obj_add_event_cb(tileview, tileview_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+      lv_obj_add_event_cb(tileview, tileview_event_handler, LV_EVENT_VALUE_CHANGED, interface);
   }
 
   // Find the disconnected overlay and attach long-press handler to bypass connection screen
@@ -701,6 +709,15 @@ void interface_tick(interface_t *interface) {
   if (flags_to_process & UI_DIRTY_LOG_MESSAGE) {
     if (interface->log_message_buf[0] != '\0') {
       _show_toast(interface, interface->log_message_buf);
+    }
+  }
+
+  if (flags_to_process & UI_DIRTY_IO_SENSORS) {
+    lv_obj_t *io_panel = obj_registry_get("io_panel");
+    LOGI(TAG, "IO panel: %p", io_panel);
+    if (io_panel && lv_obj_is_valid(io_panel)) {
+      LOGI(TAG, "Refreshing IO panel: %p", io_panel);
+      lv_cnc_io_panel_refresh(io_panel, interface);
     }
   }
 

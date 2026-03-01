@@ -33,6 +33,7 @@ typedef enum {
   UI_DIRTY_FILES_MACROS = (1 << 11),
   UI_DIRTY_LOG_MESSAGE  = (1 << 12),  // Verbatim message from hub to toast
   UI_DIRTY_MDI_LOG      = (1 << 13),  // New MDI log content / busy-state change
+  UI_DIRTY_IO_SENSORS   = (1 << 14),  // Fans, heaters, sensors, endstops, GPIO
   UI_DIRTY_ALL = 0xFFFFFFFF,
 } ui_dirty_flags_t;
 

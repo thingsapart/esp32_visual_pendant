@@ -387,6 +387,19 @@ void _machine_interface_remote_set_connected(machine_interface_t *self,
   machine_interface_connected_updated(self);
 }
 
+static void _machine_interface_remote_set_io_channel(machine_interface_t *self,
+                                                      uint8_t ch_idx,
+                                                      float setpoint,
+                                                      bool setpoint_bool) {
+  set_io_channel_cmd_t cmd;
+  cmd.type          = CMD_TYPE_SET_IO_CHANNEL;
+  cmd.ch_idx        = ch_idx;
+  cmd.setpoint      = setpoint;
+  cmd.setpoint_bool = setpoint_bool ? 1 : 0;
+  _send_command((machine_interface_remote_t *)self, (uint8_t *)&cmd,
+                sizeof(cmd));
+}
+
 // --- Constructor/Destructor ---
 
 machine_interface_remote_t *machine_interface_remote_create(
@@ -457,6 +470,7 @@ machine_interface_remote_t *machine_interface_remote_init(
   self->base._update_machine_state =
       _machine_interface_remote_update_machine_state;
   self->base.debug_print = NULL;
+  self->base.set_io_channel = _machine_interface_remote_set_io_channel;
 
   // Pre-initialize the two standard filelist slots so that incoming
   // MSG_SUB_TYPE_FILE_LIST payloads are always matched to a named slot,
@@ -1418,6 +1432,69 @@ static void process_binary_payload(machine_interface_t *self, uint8_t sub_type,
     case MSG_SUB_TYPE_FILE_LIST:
       process_binary_msg_file_list(mach, data, size);
       break;
+    case MSG_SUB_TYPE_IO_CHANNELS: {
+      if (size < sizeof(io_channels_payload_hdr_t)) break;
+      const io_channels_payload_hdr_t *hdr = (const io_channels_payload_hdr_t *)data;
+      size_t expected = sizeof(io_channels_payload_hdr_t) +
+                        hdr->count * sizeof(io_channel_wire_t);
+      if (size < expected) {
+        LOGW(TAG, "MSG_SUB_TYPE_IO_CHANNELS payload too small (%zu < %zu)", size, expected);
+        break;
+      }
+      // Free old channels
+      if (mach->base.io_channels) {
+        for (size_t i = 0; i < mach->base.num_io_channels; i++)
+          free(mach->base.io_channels[i].name);
+        free(mach->base.io_channels);
+        mach->base.io_channels     = NULL;
+        mach->base.num_io_channels = 0;
+      }
+      if (hdr->count == 0) {
+        machine_interface_sensors_updated(&mach->base);
+        break;
+      }
+      mc_io_channel_t *chs = (mc_io_channel_t *)calloc(hdr->count, sizeof(mc_io_channel_t));
+      if (!chs) { LOGE(TAG, "OOM io_channels"); break; }
+      const io_channel_wire_t *wire =
+          (const io_channel_wire_t *)(data + sizeof(io_channels_payload_hdr_t));
+      for (uint16_t i = 0; i < hdr->count; i++) {
+        chs[i].source_index  = wire[i].source_index;
+        chs[i].direction     = (mc_io_direction_t)wire[i].direction;
+        chs[i].signal        = (mc_io_signal_t)wire[i].signal;
+        chs[i].role          = (mc_io_role_t)wire[i].role;
+        chs[i].health        = (mc_io_health_t)wire[i].health;
+        chs[i].value         = wire[i].value;
+        chs[i].setpoint      = wire[i].setpoint;
+        chs[i].active        = (bool)wire[i].active;
+        chs[i].setpoint_bool = (bool)wire[i].setpoint_bool;
+        chs[i].min_value     = wire[i].min_value;
+        chs[i].max_value     = wire[i].max_value;
+        char name_buf[sizeof(wire[i].name) + 1];
+        memcpy(name_buf, wire[i].name, sizeof(wire[i].name));
+        name_buf[sizeof(wire[i].name)] = '\0';
+        chs[i].name = strdup(name_buf);
+        char unit_buf[sizeof(wire[i].unit) + 1];
+        memcpy(unit_buf, wire[i].unit, sizeof(wire[i].unit));
+        unit_buf[sizeof(wire[i].unit)] = '\0';
+        // unit field on mc_io_channel_t is a const char* (usually a literal);
+        // we store the unit string directly — use a permanent suffix approach.
+        // For simplicity, map known UTF-8 literals; fallback to empty string.
+        if (name_buf[0] == '\0' || unit_buf[0] == '\0') {
+          chs[i].unit = "";
+        } else if (strcmp(unit_buf, "%") == 0) {
+          chs[i].unit = "%";
+        } else if (strncmp(unit_buf, "\xC2\xB0", 2) == 0) {
+          chs[i].unit = "\xC2\xB0" "C";
+        } else {
+          chs[i].unit = "";  // unknown unit — safe fallback
+        }
+      }
+      mach->base.io_channels     = chs;
+      mach->base.num_io_channels = hdr->count;
+      machine_interface_sensors_updated(&mach->base);
+      LOGI(TAG, "Received io_channels: %u channel(s)", hdr->count);
+      break;
+    }
     case MSG_SUB_TYPE_LOG_MESSAGE: {
       // Fragmented message has been reassembled into data (NUL-terminated).
       const char *buf = (const char *)data;

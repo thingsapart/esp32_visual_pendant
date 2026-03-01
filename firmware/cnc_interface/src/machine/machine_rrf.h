@@ -7,6 +7,78 @@
 #include "driver/dwc_http_client_wrapper.h"  // For DWC mode
 #include "machine_interface.h"
 
+// ---------------------------------------------------------------------------
+// RRF-private I/O types
+// These are implementation details of the RRF driver.  They are NOT exposed
+// via machine_interface_t.  After each M409 batch the driver converts them
+// into the generalized mc_io_channel_t[] via _rrf_rebuild_io_channels().
+// ---------------------------------------------------------------------------
+
+typedef struct {
+  char  *name;
+  float  actual_speed;    ///< Actual PWM 0.0–1.0
+  float  requested_speed; ///< Requested PWM 0.0–1.0
+  bool   thermostatic;    ///< Managed by temperature controller
+  int8_t rpm;             ///< Actual RPM from tacho, or -1
+} rrf_fan_t;
+
+typedef enum {
+  RRF_HEATER_OFF     = 0,
+  RRF_HEATER_STANDBY = 1,
+  RRF_HEATER_ACTIVE  = 2,
+  RRF_HEATER_FAULT   = 3,
+  RRF_HEATER_TUNING  = 4,
+} rrf_heater_state_t;
+
+typedef struct {
+  char              *name;
+  float              current_temp;   ///< Current °C (from associated sensor)
+  float              active_temp;    ///< Active setpoint °C
+  float              standby_temp;   ///< Standby setpoint °C
+  rrf_heater_state_t state;
+} rrf_heater_t;
+
+typedef struct {
+  char  *name;        ///< Sensor name (from M308 A"name")
+  float  temperature; ///< Latest reading °C
+  char  *type;        ///< "thermistor", "pt1000", … (strdup-owned)
+  int8_t state;       ///< 0=ok, 1=shortcircuit, 2=opencircuit, …
+} rrf_temp_sensor_t;
+
+typedef struct {
+  char  *name;
+  float  value; ///< Normalised 0.0–1.0 (1.0 = high/triggered)
+} rrf_gpin_t;
+
+typedef struct {
+  char  *name;
+  float  pwm; ///< Current PWM duty 0.0–1.0
+} rrf_gpout_t;
+
+typedef enum {
+  RRF_ENDSTOP_NONE      = 0,
+  RRF_ENDSTOP_TRIGGERED = 1,
+  RRF_ENDSTOP_NOT_TRIG  = 2,
+} rrf_endstop_state_t;
+
+typedef struct {
+  char               *name;
+  rrf_endstop_state_t high; ///< High-end (max travel) switch state
+  rrf_endstop_state_t low;  ///< Low-end  (min travel) switch state
+} rrf_endstop_t;
+
+typedef enum {
+  RRF_PROBE_NO_READING = 0,
+  RRF_PROBE_NOT_TRIG   = 1,
+  RRF_PROBE_TRIGGERED  = 2,
+} rrf_probe_state_t;
+
+typedef struct {
+  char             *name;
+  float             value; ///< Normalised ADC value 0.0–1.0
+  rrf_probe_state_t state;
+} rrf_probe_ex_t;
+
 #ifdef MACHINE_POLL_INTERVAL
 #define READ_TIMEOUT_MS (MACHINE_POLL_INTERVAL * 5 / 4)
 #else
@@ -68,6 +140,15 @@ typedef struct machine_rrf_t {
   // --- Connection health tracking ---
   uint32_t last_response_ms;          // millis() timestamp of last successful JSON parse
   int      consecutive_parse_failures; // count of consecutive parse failures
+
+  // --- RRF private I/O state (converted to mc_io_channel_t[] after each batch) ---
+  rrf_fan_t         *rrf_fans;         size_t num_rrf_fans;
+  rrf_heater_t      *rrf_heaters;      size_t num_rrf_heaters;
+  rrf_temp_sensor_t *rrf_temp_sensors; size_t num_rrf_temp_sensors;
+  rrf_gpin_t        *rrf_gpins;        size_t num_rrf_gpins;
+  rrf_gpout_t       *rrf_gpouts;       size_t num_rrf_gpouts;
+  rrf_endstop_t     *rrf_endstops;     size_t num_rrf_endstops;
+  rrf_probe_ex_t    *rrf_probes_ex;    size_t num_rrf_probes_ex;
 
   // --- Poll back-off tracking (serial only) ---
   // Throttles M409 spam when the controller is busy (e.g. executing a probe

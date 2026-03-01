@@ -8,7 +8,7 @@ regex + ast for simple enum value evaluation. It's permissive and aimed at
 headers with well-formed enums, simple #defines and prototypes.
 
 Usage:
-  python generate_ui_json.py -o path/to/ui_components.json --stub-out path/to/stub.h files...
+  python generate_api_spec_custom_json.py -o path/to/ui_components.json --stub-out path/to/stub.h files...
 
 Notes:
  - Not a replacement for clang/libclang but works without requiring a C toolchain.
@@ -236,7 +236,7 @@ def parse_functions(text, functions, struct_types):
             for st in struct_types:
                 if re.search(r"\b" + re.escape(st) + r"\b", ret_type):
                     return False
-            
+
             # If return type is a pointer, only allow pointers to lv_obj_t
             if '*' in ret_type:
                 if 'lv_obj_t' not in ret_type:

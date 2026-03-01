@@ -21,6 +21,26 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include "config/app_settings.h"
+
+/* Convenience wrappers so the hot path stays readable */
+#define s_feed_xy() \
+    app_settings_get_float(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_FEED_XY)
+#define s_feed_z()  \
+    app_settings_get_float(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_FEED_Z)
+#define s_accel_x() \
+    app_settings_get_float(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_ACCEL_X)
+#define s_accel_y() \
+    app_settings_get_float(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_ACCEL_Y)
+#define s_accel_z() \
+    app_settings_get_float(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_ACCEL_Z)
+#define s_lead_ahead_ms() \
+    ((int)app_settings_get_int(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_LEAD_AHEAD_MS))
+#define s_min_sleep_ms() \
+    ((int)app_settings_get_int(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_MIN_SLEEP_MS))
+#define s_max_sleep_ms() \
+    ((int)app_settings_get_int(APP_SETTINGS_GROUP_JOG, APP_SETTINGS_JOG_MAX_SLEEP_MS))
+
 static const char *TAG = "jog_accum";
 
 /* -----------------------------------------------------------------------
@@ -81,19 +101,19 @@ static void _jog_accumulator_task(void *pv) {
     LOGI(TAG, "Jog accumulator task started [motion-estimation ON] "
          "(feed_xy=%.0f feed_z=%.0f accel_x=%.0f accel_y=%.0f accel_z=%.0f "
          "lead=%d min=%d max=%d)",
-         (double)JOG_ACCUM_FEED_XY_MM_MIN,
-         (double)JOG_ACCUM_FEED_Z_MM_MIN,
-         (double)JOG_ACCUM_ACCEL_X_MM_S2,
-         (double)JOG_ACCUM_ACCEL_Y_MM_S2,
-         (double)JOG_ACCUM_ACCEL_Z_MM_S2,
-         JOG_ACCUM_LEAD_AHEAD_MS,
-         JOG_ACCUM_MIN_SLEEP_MS,
-         JOG_ACCUM_MAX_SLEEP_MS);
+         (double)s_feed_xy(),
+         (double)s_feed_z(),
+         (double)s_accel_x(),
+         (double)s_accel_y(),
+         (double)s_accel_z(),
+         s_lead_ahead_ms(),
+         s_min_sleep_ms(),
+         s_max_sleep_ms());
 #else
     LOGI(TAG, "Jog accumulator task started [motion-estimation OFF] "
          "(feed_xy=%.0f feed_z=%.0f)",
-         (double)JOG_ACCUM_FEED_XY_MM_MIN,
-         (double)JOG_ACCUM_FEED_Z_MM_MIN);
+         (double)s_feed_xy(),
+         (double)s_feed_z());
 #endif
 
     for (;;) {
@@ -141,19 +161,19 @@ static void _jog_accumulator_task(void *pv) {
         float step_size;
         switch (axis) {
             case AXIS_X:
-                feed_mm_min = JOG_ACCUM_FEED_XY_MM_MIN;
-                accel_mm_s2 = JOG_ACCUM_ACCEL_X_MM_S2;
+                feed_mm_min = s_feed_xy();
+                accel_mm_s2 = s_accel_x();
                 step_size   = s_machine->current_move_step_xy;
                 break;
             case AXIS_Y:
-                feed_mm_min = JOG_ACCUM_FEED_XY_MM_MIN;
-                accel_mm_s2 = JOG_ACCUM_ACCEL_Y_MM_S2;
+                feed_mm_min = s_feed_xy();
+                accel_mm_s2 = s_accel_y();
                 step_size   = s_machine->current_move_step_xy;
                 break;
             case AXIS_Z:
             default:
-                feed_mm_min = JOG_ACCUM_FEED_Z_MM_MIN;
-                accel_mm_s2 = JOG_ACCUM_ACCEL_Z_MM_S2;
+                feed_mm_min = s_feed_z();
+                accel_mm_s2 = s_accel_z();
                 step_size   = s_machine->current_move_step_z;
                 break;
         }
@@ -179,13 +199,13 @@ static void _jog_accumulator_task(void *pv) {
 #if JOG_ACCUM_MOTION_ESTIMATION
         float t_move_ms = _estimate_move_ms(dist_mm, feed_mm_min, accel_mm_s2);
 
-        int32_t sleep_ms = (int32_t)(t_move_ms) - JOG_ACCUM_LEAD_AHEAD_MS;
+        int32_t sleep_ms = (int32_t)(t_move_ms) - s_lead_ahead_ms();
 
-        if (sleep_ms < JOG_ACCUM_MIN_SLEEP_MS) {
-            sleep_ms = JOG_ACCUM_MIN_SLEEP_MS;
+        if (sleep_ms < s_min_sleep_ms()) {
+            sleep_ms = s_min_sleep_ms();
         }
-        if (sleep_ms > JOG_ACCUM_MAX_SLEEP_MS) {
-            sleep_ms = JOG_ACCUM_MAX_SLEEP_MS;
+        if (sleep_ms > s_max_sleep_ms()) {
+            sleep_ms = s_max_sleep_ms();
         }
 
         LOGV(TAG, "  estimated move=%.1fms sleep=%dms", (double)t_move_ms, (int)sleep_ms);

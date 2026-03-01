@@ -176,7 +176,53 @@ void on_feed_change(machine_interface_t *machine, void *user_data) {
 }
 
 void on_sensors_change(machine_interface_t *machine, void *user_data) {
-  // TODO
+  if (!machine) return;
+
+  // Serialize io_channels[] into an io_channels_payload_hdr_t + io_channel_wire_t[]
+  // and broadcast to the pendant via MSG_SUB_TYPE_IO_CHANNELS.
+  size_t n = machine->num_io_channels;
+  size_t payload_size = sizeof(io_channels_payload_hdr_t) +
+                        n * sizeof(io_channel_wire_t);
+  uint8_t *buf = (uint8_t *)malloc(payload_size);
+  if (!buf) {
+    LOGE(TAG, "on_sensors_change: OOM (%zu bytes)", payload_size);
+    return;
+  }
+  memset(buf, 0, payload_size);
+
+  io_channels_payload_hdr_t *hdr = (io_channels_payload_hdr_t *)buf;
+  hdr->count = (uint16_t)n;
+
+  io_channel_wire_t *wire =
+      (io_channel_wire_t *)(buf + sizeof(io_channels_payload_hdr_t));
+
+  for (size_t i = 0; i < n; i++) {
+    const mc_io_channel_t *ch = &machine->io_channels[i];
+    wire[i].source_index  = ch->source_index;
+    wire[i].direction     = (uint8_t)ch->direction;
+    wire[i].signal        = (uint8_t)ch->signal;
+    wire[i].role          = (uint8_t)ch->role;
+    wire[i].health        = (uint8_t)ch->health;
+    wire[i].value         = ch->value;
+    wire[i].setpoint      = ch->setpoint;
+    wire[i].active        = ch->active ? 1 : 0;
+    wire[i].setpoint_bool = ch->setpoint_bool ? 1 : 0;
+    wire[i].min_value     = ch->min_value;
+    wire[i].max_value     = ch->max_value;
+    if (ch->name) {
+      strncpy(wire[i].name, ch->name, sizeof(wire[i].name) - 1);
+      wire[i].name[sizeof(wire[i].name) - 1] = '\0';
+    }
+    if (ch->unit) {
+      strncpy(wire[i].unit, ch->unit, sizeof(wire[i].unit) - 1);
+      wire[i].unit[sizeof(wire[i].unit) - 1] = '\0';
+    }
+  }
+
+  led_status_sending();
+  remote_wrapper_broadcast_fragmented_message(MSG_SUB_TYPE_IO_CHANNELS,
+                                              buf, payload_size);
+  free(buf);
 }
 
 void on_dialogs_change(machine_interface_t *machine, void *user_data) {
@@ -675,6 +721,18 @@ static void process_modal_str_cmd(const uint8_t *data, int data_len) {
   machine_interface_modal_str(g_machine_base, val, cmd->modal_id);
 }
 
+static void process_set_io_channel_cmd(const uint8_t *data, int data_len) {
+  if (data_len < (int)sizeof(set_io_channel_cmd_t)) {
+    LOGE(TAG, "Invalid set_io_channel len: %d", data_len);
+    return;
+  }
+  const set_io_channel_cmd_t *cmd = (const set_io_channel_cmd_t *)data;
+  LOGI(TAG, "set_io_channel ch=%u sp=%.2f bool=%d",
+       cmd->ch_idx, (double)cmd->setpoint, cmd->setpoint_bool);
+  machine_interface_set_io_channel(g_machine_base, cmd->ch_idx,
+                                   cmd->setpoint, (bool)cmd->setpoint_bool);
+}
+
 // --- ESP-NOW Callbacks ---
 
 void on_remote_data_sent(const uint8_t *mac_addr, int status, void *user_data) {
@@ -794,6 +852,10 @@ void process_message(const uint8_t *data, const size_t data_len) {
     case CMD_TYPE_MODAL_STR:
       LOGI(TAG, "<MODAL_STR>");
       process_modal_str_cmd(data, data_len);
+      break;
+    case CMD_TYPE_SET_IO_CHANNEL:
+      LOGI(TAG, "<SET_IO_CHANNEL>");
+      process_set_io_channel_cmd(data, data_len);
       break;
 
     default:
