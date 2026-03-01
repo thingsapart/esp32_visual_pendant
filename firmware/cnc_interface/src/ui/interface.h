@@ -34,6 +34,7 @@ typedef enum {
   UI_DIRTY_LOG_MESSAGE  = (1 << 12),  // Verbatim message from hub to toast
   UI_DIRTY_MDI_LOG      = (1 << 13),  // New MDI log content / busy-state change
   UI_DIRTY_IO_SENSORS   = (1 << 14),  // Fans, heaters, sensors, endstops, GPIO
+  UI_DIRTY_CHIPLOAD     = (1 << 15),  // Chipload (spindle/feed/tool combo changed)
   UI_DIRTY_ALL = 0xFFFFFFFF,
 } ui_dirty_flags_t;
 
@@ -48,6 +49,8 @@ typedef struct {
 
   mos_probe_handler_t probe_handler;  ///< MOS back-end for cam_positioning probe wizard
   mdi_handler_t mdi;                  ///< MDI (Manual Data Input) back-end
+
+  tool_material_t current_material;  ///< Selected work material for chipload calculation
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_t setup_settings;  // Temporary storage for the DWC setup flow
@@ -64,6 +67,16 @@ typedef struct {
  * @param machine Pointer to the machine_interface_t object.
  */
 void interface_init(interface_t *interface, machine_interface_t *machine);
+
+/**
+ * @brief Set the active work material for chipload relative calculations.
+ *
+ * Call this from the settings action handler when the user changes the material
+ * dropdown.  Triggers an immediate chipload observable update.
+ */
+void interface_set_material(interface_t *interface, tool_material_t material);
+
+/**
 
 /**
  * @brief Main tick function for the UI interface.

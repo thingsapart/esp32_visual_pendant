@@ -109,6 +109,20 @@ typedef struct {
   const char *tool;  // tool name
 } spindles_tools_msg_t;
 
+// --- On-Wire layout for MSG_TYPE_SPINDLES_TOOLS ---
+// All fields are packed (no padding) and use fixed-width types so that
+// hub (potentially x86-64) and pendant (ESP32 32-bit) always agree.
+//
+//  offset  size  field
+//    0       1   type  (MSG_TYPE_SPINDLES_TOOLS)
+//    1       4   rpm   (int32_t, little-endian)
+//    5       2   tool_name_len  (uint16_t, byte count of name, may be 0)
+//    7       2   tool_diameter_x100  (uint16_t: diameter_mm * 100, 0 = unknown)
+//    9       1   tool_flute_count (uint8_t, 0 = unknown)
+//   10  name_len  tool name bytes (no NUL terminator in wire payload)
+//
+#define SPINDLES_TOOLS_WIRE_HEADER_LEN  10u  /* bytes before tool name */
+
 typedef struct {
   uint8_t type;  // MSG_TYPE_SENSORS_CHANGED,
                  // TODO, add probes and endstops here.

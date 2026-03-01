@@ -1,11 +1,16 @@
-// lv_settings.h — LVGL settings panel widget
+// lv_settings.h — LVGL settings panel widget (lv_menu-based)
 //
-// Provides a two-panel settings UI:
-//   left  — group selector list (one button per app_settings group)
-//   right — scrollable list of setting rows for the active group
+// Provides a two-panel settings UI built on lv_menu:
+//   sidebar (left)  — group selector list; each entry carries an icon and
+//                     navigates to that group's detail page on the right.
+//   main    (right) — per-group pages with one row per setting:
+//                       • numeric (INT32/FLOAT): name label (left) + value
+//                         (right-aligned) on the top row, slider below.
+//                       • bool: name label + lv_switch on a single row.
+//                     A special "Reload Defaults" group contains one entry
+//                     that calls app_settings_reset_all() on click.
 //
-// Each row shows the setting name, current value, and « / » buttons to
-// decrement / increment.  Bool settings use a toggle.
+// The main-panel header/back bar is hidden; navigation is sidebar-only.
 //
 // Encoder support
 // ---------------

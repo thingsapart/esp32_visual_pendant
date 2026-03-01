@@ -873,29 +873,46 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       break;
     }
     case MSG_TYPE_SPINDLES_TOOLS: {
-      if (len < sizeof(uint8_t) + sizeof(int) +
-                    sizeof(size_t)) {  // type + rpm + tool_name_len
-        LOGE(TAG, "Invalid MSG_TYPE_SPINDLES_TOOLS message len");
+      // Wire format (see SPINDLES_TOOLS_WIRE_HEADER_LEN in remote_comms_wrapper.h):
+      //   1 byte  type
+      //   4 bytes rpm (int32_t LE)
+      //   2 bytes tool_name_len (uint16_t LE)
+      //   2 bytes tool_diameter_x100 (uint16_t LE)
+      //   1 byte  tool_flute_count (uint8_t)
+      //  [N bytes tool name, no NUL]
+      if (len < SPINDLES_TOOLS_WIRE_HEADER_LEN) {
+        LOGE(TAG, "Invalid MSG_TYPE_SPINDLES_TOOLS message len: %zu", len);
         return;
       }
-      uint8_t *ptr = (uint8_t *)data;
-      ptr += sizeof(uint8_t);  // skip the message type, already processed.
+      const uint8_t *ptr = (const uint8_t *)data;
+      ptr += sizeof(uint8_t);  // skip type byte
 
-      int rpm = *((int *)ptr);
-      ptr += sizeof(int);
+      int32_t rpm;
+      memcpy(&rpm, ptr, sizeof(int32_t));
+      ptr += sizeof(int32_t);
 
-      size_t tool_name_len = *((size_t *)ptr);
-      ptr += sizeof(size_t);
+      uint16_t tool_name_len;
+      memcpy(&tool_name_len, ptr, sizeof(uint16_t));
+      ptr += sizeof(uint16_t);
 
-      // now ptr points to the beginning of the tool name.
-      if (tool_name_len >= len - (ptr - data)) {
-        LOGE(TAG, "Invalid tool name length");
+      uint16_t dia_x100;
+      memcpy(&dia_x100, ptr, sizeof(uint16_t));
+      ptr += sizeof(uint16_t);
+
+      uint8_t flutes = *ptr;
+      ptr += sizeof(uint8_t);
+
+      // Safety: name bytes must fit within the received message.
+      size_t name_offset = (size_t)(ptr - (const uint8_t *)data);
+      if ((size_t)tool_name_len > len - name_offset) {
+        LOGE(TAG, "Invalid tool name length: claimed %u but only %zu bytes remain",
+             (unsigned)tool_name_len, len - name_offset);
         return;
       }
-      // +1 for null termination, but we don't read past the received len
+
       char tool_name[tool_name_len + 1];
-      strncpy(tool_name, (char *)ptr, tool_name_len);  // safe copy.
-      tool_name[tool_name_len] = '\0';  // make sure it's null terminated
+      memcpy(tool_name, ptr, tool_name_len);
+      tool_name[tool_name_len] = '\0';
 
       // Lazily allocate spindle struct if it doesn't exist.
       if (!self->base.spindles) {
@@ -908,16 +925,21 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
         }
       }
 
-      // Update the values
-      self->base.spindles->rpm = rpm;
+      // Update values.
+      self->base.spindles->rpm = (int)rpm;
       if (self->base.tool) {
         free((void *)self->base.tool);
       }
-      self->base.tool = strdup(tool_name);  // create a copy.
+      self->base.tool = strdup(tool_name);
+      self->base.tool_diameter_mm  = (dia_x100 > 0)
+                                       ? (float)dia_x100 / 100.0f : 0.0f;
+      self->base.tool_flute_count  = (int)flutes;
 
       machine_interface_spindles_tools_updated(&self->base);
 
-      LOGD(TAG, "spindle rpm=%d tool=%s", machine->spindles->rpm, machine->tool);
+      LOGD(TAG, "spindle rpm=%d tool='%s' dia=%.2fmm flutes=%d",
+           (int)rpm, self->base.tool,
+           self->base.tool_diameter_mm, self->base.tool_flute_count);
 
       break;
     }

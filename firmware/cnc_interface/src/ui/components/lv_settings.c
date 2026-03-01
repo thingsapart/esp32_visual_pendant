@@ -1,13 +1,21 @@
-// lv_settings.c — LVGL settings panel widget implementation
+// lv_settings.c — LVGL settings panel (lv_menu-based, LVGL 9)
 //
-// Two-panel layout:
-//   left  (≈160 px) — group selector built with lv_btn list
-//   right (flex)    — scrollable list of setting rows for the active group
+// Layout:
+//   sidebar (left)  — group list, one entry per settings group + "Reload Defaults"
+//   main    (right) — per-group content pages
 //
-// Each setting row: [name label] [« dec] [value label] [inc »]
-// Bool settings: [name label] [ON/OFF toggle]
+// Numeric rows  (INT32 / FLOAT):
+//   [icon]  Name label (flex-grow)            value + unit  (right-aligned)
+//   [slider ---- full width, wrapped to next line ---------]
 //
-// See lv_settings.h for encoder integration instructions.
+// Bool rows:
+//   [icon]  Name label (flex-grow)                   [switch]
+//
+// "Reload Defaults" sidebar entry navigates to a page with one clickable row
+// that calls app_settings_reset_all() and refreshes all widgets.
+//
+// The main-panel back-bar header is hidden; navigation is sidebar-only.
+// The root-back button is disabled (no "< Settings" label at top-left).
 
 #define UI_DEBUG_LOCAL_LEVEL D_INFO
 #include "debug.h"
@@ -17,160 +25,119 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <inttypes.h>
 
 static const char *TAG = "lv_settings";
 
-// ---------------------------------------------------------------------------
-// Compile-time geometry constants
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Geometry tunables
+ * ========================================================================= */
 
-#define LV_SETTINGS_MAX_ROWS   32
-#define LV_SETTINGS_LEFT_W    160
-#define LV_SETTINGS_ROW_H      46
-#define LV_SETTINGS_VALUE_W    80
-#define LV_SETTINGS_BTN_W      38
+#define LV_SETTINGS_MAX_SLOTS    64   /* max total setting rows across all groups */
+#define LV_SETTINGS_VALUE_LBL_W 110   /* px — right-aligned value column width    */
 
-// ---------------------------------------------------------------------------
-// Widget private state
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Group symbols (sidebar icons)
+ * ========================================================================= */
+
+static const char * const g_group_symbols[APP_SETTINGS_GROUP__COUNT] = {
+    [APP_SETTINGS_GROUP_JOG]      = LV_SYMBOL_DRIVE,
+    [APP_SETTINGS_GROUP_CAM]      = LV_SYMBOL_IMAGE,
+    [APP_SETTINGS_GROUP_MACHINE]  = LV_SYMBOL_SETTINGS,
+    [APP_SETTINGS_GROUP_TIMING]   = LV_SYMBOL_REFRESH,
+    [APP_SETTINGS_GROUP_PROBE_UI] = LV_SYMBOL_GPS,
+};
+
+/* =========================================================================
+ * Per-setting symbols  [group][key]
+ * Unmentioned entries default to NULL (no icon shown).
+ * ========================================================================= */
+
+static const char * const g_setting_symbols
+    [APP_SETTINGS_GROUP__COUNT][APP_SETTINGS_MAX_KEYS_PER_GROUP] = {
+
+    [APP_SETTINGS_GROUP_JOG] = {
+        [APP_SETTINGS_JOG_FEED_XY]        = LV_SYMBOL_RIGHT,
+        [APP_SETTINGS_JOG_FEED_Z]         = LV_SYMBOL_UP,
+        [APP_SETTINGS_JOG_ACCEL_X]        = LV_SYMBOL_CHARGE,
+        [APP_SETTINGS_JOG_ACCEL_Y]        = LV_SYMBOL_CHARGE,
+        [APP_SETTINGS_JOG_ACCEL_Z]        = LV_SYMBOL_CHARGE,
+        [APP_SETTINGS_JOG_LEAD_AHEAD_MS]  = LV_SYMBOL_PLAY,
+        [APP_SETTINGS_JOG_MIN_SLEEP_MS]   = LV_SYMBOL_PAUSE,
+        [APP_SETTINGS_JOG_MAX_SLEEP_MS]   = LV_SYMBOL_STOP,
+    },
+    [APP_SETTINGS_GROUP_CAM] = {
+        [APP_SETTINGS_CAM_FALLBACK_GRID_DX] = LV_SYMBOL_RIGHT,
+        [APP_SETTINGS_CAM_FALLBACK_GRID_DY] = LV_SYMBOL_DOWN,
+        [APP_SETTINGS_CAM_FALLBACK_GRID_NX] = LV_SYMBOL_LIST,
+        [APP_SETTINGS_CAM_FALLBACK_GRID_NY] = LV_SYMBOL_LIST,
+    },
+    [APP_SETTINGS_GROUP_MACHINE] = {
+        [APP_SETTINGS_MACHINE_SEND_INTERVAL_MS]  = LV_SYMBOL_PLAY,
+        [APP_SETTINGS_MACHINE_POLL_NTH_INTERVAL] = LV_SYMBOL_LOOP,
+    },
+    [APP_SETTINGS_GROUP_TIMING] = {
+        [APP_SETTINGS_TIMING_HUB_POLL_MS]          = LV_SYMBOL_WIFI,
+        [APP_SETTINGS_TIMING_FULL_STATE_N]          = LV_SYMBOL_LIST,
+        [APP_SETTINGS_TIMING_LOG_COALESCE_MS]       = LV_SYMBOL_EDIT,
+        [APP_SETTINGS_TIMING_CAM_FRAME_TIMEOUT_MS]  = LV_SYMBOL_VIDEO,
+        [APP_SETTINGS_TIMING_CAM_STATUS_TIMEOUT_MS] = LV_SYMBOL_VIDEO,
+    },
+    [APP_SETTINGS_GROUP_PROBE_UI] = {
+        [APP_SETTINGS_PROBE_UI_TIP_RADIUS]   = LV_SYMBOL_GPS,
+        [APP_SETTINGS_PROBE_UI_BACKOFF_MULT] = LV_SYMBOL_RIGHT,
+    },
+};
+
+/* =========================================================================
+ * Private types
+ * ========================================================================= */
+
+typedef struct lv_settings_priv_s lv_settings_priv_t;
 
 typedef struct {
-    lv_obj_t *row;
-    lv_obj_t *value_lbl;
-    lv_obj_t *dec_btn;
-    lv_obj_t *inc_btn;
-    int group;
-    int key;
-} row_slot_t;
+    lv_obj_t  *cont;       /* menu_cont — carries LV_STATE_FOCUSED highlight  */
+    lv_obj_t  *slider;     /* numeric slider, NULL for bool                   */
+    lv_obj_t  *sw;         /* lv_switch for bool, NULL for numeric            */
+    lv_obj_t  *value_lbl;  /* formatted value label, NULL for bool            */
+    int        group;
+    int        key;
+    bool       updating;   /* reentrancy guard while syncing slider from code */
+    lv_settings_priv_t *priv;
+} setting_slot_t;
 
-typedef struct {
-    lv_obj_t *root;
-    lv_obj_t *left_panel;
-    lv_obj_t *right_panel;
-    lv_obj_t *group_title;
-    lv_obj_t *rows_cont;
+struct lv_settings_priv_s {
+    lv_obj_t *root;                              /* the lv_menu object         */
+    lv_obj_t *pages[APP_SETTINGS_GROUP__COUNT];  /* main content pages         */
+    lv_obj_t *reload_page;                       /* "Reload Defaults" page     */
 
-    lv_obj_t *group_btns[APP_SETTINGS_GROUP__COUNT];
+    setting_slot_t slots[LV_SETTINGS_MAX_SLOTS];
+    int slot_count;
 
-    row_slot_t rows[LV_SETTINGS_MAX_ROWS];
-    int        row_count;
-
-    int active_group;
-    int focused_row;   // -1 = none highlighted
+    int active_group;  /* currently shown group, or -1 for reload page        */
+    int focused_row;   /* slot index with encoder focus, or -1                */
 
     lv_settings_changed_cb_t changed_cb;
     void                    *changed_user;
-} lv_settings_priv_t;
+};
 
-// ---------------------------------------------------------------------------
-// Forward declarations
-// ---------------------------------------------------------------------------
-
-static void _build_right_panel(lv_settings_priv_t *priv, int group);
-static void _update_row_value(row_slot_t *rs);
-static void _set_row_focused(lv_settings_priv_t *priv, int idx);
-static void _adjust_row_value(lv_settings_priv_t *priv, int idx, int delta);
-
-// ---------------------------------------------------------------------------
-// Private state accessor — walks up parent chain to root
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * State accessor
+ * ========================================================================= */
 
 static lv_settings_priv_t *_get_priv(lv_obj_t *obj)
 {
-    while (obj) {
-        lv_settings_priv_t *p =
-            (lv_settings_priv_t *)lv_obj_get_user_data(obj);
-        if (p && p->root == obj) return p;
-        obj = lv_obj_get_parent(obj);
-    }
-    return NULL;
+    lv_settings_priv_t *p = (lv_settings_priv_t *)lv_obj_get_user_data(obj);
+    return (p && p->root == obj) ? p : NULL;
 }
 
-// ---------------------------------------------------------------------------
-// Event callbacks
-// ---------------------------------------------------------------------------
-
-static void _group_btn_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    lv_obj_t *btn = lv_event_get_current_target(e);
-    lv_settings_priv_t *priv =
-        (lv_settings_priv_t *)lv_event_get_user_data(e);
-    if (!priv) return;
-
-    for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++) {
-        if (priv->group_btns[g] == btn && priv->active_group != g) {
-            priv->active_group = g;
-            priv->focused_row  = -1;
-            _build_right_panel(priv, g);
-            break;
-        }
-    }
-}
-
-static void _dec_btn_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    row_slot_t *rs = (row_slot_t *)lv_event_get_user_data(e);
-    if (!rs) return;
-    lv_settings_priv_t *priv = _get_priv(rs->row);
-    if (!priv) return;
-    _adjust_row_value(priv, (int)(rs - priv->rows), -1);
-}
-
-static void _inc_btn_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    row_slot_t *rs = (row_slot_t *)lv_event_get_user_data(e);
-    if (!rs) return;
-    lv_settings_priv_t *priv = _get_priv(rs->row);
-    if (!priv) return;
-    _adjust_row_value(priv, (int)(rs - priv->rows), +1);
-}
-
-static void _row_clicked_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    row_slot_t *rs = (row_slot_t *)lv_event_get_user_data(e);
-    if (!rs) return;
-    lv_settings_priv_t *priv = _get_priv(rs->row);
-    if (!priv) return;
-    int idx = (int)(rs - priv->rows);
-    /* Toggle focus: tapping the already-focused row clears it. */
-    _set_row_focused(priv, (priv->focused_row == idx) ? -1 : idx);
-}
-
-static void _reset_btn_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    lv_settings_priv_t *priv =
-        (lv_settings_priv_t *)lv_event_get_user_data(e);
-    if (!priv) return;
-    app_settings_reset_all();
-    _build_right_panel(priv, priv->active_group);
-    LOGI(TAG, "All settings reset to defaults");
-}
-
-static void _root_delete_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_DELETE) return;
-    lv_obj_t *obj = lv_event_get_current_target(e);
-    lv_settings_priv_t *priv =
-        (lv_settings_priv_t *)lv_obj_get_user_data(obj);
-    if (priv) {
-        lv_free(priv);
-        lv_obj_set_user_data(obj, NULL);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Value formatting
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Value helpers
+ * ========================================================================= */
 
 static void _fmt_value(char *buf, size_t buf_len,
-                       const app_setting_def_t *d,
-                       app_setting_val_t v)
+                       const app_setting_def_t *d, app_setting_val_t v)
 {
     switch (d->type) {
         case APP_SETTING_TYPE_FLOAT: {
@@ -193,48 +160,94 @@ static void _fmt_value(char *buf, size_t buf_len,
     }
 }
 
-static void _update_row_value(row_slot_t *rs)
+static int32_t _slider_steps(const app_setting_def_t *d)
 {
-    if (!rs->value_lbl) return;
-    const app_setting_def_t *d = app_settings_get_def(
-        (app_settings_group_t)rs->group, rs->key);
-    if (!d) return;
-    char buf[40];
-    _fmt_value(buf, sizeof(buf), d,
-               app_settings_get_val((app_settings_group_t)rs->group, rs->key));
-    lv_label_set_text(rs->value_lbl, buf);
+    if (d->type == APP_SETTING_TYPE_INT32 && d->step.i > 0)
+        return (d->max.i - d->min.i) / d->step.i;
+    if (d->type == APP_SETTING_TYPE_FLOAT && d->step.f > 0.0f)
+        return (int32_t)((d->max.f - d->min.f) / d->step.f + 0.5f);
+    return 100;
 }
 
-// ---------------------------------------------------------------------------
-// Focus management
-// ---------------------------------------------------------------------------
-
-static void _set_row_focused(lv_settings_priv_t *priv, int idx)
+static int32_t _val_to_slider(const app_setting_def_t *d, app_setting_val_t v)
 {
-    if (priv->focused_row >= 0 && priv->focused_row < priv->row_count)
-        lv_obj_clear_state(priv->rows[priv->focused_row].row,
-                           LV_STATE_FOCUSED);
+    if (d->type == APP_SETTING_TYPE_INT32 && d->step.i > 0)
+        return (v.i - d->min.i) / d->step.i;
+    if (d->type == APP_SETTING_TYPE_FLOAT && d->step.f > 0.0f)
+        return (int32_t)((v.f - d->min.f) / d->step.f + 0.5f);
+    return 0;
+}
+
+static app_setting_val_t _slider_to_val(const app_setting_def_t *d, int32_t pos)
+{
+    app_setting_val_t v = {0};
+    if (d->type == APP_SETTING_TYPE_INT32) {
+        v.i = d->min.i + pos * d->step.i;
+        if (v.i < d->min.i) v.i = d->min.i;
+        if (v.i > d->max.i) v.i = d->max.i;
+    } else {
+        v.f = d->min.f + (float)pos * d->step.f;
+        if (v.f < d->min.f) v.f = d->min.f;
+        if (v.f > d->max.f) v.f = d->max.f;
+    }
+    return v;
+}
+
+/* =========================================================================
+ * Focus management
+ * ========================================================================= */
+
+static void _set_slot_focused(lv_settings_priv_t *priv, int idx)
+{
+    if (priv->focused_row >= 0 && priv->focused_row < priv->slot_count)
+        lv_obj_clear_state(priv->slots[priv->focused_row].cont, LV_STATE_FOCUSED);
     priv->focused_row = idx;
-    if (idx >= 0 && idx < priv->row_count) {
-        lv_obj_add_state(priv->rows[idx].row, LV_STATE_FOCUSED);
-        lv_obj_scroll_to_view(priv->rows[idx].row, LV_ANIM_ON);
+    if (idx >= 0 && idx < priv->slot_count) {
+        lv_obj_add_state(priv->slots[idx].cont, LV_STATE_FOCUSED);
+        lv_obj_scroll_to_view(priv->slots[idx].cont, LV_ANIM_ON);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value adjustment (shared by touch +/- and encoder)
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Value application (shared by slider callback, switch callback, encoder)
+ * ========================================================================= */
 
-static void _adjust_row_value(lv_settings_priv_t *priv, int idx, int delta)
+static void _apply_slot_value(setting_slot_t *slot, app_setting_val_t v,
+                               const app_setting_def_t *d)
 {
-    if (idx < 0 || idx >= priv->row_count) return;
-    row_slot_t *rs = &priv->rows[idx];
+    app_settings_set_val((app_settings_group_t)slot->group, slot->key, v);
+    app_settings_save_group((app_settings_group_t)slot->group);
+
+    if (d->type == APP_SETTING_TYPE_BOOL) {
+        if (slot->sw) {
+            if (v.b) lv_obj_add_state(slot->sw, LV_STATE_CHECKED);
+            else     lv_obj_clear_state(slot->sw, LV_STATE_CHECKED);
+        }
+    } else {
+        if (slot->value_lbl) {
+            char buf[40];
+            _fmt_value(buf, sizeof(buf), d, v);
+            lv_label_set_text(slot->value_lbl, buf);
+        }
+        if (slot->slider) {
+            slot->updating = true;
+            lv_slider_set_value(slot->slider, _val_to_slider(d, v), LV_ANIM_OFF);
+            slot->updating = false;
+        }
+    }
+
+    if (slot->priv->changed_cb)
+        slot->priv->changed_cb(slot->group, slot->key, slot->priv->changed_user);
+}
+
+static void _adjust_slot_value(setting_slot_t *slot, int delta)
+{
     const app_setting_def_t *d = app_settings_get_def(
-        (app_settings_group_t)rs->group, rs->key);
+        (app_settings_group_t)slot->group, slot->key);
     if (!d) return;
 
     app_setting_val_t v = app_settings_get_val(
-        (app_settings_group_t)rs->group, rs->key);
+        (app_settings_group_t)slot->group, slot->key);
 
     switch (d->type) {
         case APP_SETTING_TYPE_FLOAT:
@@ -252,273 +265,442 @@ static void _adjust_row_value(lv_settings_priv_t *priv, int idx, int delta)
             break;
     }
 
-    app_settings_set_val((app_settings_group_t)rs->group, rs->key, v);
-    app_settings_save_group((app_settings_group_t)rs->group);
-    _update_row_value(rs);
-
-    /* Keep bool toggle in sync */
-    if (d->type == APP_SETTING_TYPE_BOOL && rs->inc_btn && rs->value_lbl) {
-        lv_label_set_text(rs->value_lbl, v.b ? "ON" : "OFF");
-        if (v.b) lv_obj_add_state(rs->inc_btn,   LV_STATE_CHECKED);
-        else     lv_obj_clear_state(rs->inc_btn,  LV_STATE_CHECKED);
-    }
-
-    LOGD(TAG, "Group %d key %d by %+d", rs->group, rs->key, delta);
-    if (priv->changed_cb)
-        priv->changed_cb(rs->group, rs->key, priv->changed_user);
+    LOGD(TAG, "Group %d key %d delta=%+d", slot->group, slot->key, delta);
+    _apply_slot_value(slot, v, d);
 }
 
-// ---------------------------------------------------------------------------
-// Right-panel builder
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Event callbacks
+ * ========================================================================= */
 
-static void _build_right_panel(lv_settings_priv_t *priv, int group)
+static void _slider_cb(lv_event_t *e)
 {
-    lv_label_set_text(priv->group_title,
-                      app_settings_group_name((app_settings_group_t)group));
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    setting_slot_t *slot = (setting_slot_t *)lv_event_get_user_data(e);
+    if (!slot || slot->updating) return;
 
-    lv_obj_clean(priv->rows_cont);
-    memset(priv->rows, 0, sizeof(priv->rows));
-    priv->row_count   = 0;
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)slot->group, slot->key);
+    if (!d) return;
+
+    int32_t pos = lv_slider_get_value(slot->slider);
+    app_setting_val_t v = _slider_to_val(d, pos);
+
+    LOGD(TAG, "Slider g=%d k=%d pos=%d", slot->group, slot->key, (int)pos);
+    _apply_slot_value(slot, v, d);
+}
+
+static void _switch_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    setting_slot_t *slot = (setting_slot_t *)lv_event_get_user_data(e);
+    if (!slot) return;
+
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)slot->group, slot->key);
+    if (!d) return;
+
+    app_setting_val_t v = { .b = lv_obj_has_state(slot->sw, LV_STATE_CHECKED) };
+    LOGD(TAG, "Switch g=%d k=%d = %s", slot->group, slot->key, v.b ? "ON" : "OFF");
+    _apply_slot_value(slot, v, d);
+}
+
+/* Clicking a row cont toggles encoder focus. */
+static void _cont_clicked_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    setting_slot_t *slot = (setting_slot_t *)lv_event_get_user_data(e);
+    if (!slot) return;
+    lv_settings_priv_t *priv = slot->priv;
+    int idx = (int)(slot - priv->slots);
+    _set_slot_focused(priv, (priv->focused_row == idx) ? -1 : idx);
+}
+
+static void _reload_cont_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_settings_priv_t *priv = (lv_settings_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+    app_settings_reset_all();
+    lv_settings_refresh(priv->root);
+    LOGI(TAG, "All settings reset to defaults");
+}
+
+/* Track which group page is shown for encoder navigation. */
+static void _menu_value_changed_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t *menu = lv_event_get_target(e);
+    lv_settings_priv_t *priv = (lv_settings_priv_t *)lv_event_get_user_data(e);
+    if (!priv) return;
+
+    lv_obj_t *cur = lv_menu_get_cur_main_page(menu);
     priv->focused_row = -1;
 
     for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++) {
-        if (!priv->group_btns[g]) continue;
-        if (g == group) lv_obj_add_state  (priv->group_btns[g], LV_STATE_CHECKED);
-        else            lv_obj_clear_state(priv->group_btns[g], LV_STATE_CHECKED);
+        if (cur == priv->pages[g]) { priv->active_group = g; return; }
+    }
+    if (cur == priv->reload_page) priv->active_group = -1;
+}
+
+static void _root_delete_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_DELETE) return;
+    lv_obj_t *obj = lv_event_get_current_target(e);
+    lv_settings_priv_t *priv = (lv_settings_priv_t *)lv_obj_get_user_data(obj);
+    if (priv) { lv_free(priv); lv_obj_set_user_data(obj, NULL); }
+}
+
+/* =========================================================================
+ * Row builders
+ * ========================================================================= */
+
+/*
+ * Numeric row  (flex-row-wrap so slider wraps to a second line):
+ *
+ *   [icon]  Name label (flex-grow)       value + unit  (right, 110 px)
+ *   [slider ------------- flex-grow, new-track ----------------------]
+ */
+static setting_slot_t *_add_numeric_slot(lv_settings_priv_t *priv,
+                                         lv_obj_t *section,
+                                         int group, int key)
+{
+    if (priv->slot_count >= LV_SETTINGS_MAX_SLOTS) {
+        LOGW(TAG, "Slot array full g=%d k=%d", group, key);
+        return NULL;
+    }
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)group, key);
+    if (!d) return NULL;
+
+    const char *sym = (key >= 0 && key < APP_SETTINGS_MAX_KEYS_PER_GROUP)
+                      ? g_setting_symbols[group][key] : NULL;
+    app_setting_val_t v = app_settings_get_val((app_settings_group_t)group, key);
+
+    setting_slot_t *slot = &priv->slots[priv->slot_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->group = group;
+    slot->key   = key;
+    slot->priv  = priv;
+
+    /* Container — wrapping flex-row */
+    slot->cont = lv_menu_cont_create(section);
+    lv_obj_set_flex_flow(slot->cont, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_width(slot->cont, LV_PCT(100));
+    lv_obj_set_style_pad_row(slot->cont, 8, 0);
+    lv_obj_set_style_pad_column(slot->cont, 6, 0);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_0, 0);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_30, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(slot->cont, lv_color_hex(0x2196F3), LV_STATE_FOCUSED);
+    lv_obj_set_style_margin_bottom(slot->cont, 5, 0);
+    lv_obj_set_style_radius(slot->cont, 6, 0);
+    // lv_obj_add_flag(slot->cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(slot->cont, _cont_clicked_cb, LV_EVENT_CLICKED, slot);
+
+    /* Row 1 — optional icon */
+    if (sym) {
+        lv_obj_t *img = lv_image_create(slot->cont);
+        lv_image_set_src(img, sym);
     }
 
-    int key_count = app_settings_key_count((app_settings_group_t)group);
-    if (key_count > LV_SETTINGS_MAX_ROWS) key_count = LV_SETTINGS_MAX_ROWS;
+    /* Row 1 — name label fills remaining space */
+    lv_obj_t *name_lbl = lv_label_create(slot->cont);
+    lv_label_set_text(name_lbl, d->name);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_flex_grow(name_lbl, 1, 0);
 
+    /* Row 1 — right-aligned value label */
+    slot->value_lbl = lv_label_create(slot->cont);
+    lv_obj_set_width(slot->value_lbl, LV_SETTINGS_VALUE_LBL_W);
+    lv_obj_set_style_text_align(slot->value_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    char buf[40];
+    _fmt_value(buf, sizeof(buf), d, v);
+    lv_label_set_text(slot->value_lbl, buf);
+
+    /* Row 2 — slider wrapped to the next flex line */
+    slot->slider = lv_slider_create(slot->cont);
+    lv_obj_set_style_flex_grow(slot->slider, 1, 0);
+    lv_obj_add_flag(slot->slider, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK);
+    lv_slider_set_range(slot->slider, 0, _slider_steps(d));
+    lv_slider_set_value(slot->slider, _val_to_slider(d, v), LV_ANIM_OFF);
+    lv_obj_add_event_cb(slot->slider, _slider_cb, LV_EVENT_VALUE_CHANGED, slot);
+    lv_obj_set_style_pad_top(slot->slider, 4, 0);
+    lv_obj_set_style_pad_bottom(slot->slider, 4, 0);
+    lv_obj_set_style_pad_bottom(slot->slider, 4, 0);
+
+    lv_obj_set_ext_click_area(slot->slider, 5);
+
+    return slot;
+}
+
+/*
+ * Bool row  (single flex-row):
+ *
+ *   [icon]  Name label (flex-grow)                     [switch]
+ */
+static setting_slot_t *_add_bool_slot(lv_settings_priv_t *priv,
+                                      lv_obj_t *section,
+                                      int group, int key)
+{
+    if (priv->slot_count >= LV_SETTINGS_MAX_SLOTS) {
+        LOGW(TAG, "Slot array full g=%d k=%d", group, key);
+        return NULL;
+    }
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)group, key);
+    if (!d) return NULL;
+
+    const char *sym = (key >= 0 && key < APP_SETTINGS_MAX_KEYS_PER_GROUP)
+                      ? g_setting_symbols[group][key] : NULL;
+    app_setting_val_t v = app_settings_get_val((app_settings_group_t)group, key);
+
+    setting_slot_t *slot = &priv->slots[priv->slot_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->group = group;
+    slot->key   = key;
+    slot->priv  = priv;
+
+    slot->cont = lv_menu_cont_create(section);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_0, 0);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_30, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(slot->cont, lv_color_hex(0x2196F3), LV_STATE_FOCUSED);
+    lv_obj_set_style_margin_bottom(slot->cont, 5, 0);
+    lv_obj_set_style_radius(slot->cont, 6, 0);
+    //lv_obj_add_flag(slot->cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(slot->cont, _cont_clicked_cb, LV_EVENT_CLICKED, slot);
+
+    if (sym) {
+        lv_obj_t *img = lv_image_create(slot->cont);
+        lv_image_set_src(img, sym);
+    }
+
+    lv_obj_t *name_lbl = lv_label_create(slot->cont);
+    lv_label_set_text(name_lbl, d->name);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_flex_grow(name_lbl, 1, 0);
+
+    slot->sw = lv_switch_create(slot->cont);
+    if (v.b) lv_obj_add_state(slot->sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(slot->sw, _switch_cb, LV_EVENT_VALUE_CHANGED, slot);
+
+    return slot;
+}
+
+/* Build the main content page for one group. */
+static lv_obj_t *_build_group_page(lv_settings_priv_t *priv,
+                                    lv_obj_t *menu, int group)
+{
+    lv_obj_t *page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_hor(page,
+        lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
+    lv_menu_separator_create(page);
+    lv_obj_t *section = lv_menu_section_create(page);
+
+    int key_count = app_settings_key_count((app_settings_group_t)group);
     for (int k = 0; k < key_count; k++) {
         const app_setting_def_t *d = app_settings_get_def(
             (app_settings_group_t)group, k);
         if (!d) continue;
-
-        row_slot_t *rs = &priv->rows[priv->row_count];
-        rs->group = group;
-        rs->key   = k;
-
-        rs->row = lv_obj_create(priv->rows_cont);
-        lv_obj_set_size(rs->row, LV_PCT(100), LV_SETTINGS_ROW_H);
-        lv_obj_set_flex_flow(rs->row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(rs->row,
-                               LV_FLEX_ALIGN_START,
-                               LV_FLEX_ALIGN_CENTER,
-                               LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_all(rs->row, 4, 0);
-        lv_obj_set_style_pad_column(rs->row, 6, 0);
-        lv_obj_set_style_border_width(rs->row, 0, 0);
-        lv_obj_set_style_radius(rs->row, 6, 0);
-        lv_obj_set_style_bg_opa(rs->row, LV_OPA_0, 0);
-        lv_obj_set_style_bg_opa(rs->row, LV_OPA_30, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(rs->row, lv_color_hex(0x2196F3),
-                                   LV_STATE_FOCUSED);
-        lv_obj_add_flag(rs->row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(rs->row, _row_clicked_cb, LV_EVENT_CLICKED, rs);
-
-        lv_obj_t *nlbl = lv_label_create(rs->row);
-        lv_label_set_text(nlbl, d->name);
-        lv_label_set_long_mode(nlbl, LV_LABEL_LONG_CLIP);
-        lv_obj_set_flex_grow(nlbl, 1);
-
-        if (d->type == APP_SETTING_TYPE_BOOL) {
-            lv_obj_t *tog = lv_btn_create(rs->row);
-            lv_obj_set_size(tog, 70, 34);
-            lv_obj_add_flag(tog, LV_OBJ_FLAG_CHECKABLE);
-            app_setting_val_t v = app_settings_get_val(
-                (app_settings_group_t)group, k);
-            if (v.b) lv_obj_add_state(tog, LV_STATE_CHECKED);
-            rs->value_lbl = lv_label_create(tog);
-            lv_label_set_text(rs->value_lbl, v.b ? "ON" : "OFF");
-            lv_obj_center(rs->value_lbl);
-            rs->inc_btn = tog;
-            lv_obj_add_event_cb(tog, _inc_btn_cb, LV_EVENT_CLICKED, rs);
-        } else {
-            rs->dec_btn = lv_btn_create(rs->row);
-            lv_obj_set_size(rs->dec_btn, LV_SETTINGS_BTN_W, 36);
-            lv_obj_center(lv_label_create(rs->dec_btn));
-            lv_label_set_text(lv_obj_get_child(rs->dec_btn, 0), LV_SYMBOL_LEFT);
-            lv_obj_add_event_cb(rs->dec_btn, _dec_btn_cb, LV_EVENT_CLICKED, rs);
-
-            rs->value_lbl = lv_label_create(rs->row);
-            lv_obj_set_width(rs->value_lbl, LV_SETTINGS_VALUE_W);
-            lv_label_set_long_mode(rs->value_lbl, LV_LABEL_LONG_CLIP);
-            lv_obj_set_style_text_align(rs->value_lbl,
-                                         LV_TEXT_ALIGN_CENTER, 0);
-
-            rs->inc_btn = lv_btn_create(rs->row);
-            lv_obj_set_size(rs->inc_btn, LV_SETTINGS_BTN_W, 36);
-            lv_obj_center(lv_label_create(rs->inc_btn));
-            lv_label_set_text(lv_obj_get_child(rs->inc_btn, 0), LV_SYMBOL_RIGHT);
-            lv_obj_add_event_cb(rs->inc_btn, _inc_btn_cb, LV_EVENT_CLICKED, rs);
-
-            _update_row_value(rs);
-        }
-
-        priv->row_count++;
+        if (d->type == APP_SETTING_TYPE_BOOL)
+            _add_bool_slot(priv, section, group, k);
+        else
+            _add_numeric_slot(priv, section, group, k);
     }
-
-    LOGD(TAG, "Right panel: group=%d rows=%d", group, priv->row_count);
+    return page;
 }
 
-// ---------------------------------------------------------------------------
-// Public API — create
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Public API — create
+ * ========================================================================= */
 
 lv_obj_t *lv_settings_create(lv_obj_t *parent)
 {
     lv_settings_priv_t *priv =
         (lv_settings_priv_t *)lv_malloc(sizeof(lv_settings_priv_t));
-    if (!priv) {
-        LOGE(TAG, "Failed to alloc lv_settings_priv_t");
-        return NULL;
-    }
+    if (!priv) { LOGE(TAG, "OOM allocating settings priv"); return NULL; }
     memset(priv, 0, sizeof(*priv));
     priv->active_group = 0;
     priv->focused_row  = -1;
 
-    /* ---- Root --------------------------------------------------------- */
-    lv_obj_t *root = lv_obj_create(parent);
-    priv->root = root;
-    lv_obj_set_user_data(root, priv);
-    lv_obj_add_event_cb(root, _root_delete_cb, LV_EVENT_DELETE, NULL);
-    lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_flex_flow(root, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(root, 4, 0);
-    lv_obj_set_style_pad_column(root, 6, 0);
-    lv_obj_set_style_border_width(root, 0, 0);
+    /* --- Create lv_menu -------------------------------------------------- */
+    lv_obj_t *menu = lv_menu_create(parent);
+    priv->root = menu;
+    lv_obj_set_user_data(menu, priv);
+    lv_obj_add_event_cb(menu, _root_delete_cb,        LV_EVENT_DELETE,        NULL);
+    lv_obj_add_event_cb(menu, _menu_value_changed_cb, LV_EVENT_VALUE_CHANGED, priv);
+    lv_obj_set_size(menu, LV_PCT(100), LV_PCT(100));
+    lv_menu_set_mode_root_back_button(menu, LV_MENU_ROOT_BACK_BUTTON_DISABLED);
 
-    /* ---- Left panel — group selector ---------------------------------- */
-    priv->left_panel = lv_obj_create(root);
-    lv_obj_set_size(priv->left_panel, LV_SETTINGS_LEFT_W, LV_PCT(100));
-    lv_obj_set_flex_flow(priv->left_panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(priv->left_panel, 6, 0);
-    lv_obj_set_style_pad_row(priv->left_panel, 4, 0);
-    lv_obj_set_scroll_dir(priv->left_panel, LV_DIR_VER);
+    /* --- Build content pages (do this BEFORE hiding header so the header  */
+    /* --- padding helper still reads the header's style)                   */
+    for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++)
+        priv->pages[g] = _build_group_page(priv, menu, g);
 
-    lv_obj_t *hdr = lv_label_create(priv->left_panel);
-    lv_label_set_text(hdr, "GROUPS");
-    lv_obj_set_style_text_color(hdr, lv_color_hex(0x888888), 0);
-
-    for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++) {
-        lv_obj_t *btn = lv_btn_create(priv->left_panel);
-        lv_obj_set_size(btn, LV_PCT(100), 44);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
-        lv_obj_t *bl = lv_label_create(btn);
-        lv_label_set_text(bl, app_settings_group_name(
-                               (app_settings_group_t)g));
-        lv_label_set_long_mode(bl, LV_LABEL_LONG_CLIP);
-        lv_obj_center(bl);
-        lv_obj_add_event_cb(btn, _group_btn_cb, LV_EVENT_CLICKED, priv);
-        priv->group_btns[g] = btn;
+    /* --- "Reload Defaults" content page ---------------------------------- */
+    priv->reload_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_hor(priv->reload_page,
+        lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
+    lv_menu_separator_create(priv->reload_page);
+    {
+        lv_obj_t *sec  = lv_menu_section_create(priv->reload_page);
+        lv_obj_t *cont = lv_menu_cont_create(sec);
+        lv_obj_t *img  = lv_image_create(cont);
+        lv_image_set_src(img, LV_SYMBOL_REFRESH);
+        lv_obj_t *lbl  = lv_label_create(cont);
+        lv_label_set_text(lbl, "Reset All to Defaults");
+        lv_obj_set_style_flex_grow(lbl, 1, 0);
+        lv_obj_add_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(cont, _reload_cont_cb, LV_EVENT_CLICKED, priv);
     }
 
-    /* Thin divider line */
-    lv_obj_t *div = lv_obj_create(priv->left_panel);
-    lv_obj_set_size(div, LV_PCT(90), 2);
-    lv_obj_set_style_bg_color(div, lv_color_hex(0x505050), 0);
-    lv_obj_set_style_border_width(div, 0, 0);
+    /* --- Hide main-panel header (back bar) ------------------------------- */
+    lv_obj_t *main_hdr = lv_menu_get_main_header(menu);
+    if (main_hdr) lv_obj_add_flag(main_hdr, LV_OBJ_FLAG_HIDDEN);
 
-    /* Reset-all button */
-    lv_obj_t *rst = lv_btn_create(priv->left_panel);
-    lv_obj_set_size(rst, LV_PCT(100), 44);
-    lv_obj_t *rl = lv_label_create(rst);
-    lv_label_set_text(rl, LV_SYMBOL_REFRESH " Defaults");
-    lv_obj_center(rl);
-    lv_obj_add_event_cb(rst, _reset_btn_cb, LV_EVENT_CLICKED, priv);
+    /* --- Build sidebar (root) page --------------------------------------- */
+    lv_obj_t *sb_page = lv_menu_page_create(menu, NULL);
+    lv_obj_set_style_pad_hor(sb_page,
+        lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
 
-    /* ---- Right panel — setting rows ----------------------------------- */
-    priv->right_panel = lv_obj_create(root);
-    lv_obj_set_flex_grow(priv->right_panel, 1);
-    lv_obj_set_height(priv->right_panel, LV_PCT(100));
-    lv_obj_set_flex_flow(priv->right_panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(priv->right_panel, 6, 0);
-    lv_obj_set_style_pad_row(priv->right_panel, 4, 0);
-    lv_obj_set_style_border_width(priv->right_panel, 0, 0);
+    /* Section 1 — one entry per settings group */
+    {
+        lv_obj_t *sect = lv_menu_section_create(sb_page);
+        for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++) {
+            const char *sym  = g_group_symbols[g];
+            const char *name = app_settings_group_name((app_settings_group_t)g);
+            lv_obj_t *item = lv_menu_cont_create(sect);
+            if (sym) {
+                lv_obj_t *img = lv_image_create(item);
+                lv_image_set_src(img, sym);
+            }
+            lv_obj_t *lbl = lv_label_create(item);
+            lv_label_set_text(lbl, name);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_flex_grow(lbl, 1, 0);
+            lv_menu_set_load_page_event(menu, item, priv->pages[g]);
+        }
+    }
 
-    priv->group_title = lv_label_create(priv->right_panel);
-    lv_label_set_text(priv->group_title, "");
-    lv_obj_set_style_text_color(priv->group_title,
-                                 lv_color_hex(0xbbbbbb), 0);
+    /* Section 2 — "Reload Defaults" entry */
+    {
+        lv_menu_separator_create(sb_page);
+        lv_obj_t *sect = lv_menu_section_create(sb_page);
+        lv_obj_t *item = lv_menu_cont_create(sect);
+        lv_obj_t *img  = lv_image_create(item);
+        lv_image_set_src(img, LV_SYMBOL_REFRESH);
+        lv_obj_t *lbl  = lv_label_create(item);
+        lv_label_set_text(lbl, "Reload Defaults");
+        lv_obj_set_style_flex_grow(lbl, 1, 0);
+        lv_menu_set_load_page_event(menu, item, priv->reload_page);
+    }
 
-    priv->rows_cont = lv_obj_create(priv->right_panel);
-    lv_obj_set_flex_grow(priv->rows_cont, 1);
-    lv_obj_set_width(priv->rows_cont, LV_PCT(100));
-    lv_obj_set_flex_flow(priv->rows_cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(priv->rows_cont, 2, 0);
-    lv_obj_set_style_pad_row(priv->rows_cont, 2, 0);
-    lv_obj_set_style_border_width(priv->rows_cont, 0, 0);
-    lv_obj_set_scroll_dir(priv->rows_cont, LV_DIR_VER);
+    /* --- Activate sidebar and auto-click first group entry --------------- */
+    lv_menu_set_sidebar_page(menu, sb_page);
+    lv_obj_send_event(
+        lv_obj_get_child(
+            lv_obj_get_child(lv_menu_get_cur_sidebar_page(menu), 0), 0),
+        LV_EVENT_CLICKED, NULL);
 
-    /* Build first group */
-    _build_right_panel(priv, 0);
-    lv_obj_add_state(priv->group_btns[0], LV_STATE_CHECKED);
-
-    LOGI(TAG, "lv_settings created (%d groups)", APP_SETTINGS_GROUP__COUNT);
-    return root;
+    LOGI(TAG, "lv_settings created: %d groups %d slots",
+         APP_SETTINGS_GROUP__COUNT, priv->slot_count);
+    return menu;
 }
 
-// ---------------------------------------------------------------------------
-// Public API — refresh
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Public API — refresh
+ * ========================================================================= */
 
 void lv_settings_refresh(lv_obj_t *obj)
 {
     lv_settings_priv_t *priv = _get_priv(obj);
     if (!priv) return;
-    _build_right_panel(priv, priv->active_group);
+    for (int i = 0; i < priv->slot_count; i++) {
+        setting_slot_t *slot = &priv->slots[i];
+        const app_setting_def_t *d = app_settings_get_def(
+            (app_settings_group_t)slot->group, slot->key);
+        if (!d) continue;
+        app_setting_val_t v = app_settings_get_val(
+            (app_settings_group_t)slot->group, slot->key);
+        if (d->type == APP_SETTING_TYPE_BOOL) {
+            if (slot->sw) {
+                if (v.b) lv_obj_add_state(slot->sw, LV_STATE_CHECKED);
+                else     lv_obj_clear_state(slot->sw, LV_STATE_CHECKED);
+            }
+        } else {
+            if (slot->value_lbl) {
+                char buf[40];
+                _fmt_value(buf, sizeof(buf), d, v);
+                lv_label_set_text(slot->value_lbl, buf);
+            }
+            if (slot->slider) {
+                slot->updating = true;
+                lv_slider_set_value(slot->slider,
+                    _val_to_slider(d, v), LV_ANIM_OFF);
+                slot->updating = false;
+            }
+        }
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Public API — encoder
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Public API — encoder
+ * ========================================================================= */
 
 void lv_settings_encoder_input(lv_obj_t *obj, int32_t diff)
 {
     if (diff == 0) return;
     lv_settings_priv_t *priv = _get_priv(obj);
     if (!priv) return;
-
     if (priv->focused_row >= 0) {
-        /* Clamp: avoid runaway on fast spins */
-        int steps = (diff > 0) ? (int)diff : -(int)(-diff);
+        int steps = diff > 0 ? (int)diff : -(int)(-diff);
         if (steps > 10) steps = 10;
-        int dir = (diff > 0) ? 1 : -1;
+        int dir = diff > 0 ? 1 : -1;
         for (int i = 0; i < steps; i++)
-            _adjust_row_value(priv, priv->focused_row, dir);
+            _adjust_slot_value(&priv->slots[priv->focused_row], dir);
     } else {
-        /* Scroll the rows list */
-        int32_t y = lv_obj_get_scroll_y(priv->rows_cont);
-        lv_obj_scroll_to_y(priv->rows_cont,
-                           y + (int32_t)(diff * LV_SETTINGS_ROW_H / 2),
-                           LV_ANIM_OFF);
+        lv_obj_t *cur = lv_menu_get_cur_main_page(priv->root);
+        if (cur) lv_obj_scroll_to_y(cur,
+            lv_obj_get_scroll_y(cur) + diff * 40, LV_ANIM_OFF);
     }
 }
 
 bool lv_settings_has_encoder_focus(lv_obj_t *obj)
 {
     lv_settings_priv_t *priv = _get_priv(obj);
-    if (!priv) return false;
-    return priv->focused_row >= 0;
+    return priv ? priv->focused_row >= 0 : false;
 }
 
 void lv_settings_encoder_navigate(lv_obj_t *obj, int32_t dir)
 {
     if (dir == 0) return;
     lv_settings_priv_t *priv = _get_priv(obj);
-    if (!priv || priv->row_count == 0) return;
+    if (!priv || priv->slot_count == 0 || priv->active_group < 0) return;
 
-    int next = priv->focused_row + ((dir > 0) ? 1 : -1);
-    if (next < 0) next = priv->row_count - 1;
-    if (next >= priv->row_count) next = 0;
-    _set_row_focused(priv, next);
+    int g = priv->active_group;
+    int first = -1, last = -1;
+    for (int i = 0; i < priv->slot_count; i++) {
+        if (priv->slots[i].group == g) {
+            if (first < 0) first = i;
+            last = i;
+        }
+    }
+    if (first < 0) return;
+
+    int cur = priv->focused_row;
+    int next;
+    if (cur < first || cur > last) {
+        next = dir > 0 ? first : last;
+    } else {
+        next = cur + (dir > 0 ? 1 : -1);
+        if (next < first) next = last;
+        if (next > last)  next = first;
+    }
+    _set_slot_focused(priv, next);
 }
 
-// ---------------------------------------------------------------------------
-// Public API — change callback
-// ---------------------------------------------------------------------------
+/* =========================================================================
+ * Public API — change callback
+ * ========================================================================= */
 
 void lv_settings_set_changed_cb(lv_obj_t *obj,
                                   lv_settings_changed_cb_t cb,

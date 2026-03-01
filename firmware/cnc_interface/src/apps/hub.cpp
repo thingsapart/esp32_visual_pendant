@@ -257,10 +257,17 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
 void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
   led_status_sending();
   const char *tool = machine->tool ? machine->tool : "";
-  int rpm = machine->spindles ? machine->spindles->rpm : 0;
-  size_t tool_len = strlen(tool);
+  int32_t rpm  = machine->spindles ? (int32_t)machine->spindles->rpm : 0;
+  uint16_t tool_len = (uint16_t)(strlen(tool) & 0xFFFFu);
 
-  size_t total_len = sizeof(uint8_t) + sizeof(int) + sizeof(size_t) + tool_len;
+  // Diameter: encode as uint16_t × 100 (e.g. 6.35 mm → 635).
+  uint16_t dia_x100 = (machine->tool_diameter_mm > 0.0f)
+                        ? (uint16_t)(machine->tool_diameter_mm * 100.0f + 0.5f)
+                        : 0u;
+  uint8_t flutes = (uint8_t)(machine->tool_flute_count > 0
+                              ? machine->tool_flute_count : 0);
+
+  size_t total_len = SPINDLES_TOOLS_WIRE_HEADER_LEN + tool_len;
   uint8_t *buf = (uint8_t *)malloc(total_len);
   if (!buf) {
     LOGE(TAG, "Failed to allocate spindles_tools buffer");
@@ -269,18 +276,24 @@ void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
 
   size_t off = 0;
   // type
-  buf[off] = (uint8_t)MSG_TYPE_SPINDLES_TOOLS;
-  off += sizeof(uint8_t);
+  buf[off++] = (uint8_t)MSG_TYPE_SPINDLES_TOOLS;
 
-  // rpm
-  memcpy(buf + off, &rpm, sizeof(int));
-  off += sizeof(int);
+  // rpm (int32_t, LE)
+  memcpy(buf + off, &rpm, sizeof(int32_t));
+  off += sizeof(int32_t);
 
-  // tool length
-  memcpy(buf + off, &tool_len, sizeof(size_t));
-  off += sizeof(size_t);
+  // tool name length (uint16_t, LE)
+  memcpy(buf + off, &tool_len, sizeof(uint16_t));
+  off += sizeof(uint16_t);
 
-  // tool chars (may be zero-length)
+  // diameter × 100 (uint16_t, LE)
+  memcpy(buf + off, &dia_x100, sizeof(uint16_t));
+  off += sizeof(uint16_t);
+
+  // flute count (uint8_t)
+  buf[off++] = flutes;
+
+  // tool name bytes (no NUL)
   if (tool_len > 0) {
     memcpy(buf + off, tool, tool_len);
     off += tool_len;

@@ -83,6 +83,26 @@ typedef struct {
 } spindle_t;
 
 // ---------------------------------------------------------------------------
+// Chipload / material enum
+// ---------------------------------------------------------------------------
+
+/// Work material for chipload table lookup.
+typedef enum {
+  TOOL_MATERIAL_ALUMINIUM      = 0,
+  TOOL_MATERIAL_STEEL_MILD     = 1,
+  TOOL_MATERIAL_STEEL_STAINLESS= 2,
+  TOOL_MATERIAL_HARD_PLASTIC   = 3,
+  TOOL_MATERIAL_ACRYLIC        = 4,
+  TOOL_MATERIAL_MDF            = 5,
+  TOOL_MATERIAL_SOFTWOOD       = 6,  ///< Softwood / Plywood
+  TOOL_MATERIAL_HARDWOOD       = 7,
+  TOOL_MATERIAL_COUNT,
+} tool_material_t;
+
+/// Sentinel returned by chipload functions when the spindle is not spinning.
+#define CHIPLOAD_SPINDLE_STOPPED (-1.0f)
+
+// ---------------------------------------------------------------------------
 // Generalized I/O Channel Model
 //
 // Every CNC controller — RRF, GRBL, FlexiHAL, Masso, Mach4 — can be mapped
@@ -248,6 +268,8 @@ typedef struct machine_interface_t {
   float current_move_step_z;
   int wcs;
   const char *tool;
+  float tool_diameter_mm;  ///< Parsed from tool name; 0 if unknown
+  int   tool_flute_count;  ///< Parsed from tool name; 0 if unknown
   float z_offs;
   float feed;
   float feed_req;
@@ -424,6 +446,24 @@ void machine_interface_process_machine_state_response(machine_interface_t *self,
                                                       void *data, size_t len);
 
 bool machine_interface_should_poll(machine_interface_t *self);
+
+// ---------------------------------------------------------------------------
+// Chipload calculation
+// ---------------------------------------------------------------------------
+// Returns CHIPLOAD_SPINDLE_STOPPED when the spindle RPM is 0 or tool info
+// (diameter, flute count) is unknown (0).  All other inputs are taken from
+// self->feed (mm/min), self->spindles[0].rpm, self->tool_flute_count and the
+// material chipload tables.
+
+/// Compute current chipload in mm/tooth (or CHIPLOAD_SPINDLE_STOPPED).
+float machine_interface_compute_chipload(const machine_interface_t *self);
+
+/// Compute chipload relative to the optimal for the current tool diameter and
+/// material.  Returns a value in [0, 150] where 100 = optimal midpoint.
+/// Returns CHIPLOAD_SPINDLE_STOPPED when spindle is stopped.
+/// @param material  Work material for table lookup.
+float machine_interface_compute_chipload_relative(const machine_interface_t *self,
+                                                  tool_material_t material);
 
 bool machine_interface_add_files_changed_cb(machine_interface_t *self,
                                             const char *path, void *user_data,

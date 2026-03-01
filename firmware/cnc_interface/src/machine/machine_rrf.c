@@ -89,11 +89,142 @@ static void _machine_rrf_attempt_connect(machine_interface_t *self);
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode);
 static inline bool _is_m114_body_start(const char *s);
 static bool _serial_parse_m114_body(machine_rrf_t *self, const char *body);
+static void _rrf_parse_tool_name(machine_interface_t *base, const char *name);
 
 #ifdef ESP32_HW
 // millis() is provided by the Arduino framework; declare it for the C compiler.
 extern unsigned long millis(void);
 #endif
+
+
+// --- Tool Name Parser ---
+//
+// Extracts tool diameter (in mm) and flute count from a free-form tool name
+// string supplied by the CAD post-processor.  Called only when the tool name
+// changes (guarded by the caller).
+//
+// Supported diameter formats (case-insensitive):
+//   "6mm", "6.35mm", "1/4\"", "1/4in", "0.25inch", "6.35 mm"
+//   Leading digit sequences without a unit are treated as mm when they
+//   precede the word "mm" (metric), otherwise ignored to avoid false matches.
+//
+// Supported flute formats (case-insensitive):
+//   "single flute", "1F", "2F", "3F", "4F", "1-flute", "2-flute",
+//   "3 flute", "one flute", "two flute", "three flute", "four flute",
+//   "1 flute", "2 flutes", "3 flutes"
+static void _rrf_parse_tool_name(machine_interface_t *base, const char *name) {
+  if (!base || !name) return;
+
+  base->tool_diameter_mm = 0.0f;
+  base->tool_flute_count = 0;
+
+  // Work on a lower-case copy for case-insensitive matching.
+  char buf[128];
+  size_t n = strlen(name);
+  if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+  for (size_t i = 0; i < n; i++) buf[i] = (char)tolower((unsigned char)name[i]);
+  buf[n] = '\0';
+
+  // ---- Diameter ----
+  // Strategy: scan for known patterns left-to-right.
+  //   a) Fractional inch:  <int>/<int> [" | in | inch]
+  //   b) Decimal with unit: <float> [mm | in | "]
+  float diameter_mm = 0.0f;
+  const char *p = buf;
+  while (*p) {
+    // Skip non-digit characters (but allow '.' and '/' inside a number).
+    if (!isdigit((unsigned char)*p)) { p++; continue; }
+
+    char *end_ptr = NULL;
+    float val = strtof(p, &end_ptr);
+    if (!end_ptr || end_ptr == p) { p++; continue; }
+
+    // Check what follows the number for a unit.
+    const char *after = end_ptr;
+    while (*after == ' ') after++;  // skip optional space before unit
+
+    bool is_fractional = false;
+    float frac_val = 0.0f;
+
+    // Fractional inch: e.g. "1/4"
+    if (*end_ptr == '/') {
+      char *denom_end = NULL;
+      float denom = strtof(end_ptr + 1, &denom_end);
+      if (denom_end && denom_end != end_ptr + 1 && denom > 0.0f) {
+        frac_val = val / denom;
+        after = denom_end;
+        while (*after == ' ') after++;
+        is_fractional = true;
+      }
+    }
+
+    float candidate = is_fractional ? frac_val : val;
+
+    bool is_inch = (strncmp(after, "\"", 1) == 0 ||
+                    strncmp(after, "in", 2) == 0);
+    bool is_mm   = (strncmp(after, "mm", 2) == 0);
+
+    if (is_inch && candidate > 0.0f) {
+      diameter_mm = candidate * 25.4f;
+      break;
+    } else if (is_mm && candidate > 0.0f) {
+      diameter_mm = candidate;
+      break;
+    }
+    // Advance past the number we consumed to avoid re-matching.
+    p = end_ptr;
+  }
+  if (diameter_mm > 0.0f) base->tool_diameter_mm = diameter_mm;
+
+  // ---- Flute count ----
+  int flutes = 0;
+
+  // Text patterns (already lower-cased) — check longest first.
+  if      (strstr(buf, "single flute") || strstr(buf, "one flute") ||
+           strstr(buf, "1 flute")       || strstr(buf, "1-flute"))  flutes = 1;
+  else if (strstr(buf, "two flute")    || strstr(buf, "2 flute")   ||
+           strstr(buf, "2-flute")       || strstr(buf, "double flute")) flutes = 2;
+  else if (strstr(buf, "three flute")  || strstr(buf, "3 flute")   ||
+           strstr(buf, "3-flute"))                                   flutes = 3;
+  else if (strstr(buf, "four flute")   || strstr(buf, "4 flute")   ||
+           strstr(buf, "4-flute"))                                   flutes = 4;
+  else if (strstr(buf, "five flute")   || strstr(buf, "5 flute")   ||
+           strstr(buf, "5-flute"))                                   flutes = 5;
+  else if (strstr(buf, "six flute")    || strstr(buf, "6 flute")   ||
+           strstr(buf, "6-flute"))                                   flutes = 6;
+
+  // Compact nF pattern: "1f", "2f", "3f" -- but NOT "proof", "rf" etc.
+  // Must be preceded by a digit or start.
+  if (flutes == 0) {
+    const char *fp = buf;
+    while (*fp) {
+      if (isdigit((unsigned char)*fp) && fp[1] == 'f' &&
+          !isalpha((unsigned char)fp[2])) {
+        flutes = (int)(*fp - '0');
+        break;
+      }
+      fp++;
+    }
+  }
+
+  // "<digit>fl" e.g. "3fl"
+  if (flutes == 0) {
+    const char *fp = buf;
+    while (*fp) {
+      if (isdigit((unsigned char)*fp) && fp[1] == 'f' && fp[2] == 'l' &&
+          !isalpha((unsigned char)fp[3])) {
+        flutes = (int)(*fp - '0');
+        break;
+      }
+      fp++;
+    }
+  }
+
+  if (flutes > 0) base->tool_flute_count = flutes;
+
+  LOGD(TAG, "Tool '%s' -> dia=%.3fmm flutes=%d", name,
+       base->tool_diameter_mm, base->tool_flute_count);
+}
 
 
 // --- Generic "Virtual" Method Implementations ---
@@ -1866,6 +1997,8 @@ bool machine_rrf_parse_m409_response(machine_rrf_t *self, cJSON *json_obj) {
             (!self->base.tool || strcmp(self->base.tool, tool_name) != 0)) {
           if (self->base.tool) free((void *)self->base.tool);
           self->base.tool = strdup(tool_name);
+          // Re-parse diameter / flute count only when the name actually changed.
+          _rrf_parse_tool_name(&self->base, tool_name);
           tool_updated = true;
         }
       }

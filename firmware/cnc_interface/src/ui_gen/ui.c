@@ -2606,10 +2606,12 @@ static void create_ui_obj_354(lv_obj_t* parent) {
 
     obj_registry_add("settings_panel_contaoner", settings_panel_contaoner_355);
     lv_obj_set_style_size(settings_panel_contaoner_355, lv_pct(100), lv_pct(100), 0);
+    lv_obj_add_style(settings_panel_contaoner_355, container_8, 0);
     // settings_panel: settings_panel_356 (obj)
     lv_obj_t* settings_panel_356 = lv_settings_create(settings_panel_contaoner_355);
 
     obj_registry_add("settings_panel", settings_panel_356);
+    lv_obj_add_style(settings_panel_356, container_8, 0);
     lv_obj_set_style_size(settings_panel_356, lv_pct(100), lv_pct(100), 0);
 
 
@@ -3524,13 +3526,13 @@ void create_ui(lv_obj_t* parent) {
     deferred_loader_register(main_tileview_73, obj_320, create_ui_obj_320);
 
     // unnamed: obj_351 (obj)
-    lv_obj_t* obj_351 = lv_tileview_add_tile(main_tileview_73, 6, 0, 3);
+    lv_obj_t* obj_351 = lv_tileview_add_tile(main_tileview_73, 7, 0, 3);
 
     lv_obj_add_style(obj_351, container_8, 0);
     deferred_loader_register(main_tileview_73, obj_351, create_ui_obj_351);
 
     // unnamed: obj_354 (obj)
-    lv_obj_t* obj_354 = lv_tileview_add_tile(main_tileview_73, 7, 0, LV_DIR_LEFT);
+    lv_obj_t* obj_354 = lv_tileview_add_tile(main_tileview_73, 8, 0, LV_DIR_LEFT);
 
     lv_obj_add_style(obj_354, container_8, 0);
     deferred_loader_register(main_tileview_73, obj_354, create_ui_obj_354);

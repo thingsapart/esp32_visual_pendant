@@ -547,6 +547,8 @@ static void _mach_copy_state(multi_machine_interface_t *mm,
     if (mm->base.tool) free((void *)mm->base.tool);
     mm->base.tool = strdup(mach->tool);
   }
+  mm->base.tool_diameter_mm = mach->tool_diameter_mm;
+  mm->base.tool_flute_count = mach->tool_flute_count;
   MACH_ARRCPY(probes);
   MACH_ARRCPY(end_stops);
   MACH_ARRCPY(spindles);

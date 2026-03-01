@@ -96,12 +96,12 @@ static void on_wcs_change(machine_interface_t *machine, void *user_data) {
 
 static void on_feed_change(machine_interface_t *machine, void *user_data) {
   ((interface_t *)user_data)->dirty_flags |=
-      (UI_DIRTY_FEEDRATE | UI_DIRTY_OVERRIDES);
+      (UI_DIRTY_FEEDRATE | UI_DIRTY_OVERRIDES | UI_DIRTY_CHIPLOAD);
 }
 
 static void on_spindle_tool_change(machine_interface_t *machine,
                                    void *user_data) {
-  ((interface_t *)user_data)->dirty_flags |= UI_DIRTY_SPINDLE;
+  ((interface_t *)user_data)->dirty_flags |= (UI_DIRTY_SPINDLE | UI_DIRTY_CHIPLOAD);
 }
 
 static void on_connected_change(machine_interface_t *machine, void *user_data) {
@@ -325,6 +325,7 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->current_msgbox = NULL;
   interface->log_message_buf[0] = '\0';
   interface->toast_bar = NULL;
+  interface->current_material = TOOL_MATERIAL_ALUMINIUM;  // sensible default
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
@@ -589,12 +590,50 @@ void interface_tick(interface_t *interface) {
     if (machine->num_spindles > 0 && machine->spindles) {
       rpm = (float)machine->spindles[0].rpm;
     }
+    bool spindle_running = (rpm > 1e-5f || rpm < -1e-5f);  // CW or CCW
     data_binding_notify_state_changed(
         "spindle.speed_rpm",
         (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = rpm});
     data_binding_notify_state_changed(
         "spindle.is_on",
-        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = (rpm > 1e-5)});
+        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = spindle_running});
+    // "machine.spindle_is_running" mirrors spindle.is_on for convenience.
+    data_binding_notify_state_changed(
+        "machine.spindle_is_running",
+        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = spindle_running});
+    // Tool info.
+    data_binding_notify_state_changed(
+        "tool.name",
+        (binding_value_t){.type = BINDING_TYPE_STRING,
+                          .as.s_val = machine->tool ? machine->tool : ""});
+    data_binding_notify_state_changed(
+        "tool.diameter_mm",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = machine->tool_diameter_mm});
+    data_binding_notify_state_changed(
+        "tool.flute_count",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = (float)machine->tool_flute_count});
+  }
+
+  if (flags_to_process & UI_DIRTY_CHIPLOAD) {
+    float cl = machine_interface_compute_chipload(machine);
+    bool spindle_stopped = (cl == CHIPLOAD_SPINDLE_STOPPED);
+    data_binding_notify_state_changed(
+        "machine.spindle_is_running",
+        (binding_value_t){.type = BINDING_TYPE_BOOL,
+                          .as.b_val = !spindle_stopped});
+    data_binding_notify_state_changed(
+        "machine.chipload",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = spindle_stopped ? 0.0f : cl});
+    float cl_rel = machine_interface_compute_chipload_relative(
+        machine, interface->current_material);
+    data_binding_notify_state_changed(
+        "machine.chipload_relative",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT,
+                          .as.f_val = (cl_rel == CHIPLOAD_SPINDLE_STOPPED)
+                                          ? 0.0f : cl_rel});
   }
 
   if (flags_to_process & UI_DIRTY_DIALOGS) {
@@ -865,3 +904,10 @@ after_files_macros: ;
   }
 }
 
+void interface_set_material(interface_t *interface, tool_material_t material) {
+  if (!interface) return;
+  if ((unsigned)material >= TOOL_MATERIAL_COUNT) return;
+  interface->current_material = material;
+  // Immediately recompute and publish chipload with the new material.
+  interface->dirty_flags |= UI_DIRTY_CHIPLOAD;
+}
