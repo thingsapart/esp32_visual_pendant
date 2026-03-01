@@ -13,6 +13,7 @@
 #include "ui/components/lv_cam_positioning.h"
 #include "ui/components/lv_cnc_io_panel.h"
 #include "machine/machine_interface.h"
+#include "config/app_settings.h"
 
 static const char *TAG = "UI_INTERFACE";
 
@@ -319,6 +320,20 @@ static void homed_led_longpress_cb(lv_event_t *e) {
 
 // --- Public API ---
 
+// callback used by lv_settings when any value changes; we only care about the
+// material-type key so that the live UI can update the chipload immediately.
+static void _settings_changed_cb(int group, int key, void *user_data) {
+    if (group == APP_SETTINGS_GROUP_MATERIALS &&
+        key == APP_SETTINGS_MATERIAL_TYPE && user_data) {
+        interface_t *iface = (interface_t *)user_data;
+        int m = app_settings_get_int(APP_SETTINGS_GROUP_MATERIALS,
+                                     APP_SETTINGS_MATERIAL_TYPE);
+        if (m < 0 || m >= TOOL_MATERIAL_COUNT)
+            m = TOOL_MATERIAL_ALUMINIUM;
+        interface_set_material(iface, (tool_material_t)m);
+    }
+}
+
 void interface_init(interface_t *interface, machine_interface_t *machine) {
   interface->machine = machine;
   interface->dirty_flags = UI_DIRTY_ALL;  // Mark all as dirty for initial sync
@@ -329,6 +344,19 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
 
   lvgl_ui_init();
   create_ui(lv_screen_active());
+
+  /* After UI is created we can read material setting and apply it, and
+   * register a callback so that changes made via the settings panel are
+   * propagated live. */
+  int mat = app_settings_get_int(APP_SETTINGS_GROUP_MATERIALS,
+                                 APP_SETTINGS_MATERIAL_TYPE);
+  if (mat < 0 || mat >= TOOL_MATERIAL_COUNT) mat = TOOL_MATERIAL_ALUMINIUM;
+  interface_set_material(interface, (tool_material_t)mat);
+
+  lv_obj_t *settings = obj_registry_get("settings_panel");
+  if (settings) {
+      lv_settings_set_changed_cb(settings, _settings_changed_cb, interface);
+  }
 
   interface->probing_wizard = obj_registry_get("probing_wizard");
   if (!interface->probing_wizard) {

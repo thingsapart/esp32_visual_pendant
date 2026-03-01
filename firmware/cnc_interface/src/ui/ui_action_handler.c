@@ -322,7 +322,7 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     int tile = (int)(value.as.f_val + 0.001f);
     lv_obj_t* tileview = obj_registry_get("main_tileview");
     if (!tileview) { return; }
-    lv_obj_set_tile_id(tileview, 0, tile, LV_ANIM_ON);
+    lv_obj_set_tile_id(tileview, tile, 0, LV_ANIM_ON);
   }
 
   // --- Probe dimension settings (from the probe-mode tab numeric dialogs) ---

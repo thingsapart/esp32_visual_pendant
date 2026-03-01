@@ -23,17 +23,18 @@ extern "C" {
 // Value types
 // ---------------------------------------------------------------------------
 
-typedef enum {
-    APP_SETTING_TYPE_FLOAT = 0,
-    APP_SETTING_TYPE_INT32,
-    APP_SETTING_TYPE_BOOL,
-} app_setting_type_t;
-
 typedef union {
     float   f;
     int32_t i;
     bool    b;
 } app_setting_val_t;
+
+typedef enum {
+    APP_SETTING_TYPE_FLOAT = 0,
+    APP_SETTING_TYPE_INT32,
+    APP_SETTING_TYPE_BOOL,
+    APP_SETTING_TYPE_ENUM,      ///< Integer index into a fixed list of choices
+} app_setting_type_t;
 
 // ---------------------------------------------------------------------------
 // Setting descriptor — one per key
@@ -44,9 +45,11 @@ typedef struct {
     const char         *unit;     ///< Unit string ("mm/min", "mm/s²", …) or ""
     app_setting_type_t  type;
     app_setting_val_t   def;      ///< Compile-time default (also NVS fallback)
-    app_setting_val_t   min;      ///< Minimum value (for FLOAT/INT32)
-    app_setting_val_t   max;      ///< Maximum value (for FLOAT/INT32)
+    app_setting_val_t   min;      ///< Minimum value (for FLOAT/INT32/ENUM)
+    app_setting_val_t   max;      ///< Maximum value (for FLOAT/INT32/ENUM)
     app_setting_val_t   step;     ///< Encoder increment step (for FLOAT/INT32)
+    const char * const *choices;  ///< NULL or array of option strings (for ENUM)
+    int                  choice_count; ///< Number of entries in @p choices
 } app_setting_def_t;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +62,7 @@ typedef enum {
     APP_SETTINGS_GROUP_MACHINE,       ///< Machine polling intervals
     APP_SETTINGS_GROUP_TIMING,        ///< Hub/camera network timing
     APP_SETTINGS_GROUP_PROBE_UI,      ///< Probe UI geometry parameters
+    APP_SETTINGS_GROUP_MATERIALS,     ///< Workpiece material for chipload
     APP_SETTINGS_GROUP__COUNT         ///< Sentinel — always last
 } app_settings_group_t;
 
@@ -111,6 +115,12 @@ typedef enum {
     APP_SETTINGS_PROBE_UI_BACKOFF_MULT,    ///< XY backoff = tip_radius * multiplier
     APP_SETTINGS_PROBE_UI__COUNT           ///< Sentinel
 } app_settings_probe_ui_key_t;
+
+// --- Materials group ---
+typedef enum {
+    APP_SETTINGS_MATERIAL_TYPE = 0,        ///< Index into material dropdown
+    APP_SETTINGS_MATERIALS__COUNT          ///< Sentinel
+} app_settings_materials_key_t;
 
 // Max key count across all groups — used for statically-sized storage.
 // Set generously so adding new keys never requires bumping this.

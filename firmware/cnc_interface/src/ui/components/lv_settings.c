@@ -47,6 +47,7 @@ static const char * const g_group_symbols[APP_SETTINGS_GROUP__COUNT] = {
     [APP_SETTINGS_GROUP_MACHINE]  = LV_SYMBOL_SETTINGS,
     [APP_SETTINGS_GROUP_TIMING]   = LV_SYMBOL_REFRESH,
     [APP_SETTINGS_GROUP_PROBE_UI] = LV_SYMBOL_GPS,
+    [APP_SETTINGS_GROUP_MATERIALS] = LV_SYMBOL_LIST, /* material dropdown */
 };
 
 /* =========================================================================
@@ -100,6 +101,7 @@ typedef struct {
     lv_obj_t  *cont;       /* menu_cont — carries LV_STATE_FOCUSED highlight  */
     lv_obj_t  *slider;     /* numeric slider, NULL for bool                   */
     lv_obj_t  *sw;         /* lv_switch for bool, NULL for numeric            */
+    lv_obj_t  *dd;         /* lv_dropdown for enum, NULL otherwise            */
     lv_obj_t  *value_lbl;  /* formatted value label, NULL for bool            */
     int        group;
     int        key;
@@ -153,6 +155,12 @@ static void _fmt_value(char *buf, size_t buf_len,
                 snprintf(buf, buf_len, "%" PRId32 " %s", v.i, d->unit);
             else
                 snprintf(buf, buf_len, "%" PRId32, v.i);
+            break;
+        case APP_SETTING_TYPE_ENUM:
+            if (d->choices && v.i >= 0 && v.i < d->choice_count)
+                snprintf(buf, buf_len, "%s", d->choices[v.i]);
+            else
+                snprintf(buf, buf_len, "%d", v.i);
             break;
         case APP_SETTING_TYPE_BOOL:
             snprintf(buf, buf_len, "%s", v.b ? "ON" : "OFF");
@@ -223,6 +231,15 @@ static void _apply_slot_value(setting_slot_t *slot, app_setting_val_t v,
             if (v.b) lv_obj_add_state(slot->sw, LV_STATE_CHECKED);
             else     lv_obj_clear_state(slot->sw, LV_STATE_CHECKED);
         }
+    } else if (d->type == APP_SETTING_TYPE_ENUM) {
+        if (slot->dd) {
+            lv_dropdown_set_selected(slot->dd, v.i);
+        }
+        if (slot->value_lbl) {
+            char buf[40];
+            _fmt_value(buf, sizeof(buf), d, v);
+            lv_label_set_text(slot->value_lbl, buf);
+        }
     } else {
         if (slot->value_lbl) {
             char buf[40];
@@ -259,6 +276,13 @@ static void _adjust_slot_value(setting_slot_t *slot, int delta)
             v.i += (int32_t)delta * d->step.i;
             if (v.i < d->min.i) v.i = d->min.i;
             if (v.i > d->max.i) v.i = d->max.i;
+            break;
+        case APP_SETTING_TYPE_ENUM:
+            if (d->choice_count > 0) {
+                v.i += delta;
+                if (v.i < 0) v.i = d->choice_count - 1;
+                if (v.i >= d->choice_count) v.i = 0;
+            }
             break;
         case APP_SETTING_TYPE_BOOL:
             if (delta != 0) v.b = !v.b;
@@ -302,6 +326,21 @@ static void _switch_cb(lv_event_t *e)
 
     app_setting_val_t v = { .b = lv_obj_has_state(slot->sw, LV_STATE_CHECKED) };
     LOGD(TAG, "Switch g=%d k=%d = %s", slot->group, slot->key, v.b ? "ON" : "OFF");
+    _apply_slot_value(slot, v, d);
+}
+
+static void _dropdown_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    setting_slot_t *slot = (setting_slot_t *)lv_event_get_user_data(e);
+    if (!slot) return;
+
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)slot->group, slot->key);
+    if (!d) return;
+
+    app_setting_val_t v = { .i = lv_dropdown_get_selected(slot->dd) };
+    LOGD(TAG, "Dropdown g=%d k=%d idx=%d", slot->group, slot->key, v.i);
     _apply_slot_value(slot, v, d);
 }
 
@@ -486,6 +525,62 @@ static setting_slot_t *_add_bool_slot(lv_settings_priv_t *priv,
     return slot;
 }
 
+/* Enum row: similar layout to bool but with a dropdown controlling the value. */
+static setting_slot_t *_add_enum_slot(lv_settings_priv_t *priv,
+                                      lv_obj_t *section,
+                                      int group, int key)
+{
+    if (priv->slot_count >= LV_SETTINGS_MAX_SLOTS) {
+        LOGW(TAG, "Slot array full g=%d k=%d", group, key);
+        return NULL;
+    }
+    const app_setting_def_t *d = app_settings_get_def(
+        (app_settings_group_t)group, key);
+    if (!d) return NULL;
+
+    const char *sym = (key >= 0 && key < APP_SETTINGS_MAX_KEYS_PER_GROUP)
+                      ? g_setting_symbols[group][key] : NULL;
+    app_setting_val_t v = app_settings_get_val((app_settings_group_t)group, key);
+
+    setting_slot_t *slot = &priv->slots[priv->slot_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->group = group;
+    slot->key   = key;
+    slot->priv  = priv;
+
+    slot->cont = lv_menu_cont_create(section);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_0, 0);
+    lv_obj_set_style_bg_opa(slot->cont, LV_OPA_30, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(slot->cont, lv_color_hex(0x2196F3), LV_STATE_FOCUSED);
+    lv_obj_set_style_margin_bottom(slot->cont, 5, 0);
+    lv_obj_set_style_radius(slot->cont, 6, 0);
+    lv_obj_add_event_cb(slot->cont, _cont_clicked_cb, LV_EVENT_CLICKED, slot);
+
+    if (sym) {
+        lv_obj_t *img = lv_image_create(slot->cont);
+        lv_image_set_src(img, sym);
+    }
+
+    lv_obj_t *name_lbl = lv_label_create(slot->cont);
+    lv_label_set_text(name_lbl, d->name);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_flex_grow(name_lbl, 1, 0);
+
+    /* build newline-separated options string */
+    char buf[256] = {0};
+    for (int i = 0; i < d->choice_count && i < 50; i++) {
+        strlcat(buf, d->choices[i], sizeof(buf));
+        if (i + 1 < d->choice_count) strlcat(buf, "\n", sizeof(buf));
+    }
+
+    slot->dd = lv_dropdown_create(slot->cont);
+    lv_dropdown_set_options(slot->dd, buf);
+    if (v.i >= 0) lv_dropdown_set_selected(slot->dd, v.i);
+    lv_obj_add_event_cb(slot->dd, _dropdown_cb, LV_EVENT_VALUE_CHANGED, slot);
+
+    return slot;
+}
+
 /* Build the main content page for one group. */
 static lv_obj_t *_build_group_page(lv_settings_priv_t *priv,
                                     lv_obj_t *menu, int group)
@@ -501,10 +596,13 @@ static lv_obj_t *_build_group_page(lv_settings_priv_t *priv,
         const app_setting_def_t *d = app_settings_get_def(
             (app_settings_group_t)group, k);
         if (!d) continue;
-        if (d->type == APP_SETTING_TYPE_BOOL)
+        if (d->type == APP_SETTING_TYPE_BOOL) {
             _add_bool_slot(priv, section, group, k);
-        else
+        } else if (d->type == APP_SETTING_TYPE_ENUM) {
+            _add_enum_slot(priv, section, group, k);
+        } else {
             _add_numeric_slot(priv, section, group, k);
+        }
     }
     return page;
 }
@@ -562,10 +660,30 @@ lv_obj_t *lv_settings_create(lv_obj_t *parent)
     lv_obj_set_style_pad_hor(sb_page,
         lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
 
-    /* Section 1 — one entry per settings group */
+    /* Section 1 — one entry per settings group.  Materials group is pushed
+     * to the front even though its enum value is last so the user sees it
+     * first. */
     {
         lv_obj_t *sect = lv_menu_section_create(sb_page);
+        /* first add materials if present */
+        if (APP_SETTINGS_GROUP_MATERIALS < APP_SETTINGS_GROUP__COUNT) {
+            int g = APP_SETTINGS_GROUP_MATERIALS;
+            const char *sym  = g_group_symbols[g];
+            const char *name = app_settings_group_name((app_settings_group_t)g);
+            lv_obj_t *item = lv_menu_cont_create(sect);
+            if (sym) {
+                lv_obj_t *img = lv_image_create(item);
+                lv_image_set_src(img, sym);
+            }
+            lv_obj_t *lbl = lv_label_create(item);
+            lv_label_set_text(lbl, name);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_flex_grow(lbl, 1, 0);
+            lv_menu_set_load_page_event(menu, item, priv->pages[g]);
+        }
+        /* then add the remaining groups in order, skipping materials */
         for (int g = 0; g < APP_SETTINGS_GROUP__COUNT; g++) {
+            if (g == APP_SETTINGS_GROUP_MATERIALS) continue;
             const char *sym  = g_group_symbols[g];
             const char *name = app_settings_group_name((app_settings_group_t)g);
             lv_obj_t *item = lv_menu_cont_create(sect);

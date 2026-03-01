@@ -99,6 +99,13 @@ typedef enum {
   TOOL_MATERIAL_COUNT,
 } tool_material_t;
 
+/**
+ * @brief Return human-readable name for a material enum value.
+ *
+ * Useful for UI dropdowns and logging.
+ */
+const char *tool_material_name(tool_material_t m);
+
 /// Sentinel returned by chipload functions when the spindle is not spinning.
 #define CHIPLOAD_SPINDLE_STOPPED (-1.0f)
 

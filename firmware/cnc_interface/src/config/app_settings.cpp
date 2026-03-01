@@ -9,6 +9,9 @@
 #include <string.h>
 #include "debug.h"
 
+// need material enum for dropdown options
+#include "machine/machine_interface.h"
+
 // Pull in jog macro defaults so this file acts as the single source of truth
 #include "tasks/jog_accumulator_task.h"
 #include "config.h"
@@ -164,6 +167,33 @@ static const app_setting_def_t s_probe_ui_defs[APP_SETTINGS_PROBE_UI__COUNT] = {
 };
 
 // ---------------------------------------------------------------------------
+// Material choices (mirrors tool_material_t enum)
+// ---------------------------------------------------------------------------
+static const char * const s_material_choices[TOOL_MATERIAL_COUNT] = {
+    "Aluminium",
+    "Mild Steel",
+    "Stainless Steel",
+    "Hard Plastic",
+    "Acrylic",
+    "MDF",
+    "Softwood / Plywood",
+    "Hardwood",
+};
+
+static const app_setting_def_t s_material_defs[APP_SETTINGS_MATERIALS__COUNT] = {
+    [APP_SETTINGS_MATERIAL_TYPE] = { .name = "Material", 
+                                     .unit = "",
+                                     .type = APP_SETTING_TYPE_ENUM,
+                                     .def = { .i=TOOL_MATERIAL_ALUMINIUM },
+                                     .min = { .i=0 }, 
+                                     .max = {.i=TOOL_MATERIAL_COUNT-1 }, 
+                                     .step = { .i=1 },
+                                     .choices = s_material_choices,
+                                     .choice_count = TOOL_MATERIAL_COUNT 
+                                    },
+};
+
+// ---------------------------------------------------------------------------
 // Group metadata table
 // ---------------------------------------------------------------------------
 
@@ -191,6 +221,9 @@ static const group_meta_t s_groups[APP_SETTINGS_GROUP__COUNT] = {
     [APP_SETTINGS_GROUP_PROBE_UI] = { "Probe UI",        s_probe_ui_defs,
                                       APP_SETTINGS_PROBE_UI__COUNT,
                                       "app-probe-ui","vals_v1" },
+    [APP_SETTINGS_GROUP_MATERIALS] = { "Materials",        s_material_defs,
+                                      APP_SETTINGS_MATERIALS__COUNT,
+                                      "app-materials","vals_v1" },
 };
 
 // ---------------------------------------------------------------------------

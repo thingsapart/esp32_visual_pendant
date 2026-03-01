@@ -13,6 +13,28 @@
 static const char *TAG = "machine_interface";  // Used for logging
 static const char axes[] = {'X', 'Y', 'Z', '\0'};
 
+// ---------------------------------------------------------------------------
+// Material name helper — keeps the human-readable strings adjacent to the
+// enum definition in the header.
+// ---------------------------------------------------------------------------
+static const char * const s_material_names[TOOL_MATERIAL_COUNT] = {
+    "Aluminium",
+    "Mild Steel",
+    "Stainless Steel",
+    "Hard Plastic",
+    "Acrylic",
+    "MDF",
+    "Softwood / Plywood",
+    "Hardwood",
+};
+
+const char *tool_material_name(tool_material_t m)
+{
+    if ((unsigned)m >= TOOL_MATERIAL_COUNT) return "<invalid>";
+    return s_material_names[m];
+}
+
+
 #ifdef ESP32_HW
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
