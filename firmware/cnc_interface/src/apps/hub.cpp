@@ -32,7 +32,7 @@ static const char *TAG = "hub_main";
 // --- Configuration ---
 // Default poll interval for hub loop (ms).
 // 50 ms gives ~20 Hz position updates and roughly halves command relay latency.
-#define HUB_POLL_INTERVAL_MS 100
+#define HUB_POLL_INTERVAL_MS 120
 #define FULL_STATE_INTERVAL \
   48  // Send full state every nth poll (every n * 50 ms ≈ 2.4 s)
 

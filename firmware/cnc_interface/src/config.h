@@ -45,8 +45,13 @@
 // Broadcast:
 #define DISPLAY_MAC_ADDR {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
+// Allow build flags to override the core assignments (e.g. for single-core C3).
+#ifndef TASK_MACHINE_CORE
 #define TASK_MACHINE_CORE 1             // Machine Task Core.
+#endif
+#ifndef TASK_MACHINE_STATE_PROC_CORE
 #define TASK_MACHINE_STATE_PROC_CORE 1  // Machine State Processing Task Core.
+#endif
 
 #endif
 

@@ -73,6 +73,11 @@
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
 #ifdef ESP32P4_HW
     #define LV_MEM_SIZE (105 * 1024U)          /**< [bytes] */
+#elif defined(__riscv)
+    /* RISC-V ESP32 targets (C3, C6, H2 …) have no PSRAM and the builtin LVGL
+     * pool shares SRAM with task stacks.  Keep it small enough that FreeRTOS
+     * tasks can still be created after the UI is loaded. */
+    #define LV_MEM_SIZE (48 * 1024U)           /**< [bytes] */
 #else
     #define LV_MEM_SIZE (100 * 1024U)          /**< [bytes] */
 #endif
@@ -235,8 +240,10 @@
     #define ESP32_HW_USE_PPA
 #endif
 
-/* Use optimized assembly functions for drawing on ESP32 series */
-#if defined(ESP32_HW) && !defined(ESP32P4_HW)
+/* Use optimized assembly functions for drawing on ESP32 series.
+ * The SIMD routines are Xtensa assembly and cannot be assembled by the
+ * RISC-V toolchain used for ESP32-C3 and other RISC-V ESP32 variants. */
+#if defined(ESP32_HW) && !defined(ESP32P4_HW) && !defined(__riscv)
     /* Enable the custom ASM usage */
     #undef LV_USE_DRAW_SW_ASM
     #undef LV_DRAW_SW_ASM_CUSTOM_INCLUDE

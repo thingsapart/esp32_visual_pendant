@@ -32,6 +32,7 @@ extern void ram_usage();
 
 static bool uiMode = false;
 void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
   /*
   //if (uiMode == false && encoder.isUiMode() == true) {
   if (uiMode) {
@@ -58,6 +59,10 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
       // data->state = LV_INDEV_STATE_RELEASED;
     }
   }
+#else
+  data->state = LV_INDEV_STATE_RELEASED;
+  data->enc_diff = 0;
+#endif
 }
 
 //************************************************************************************
@@ -88,13 +93,17 @@ char g_dwc_startup_host[65] = {0};
 #endif
 
 #ifndef DWC_MACHINE_MODE
+#  ifndef MACHINE_REMOTE_ONLY
 static machine_rrf_t machine_rrf;
+#  endif  // !MACHINE_REMOTE_ONLY
 static machine_interface_remote_t machine_remote;
 #else
 static machine_rrf_t
     machine_dwc;  // Unified struct, named for clarity in this mode
 #endif
+#ifndef MACHINE_REMOTE_ONLY
 static multi_machine_interface_t machine;
+#endif  // !MACHINE_REMOTE_ONLY
 
 static interface_t interface;
 
@@ -145,17 +154,21 @@ bool machine_remote_init() {
   if (!machine_interface_remote_init(&machine_remote,
                                      (const uint8_t *)"\0\0\0\0\0\0")) {
     LOGE(TAG, "Failed to create remote machine interface");
+#ifndef MACHINE_REMOTE_ONLY
     machine_rrf_deinit(&machine_rrf);  // Clean up if the loop somehow exits
+#endif
     vTaskDelete(NULL);                 // Delete the task if creation fails
     return false;
   }
 
+#ifndef MACHINE_REMOTE_ONLY
   if (!multi_machine_add_impl(&machine, &machine_remote.base)) {
     LOGE(TAG, "Failed to register remote machine interface");
     machine_interface_remote_deinit(
         &machine_remote);  // Clean up if the loop somehow exits
     return false;
   }
+#endif  // !MACHINE_REMOTE_ONLY
   LOGI(TAG, "Machine remote initialized");
 
   return true;
@@ -172,10 +185,12 @@ bool machine_init() {
     LOGW(TAG, "app_settings: one or more groups fell back to defaults");
   }
 
+#ifndef MACHINE_REMOTE_ONLY
   if (!multi_machine_interface_init(&machine)) {
     LOGE(TAG, "Failed to create multi machine interface");
     return false;
   }
+#endif  // !MACHINE_REMOTE_ONLY
 
 #ifdef DWC_MACHINE_MODE
   dwc_settings_init();
@@ -220,6 +235,7 @@ bool machine_init() {
   }
 #else
 // --- RRF + Remote Mode ---
+#ifndef MACHINE_REMOTE_ONLY
 #ifndef RRF_SIM
   rrf_uart_num = RRF_SERIAL_UART_NUM;
 #else
@@ -239,6 +255,7 @@ bool machine_init() {
     return false;
   }
 #endif
+#endif  // !MACHINE_REMOTE_ONLY
 
   if (!machine_remote_init()) {
     LOGE(TAG, "Failed to initialize remote machine interface");
@@ -295,6 +312,7 @@ void lvgl_task(void *pv_params) {
     // machine_interface_t callbacks.
     interface_tick(&interface);
 
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
     if (!encoder.isUiMode()) {
       int diff = encoder.readAndReset();
       if (diff != 0) {
@@ -315,6 +333,7 @@ void lvgl_task(void *pv_params) {
         LOGI(TAG, "ENCODER DIFF %d", diff);
       }
     }
+#endif
 
 #ifndef USE_TICK_TASK
     auto time_end = millis();
@@ -368,12 +387,15 @@ void init_lvgl() {
   LOGI(TAG, "LV_INIT DISPLAY");
   display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
   indev = lv_indev_create();
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
   indev_encoder = lv_indev_create();
+#endif
 
   LOGI(TAG, "Display setup...");
   display_setup(display1, indev);
   LOGI(TAG, "Display setup... DONE");
 
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
   lv_indev_set_type(indev_encoder, LV_INDEV_TYPE_ENCODER);
   lv_indev_set_read_cb(indev_encoder, encoder_indev_read);
 
@@ -382,17 +404,28 @@ void init_lvgl() {
   lv_indev_set_group(indev_encoder, default_group);
   lv_group_set_editing(default_group, true);
   lv_group_set_default(default_group);
+#else
+  LOGI(TAG, "No encoder — skipping encoder indev setup.\n");
+  default_group = lv_group_create();
+  lv_group_set_default(default_group);
+#endif
   
   LOGI(TAG, "Creating Interface...\n");
+#ifndef NO_TOUCH_CAL
   // If no touch calibration is present, run the calibration wizard first.
   while (!touch_calib_has()) {
     LOGI(TAG, "No touch calibration found — running calibration wizard");
     ui_run_touch_calib_blocking();
     /* If the wizard finishes without saving, loop will run it again. */
   }
+#endif
 
   // Temporarily initialize with machine == NULL.
+#ifdef MACHINE_REMOTE_ONLY
+  interface_init(&interface, &machine_remote.base);
+#else
   interface_init(&interface, &machine.base);
+#endif
   LOGI(TAG, "Interface loaded...\n");
 }
 
@@ -411,6 +444,7 @@ void setup() {
 
   bool abort = false;
 
+#ifndef NO_TOUCH_CAL
   //touch_calib_clear(); // Uncomment to always bring up the touch calibration wizard for testing.
   if (!touch_calib_has()) {
     LOGI(TAG, "Touch calib not found... ");
@@ -419,8 +453,9 @@ void setup() {
 
   LOGI(TAG, "Loading touch calib... ");
   touch_calib_load();
+#endif
 
-#ifdef ESP32_HW
+#if defined(ESP32_HW) && defined(BOARD_HAS_PSRAM)
   LOGI(TAG, "Initializing camera receiver...");
   cam_init();
 #endif
@@ -452,7 +487,11 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
+#ifdef __riscv
+      1024 * 6,     // Reduced stack for RISC-V: no PSRAM, tight on SRAM
+#else
       1024 * 10,    // Reduced stack size for runtime loop
+#endif
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
@@ -513,6 +552,8 @@ void setup() {
     abort = true;
   }
 #else  // RRF Mode
+
+#ifndef MACHINE_REMOTE_ONLY
   // Run a single machine task for the multi-machine wrapper. Child
   // implementations (RRF/Remote/DWC) are polled through the multi-machine
   // interface which decides which child is active. Running per-child
@@ -547,6 +588,20 @@ void setup() {
 
   ram_usage();
 
+#else  // MACHINE_REMOTE_ONLY — single task wired directly to machine_remote
+  LOGI(TAG, "Creating Machine Task (remote-only)... ");
+  if (!abort && machine_task_run("Machine", &machine_remote.base,
+                                 &machine_rrf_task, TASK_MACHINE_CORE)) {
+    LOGI(TAG, "DONE\n");
+  } else {
+    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    abort = true;
+  }
+
+  ram_usage();
+
+#endif  // !MACHINE_REMOTE_ONLY
+
   LOGI(TAG, "Creating Remote Machine State Processing Task... ");
   if (!abort && machine_response_proc_task_run(
                     "MachineRemoteProc", &machine_remote.base,
@@ -564,6 +619,7 @@ void setup() {
     abort = true;
   }
 
+#ifndef MACHINE_REMOTE_ONLY
 #ifdef ASYNC_GCODE_SENDING
   LOGI(TAG, "Creating Machine GCode Sending Task... ");
   if (!abort && machine_send_task_run(
@@ -582,13 +638,18 @@ void setup() {
     LOGE(TAG, "FAIL: Could not create Machine GCode Sending Task: error");
     abort = true;
   }
-#endif
-#endif
+#endif  // ASYNC_GCODE_SENDING
+#endif  // !MACHINE_REMOTE_ONLY
+#endif  // DWC_MACHINE_MODE
 
   /* Start the adaptive jog accumulator.  Must be called after the G-Code
    * queue has been created and assigned to machine.base.gcode_queue.    */
   LOGI(TAG, "Starting jog accumulator task...");
+#ifdef MACHINE_REMOTE_ONLY
+  if (!abort && !jog_accumulator_init(&machine_remote.base)) {
+#else
   if (!abort && !jog_accumulator_init(&machine.base)) {
+#endif
     LOGE(TAG, "FAIL: Could not start jog accumulator task");
     /* Non-fatal: jog_accumulator_post_clicks() is a no-op when not running,
      * so the pendant still works; the user just loses the batching benefit. */
@@ -599,9 +660,13 @@ void setup() {
   LOGI(TAG, "Machine loaded..\n");
 
   if (abort) {
+#ifndef MACHINE_REMOTE_ONLY
     multi_machine_interface_deinit(&machine);
+#endif
 #ifndef DWC_MACHINE_MODE
+#ifndef MACHINE_REMOTE_ONLY
     machine_rrf_deinit(&machine_rrf);
+#endif
     machine_interface_remote_deinit(&machine_remote);
 #else
     machine_rrf_deinit(&machine_dwc);
@@ -609,7 +674,11 @@ void setup() {
   }
 
   // Update the machine, now that it is all set up.
+#ifdef MACHINE_REMOTE_ONLY
+  interface.machine = &machine_remote.base;
+#else
   interface.machine = &machine.base;
+#endif
 }
 
 void loop() {

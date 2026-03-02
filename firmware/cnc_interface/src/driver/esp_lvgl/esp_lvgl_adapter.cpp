@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "lvgl.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
@@ -10,7 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
-#include "touch_calib.h"
+#include "ui/touch_calib/touch_calib.h"
 
 #if (CONFIG_IDF_TARGET_ESP32P4 && \
      ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))

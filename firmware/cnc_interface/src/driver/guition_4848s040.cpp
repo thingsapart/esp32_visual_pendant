@@ -40,6 +40,10 @@
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 
+#include "debug.h"
+
+static const char *TAG = "driver_guiition_4848s040";
+
 class LGFX_GUITION4848S040 : public lgfx::LGFX_Device {
  public:
   lgfx::Bus_RGB _bus_instance;
@@ -174,14 +178,33 @@ void lvgl_log(const char *buf) {
 }
 #endif
 
-/* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
-#define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
-#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 10 * BYTES_PER_PIXEL)
-static uint8_t buf1[DRAW_BUF_SIZE];  // IRAM_ATTR;
-static uint8_t buf2[DRAW_BUF_SIZE];  // IRAM_ATTR;
-
 /* Display flushing */
 #define DISPLAY_DMA
+//#define DISPLAY_DOUBLE_BUF
+
+// #define DISPLAY_BUF_PSRAM
+
+#ifdef DISPLAY_BUF_PSRAM
+  #undef DISPLAY_DMA
+#endif
+
+/* Declare buffer for 1/10 screen size; BYTES_PER_PIXEL will be 2 for RGB565. */
+#define BYTES_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_RGB565))
+#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 20 * BYTES_PER_PIXEL)
+
+#ifndef DISPLAY_BUF_PSRAM
+static uint8_t buf1[DRAW_BUF_SIZE];  // IRAM_ATTR;
+
+#ifdef DISPLAY_DOUBLE_BUF
+static uint8_t buf2[DRAW_BUF_SIZE];  // IRAM_ATTR;
+#else 
+static uint8_t *buf2 = NULL;
+#endif
+
+#else
+static uint8_t *buf1 = NULL;
+static uint8_t *buf2 = NULL;
+#endif
 
 #ifndef DISPLAY_DMA
 void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -205,7 +228,7 @@ void display_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
 #endif
 
 #include "debug.h"
-#include "touch_calib.h"
+#include "ui/touch_calib/touch_calib.h"
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   uint16_t touchX, touchY;
@@ -229,8 +252,35 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
   }
 }
 
+void display_alloc() {
+#ifdef DISPLAY_BUF_PSRAM
+  // Allocate LVGL draw buffer from PSRAM
+  buf1 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf1) {
+    LOGW(TAG,
+         "LVGL draw buffer allocation failed in PSRAM, trying internal RAM");
+    // Fallback to internal RAM
+    buf1 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  assert(buf1);
+
+  buf2 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buf2) {
+    LOGW(TAG,
+         "LVGL draw buffer allocation failed in PSRAM, trying internal RAM");
+    // Fallback to internal RAM
+    buf2 = (uint8_t *)heap_caps_malloc(DRAW_BUF_SIZE,
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+  assert(buf2);
+#endif
+}
+
 void display_setup(lv_display_t *disp, lv_indev_t *indev) {
-  _d(0, "DISPLAY SETUP GUITION 4848S040 ST7701");
+  LOGI(TAG, "DISPLAY SETUP GUITION 4848S040 ST7701");
   tft.begin();
   tft.setRotation(1);
   tft.setBrightness(255);
@@ -249,7 +299,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev) {
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touch_indev_read);
 
-  _d(0, "DONE.");
+  LOGI(TAG, "DONE.");
 }
 
 #endif
