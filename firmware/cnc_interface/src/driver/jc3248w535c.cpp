@@ -187,28 +187,44 @@ static uint8_t *draw_buf = NULL;
 /* flush callback uses the C++ panel object */
 static void display_flush(lv_display_t *disp, const lv_area_t *area,
                           uint8_t *px_map) {
-    // Derive physical dimensions from the area LVGL passes in.  After a 90°
-    // software rotation (set in display_setup) the physical frame is
-    // TFT_HEIGHT wide × TFT_WIDTH tall (320 × 480 for this board), which
-    // matches the AXS15231B panel's native portrait orientation.
-    const int phys_w      = area->x2 - area->x1 + 1;
-    const int phys_h      = area->y2 - area->y1 + 1;
-    const int total_px    = phys_w * phys_h;
+    // In LVGL v9, lv_display_set_rotation(ROTATION_90) swaps the *logical*
+    // resolution reported to the UI (480×320 landscape) and maps touch events,
+    // but does NOT physically rotate the pixel buffer in FULL render mode.
+    // The buffer delivered here is always in LOGICAL landscape layout:
+    //   480 columns × 320 rows  (L_width × L_height)
+    // The physical AXS15231B panel expects portrait data:
+    //   320 columns × 480 rows  (P_width × P_height = TFT_WIDTH × TFT_HEIGHT)
+    //
+    // 90° CW rotation formula:
+    //   physical(col=C, row=R) = logical_buf[(L_height-1-C) * L_width + R]
+    //   where C ∈ [0, P_width), R ∈ [0, P_height)
+    //
+    // Loop order — OUTER over C, INNER over R:
+    //   Each inner loop reads logical row (L_height-1-C) sequentially
+    //   (stride-1 PSRAM reads = cache-friendly).
+    //   Writes stride P_width into the SRAM bounce buffer (fine in SRAM).
+    constexpr int L_width        = TFT_HEIGHT;  // 480 — logical buffer columns
+    constexpr int L_height       = TFT_WIDTH;   // 320 — logical buffer rows
+    constexpr int P_width        = TFT_WIDTH;   // 320 — physical panel columns
+    constexpr int P_height       = TFT_HEIGHT;  // 480 — physical panel rows
+    constexpr int rows_per_chunk = TRANS_SIZE / (P_width * BYTES_PER_PIXEL);
 
-    // Byte-swap RGB565 in-place before sending (LVGL uses LE, panel wants BE).
-    lv_draw_sw_rgb565_swap(px_map, (uint32_t)total_px);
-
-    // Stream the frame in chunks, copying each from PSRAM into a DMA-capable
-    // internal-SRAM bounce buffer first (avoids GDMA/D-cache coherency issue).
     if (_lcd) {
-        const int rows_per_chunk = TRANS_SIZE / (phys_w * BYTES_PER_PIXEL);
-        for (int row = 0; row < phys_h; row += rows_per_chunk) {
-            int rows = ((row + rows_per_chunk) <= phys_h)
-                       ? rows_per_chunk : (phys_h - row);
-            size_t bytes = (size_t)rows * phys_w * BYTES_PER_PIXEL;
-            uint8_t *tbuf = ((row / rows_per_chunk) & 1) ? trans_buf2 : trans_buf1;
-            memcpy(tbuf, px_map + (size_t)row * phys_w * BYTES_PER_PIXEL, bytes);
-            _lcd->drawBitmap(area->x1, area->y1 + row, phys_w, rows, tbuf, 0);
+        for (int R_start = 0; R_start < P_height; R_start += rows_per_chunk) {
+            int chunk_rows = ((R_start + rows_per_chunk) <= P_height)
+                             ? rows_per_chunk : (P_height - R_start);
+            uint8_t  *tbuf     = ((R_start / rows_per_chunk) & 1) ? trans_buf2 : trans_buf1;
+            uint16_t *tbuf_u16 = (uint16_t *)tbuf;
+            // Rotate + fused byte-swap: read PSRAM once, write transposed to SRAM
+            for (int C = 0; C < P_width; C++) {
+                const uint16_t *src = (const uint16_t *)px_map
+                                      + (L_height - 1 - C) * L_width + R_start;
+                for (int r = 0; r < chunk_rows; r++) {
+                    uint16_t p = src[r];  // sequential PSRAM read ✓
+                    tbuf_u16[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
+                }
+            }
+            _lcd->drawBitmap(0, R_start, P_width, chunk_rows, tbuf, 0);
         }
     }
     lv_display_flush_ready(disp);
@@ -259,10 +275,11 @@ static void IRAM_ATTR te_isr_handler(void *arg) {
 /* ── Async DMA-done callback ─────────────────────────────────────────────────
  * Fires when the SPI DMA finishes sending one chunk.  Signals trans_done_sem
  * so the flush loop can dispatch the next chunk (or unblock after the last).
+ * IRAM_ATTR: called from SPI DMA ISR — must not cause a flash-cache miss.
  */
-static bool on_color_trans_done(esp_lcd_panel_io_handle_t panel_io,
-                                esp_lcd_panel_io_event_data_t *edata,
-                                void *user_ctx) {
+static bool IRAM_ATTR on_color_trans_done(esp_lcd_panel_io_handle_t panel_io,
+                                          esp_lcd_panel_io_event_data_t *edata,
+                                          void *user_ctx) {
     BaseType_t hp = pdFALSE;
     xSemaphoreGiveFromISR(trans_done_sem, &hp);
     if (hp) portYIELD_FROM_ISR();
@@ -285,43 +302,63 @@ static bool on_color_trans_done(esp_lcd_panel_io_handle_t panel_io,
  */
 static void display_flush(lv_display_t *disp, const lv_area_t *area,
                           uint8_t *px_map) {
-    // Physical dimensions from the area LVGL passes in.  With 90° SW rotation
-    // (set in display_setup) LVGL renders the 480×320 logical canvas into a
-    // 320×480 physical buffer and calls flush with area=(0,0,319,479).
-    const int phys_w   = area->x2 - area->x1 + 1;  // 320 after 90° rotation
-    const int phys_h   = area->y2 - area->y1 + 1;  // 480 after 90° rotation
-    const int total_px = phys_w * phys_h;
+    // In LVGL v9, lv_display_set_rotation(ROTATION_90) swaps the *logical*
+    // resolution reported to the UI (480×320 landscape) and maps touch events,
+    // but does NOT physically rotate the pixel buffer in FULL render mode.
+    // The buffer delivered here is always in LOGICAL landscape layout:
+    //   480 columns × 320 rows  (L_width × L_height)
+    // The physical AXS15231B panel expects portrait data:
+    //   320 columns × 480 rows  (P_width × P_height = TFT_WIDTH × TFT_HEIGHT)
+    //
+    // 90° CW rotation formula:
+    //   physical(col=C, row=R) = logical_buf[(L_height-1-C) * L_width + R]
+    //   where C ∈ [0, P_width), R ∈ [0, P_height)
+    //
+    // Loop order — OUTER over C, INNER over R:
+    //   Each inner loop reads logical row (L_height-1-C) sequentially
+    //   (stride-1 PSRAM reads = cache-friendly).
+    //   Writes go to tbuf at stride P_width (SRAM — no penalty).
+    //
+    // Double-buffering: rotating chunk N into tbuf while DMA sends chunk N-1.
+    constexpr int L_width        = TFT_HEIGHT;  // 480 — logical buffer columns
+    constexpr int L_height       = TFT_WIDTH;   // 320 — logical buffer rows
+    constexpr int P_width        = TFT_WIDTH;   // 320 — physical panel columns
+    constexpr int P_height       = TFT_HEIGHT;  // 480 — physical panel rows
+    constexpr int rows_per_chunk = TRANS_SIZE / (P_width * BYTES_PER_PIXEL);
 
-    // 1. Byte-swap RGB565 in-place (LVGL LE → panel BE)
-    lv_draw_sw_rgb565_swap(px_map, (uint32_t)total_px);
-
-    // 2. Wait for TE falling edge before first DMA chunk (V-blank sync).
+    // 1. Wait for TE falling edge (V-blank sync) before first chunk.
     if (te_sync_sem != nullptr) {
         xSemaphoreTake(te_sync_sem, 0);
         xSemaphoreTake(te_sync_sem, pdMS_TO_TICKS(20));
     }
 
-    // 3. Send in TRANS_SIZE chunks through DMA bounce buffers.
-    //    rows_per_chunk adapts to the actual physical row width so TRANS_SIZE
-    //    bytes are used efficiently regardless of orientation.
-    const int rows_per_chunk = TRANS_SIZE / (phys_w * BYTES_PER_PIXEL);
-    xSemaphoreGive(trans_done_sem); // prime: first Take succeeds immediately
-    for (int row = 0; row < phys_h; row += rows_per_chunk) {
-        int rows  = ((row + rows_per_chunk) <= phys_h)
-                    ? rows_per_chunk : (phys_h - row);
-        size_t bytes = (size_t)rows * phys_w * BYTES_PER_PIXEL;
-        uint8_t *tbuf = ((row / rows_per_chunk) & 1) ? trans_buf2 : trans_buf1;
-        memcpy(tbuf, px_map + (size_t)row * phys_w * BYTES_PER_PIXEL, bytes);
-        xSemaphoreTake(trans_done_sem, portMAX_DELAY);
+    xSemaphoreGive(trans_done_sem); // prime: first Take in loop succeeds immediately
+    for (int R_start = 0; R_start < P_height; R_start += rows_per_chunk) {
+        int chunk_rows = ((R_start + rows_per_chunk) <= P_height)
+                         ? rows_per_chunk : (P_height - R_start);
+        uint8_t  *tbuf     = ((R_start / rows_per_chunk) & 1) ? trans_buf2 : trans_buf1;
+        uint16_t *tbuf_u16 = (uint16_t *)tbuf;
+
+        // Rotate + fused byte-swap: read PSRAM once, write transposed+swapped to SRAM
+        for (int C = 0; C < P_width; C++) {
+            const uint16_t *src = (const uint16_t *)px_map
+                                  + (L_height - 1 - C) * L_width + R_start;
+            for (int r = 0; r < chunk_rows; r++) {
+                uint16_t p = src[r];  // sequential PSRAM read ✓
+                tbuf_u16[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
+            }
+        }
+
+        xSemaphoreTake(trans_done_sem, portMAX_DELAY);  // wait for previous DMA done
         if (esp_lcd_panel_draw_bitmap(panel_handle,
-                                      area->x1, area->y1 + row,
-                                      area->x1 + phys_w, area->y1 + row + rows,
+                                      0, R_start,
+                                      P_width, R_start + chunk_rows,
                                       tbuf) != ESP_OK) {
             xSemaphoreGive(trans_done_sem);
             break;
         }
     }
-    xSemaphoreTake(trans_done_sem, portMAX_DELAY);
+    xSemaphoreTake(trans_done_sem, portMAX_DELAY);  // wait for final DMA done
     lv_display_flush_ready(disp);
 }
 
