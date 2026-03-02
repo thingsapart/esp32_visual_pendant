@@ -15,6 +15,14 @@
 #include "ui/touch_calib/touch_calib.h"
 #include "debug.h"
 
+#ifndef TOUCH_CALIB_INSET_X
+#define TOUCH_CALIB_INSET_X 30
+#endif
+
+#ifndef TOUCH_CALIB_INSET_Y
+#define TOUCH_CALIB_INSET_Y 30
+#endif
+
 static volatile lv_point_t s_last_click = {0,0};
 static float s_H[9];
 static volatile bool s_recalibrate = false;
@@ -322,8 +330,8 @@ void ui_setup() {
 
     lv_coord_t w = lv_obj_get_width(scr);
     lv_coord_t h = lv_obj_get_height(scr);
-    const lv_coord_t pad_x = 20; // Adjusted padding for equal inset
-    const lv_coord_t pad_y = 20; // Adjusted padding for equal inset
+    const lv_coord_t pad_x = TOUCH_CALIB_INSET_X; // Adjusted padding for equal inset
+    const lv_coord_t pad_y = TOUCH_CALIB_INSET_Y; // Adjusted padding for equal inset
     lv_point_t targets[4] = {
         {pad_x, pad_y}, 
         {w - pad_x, pad_y}, 

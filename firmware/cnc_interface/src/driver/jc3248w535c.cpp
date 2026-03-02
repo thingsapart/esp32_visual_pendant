@@ -45,6 +45,8 @@
 //
 // Activated by build flag: -D JC3248W535C=1
 
+#include <memory>   // for std::shared_ptr used in globals
+
 #ifdef JC3248W535C
 
 /*
@@ -52,7 +54,44 @@
  * library is being used.  The PlatformIO build flags for the QSPI display
  * boards set `-D ESP32_LVGL_ESP_DISP` when the library should drive the
  * panel, otherwise the original IDF-native code (below) is compiled.
+ *
+ * A secondary flag `JC3248W535C_ESP_DISP_TOUCH` may be enabled in the native
+ * path to pull in the esp_panel touch driver and helper `touch_indev_read`
+ * from the ESP32_Display_Panel branch.  When that flag is off the driver
+ * falls back to the existing raw I2C touch implementation.
  */
+
+/* touch object used by LVGL panel code or optionally enabled in the
+   native IDF path when JC3248W535C_ESP_DISP_TOUCH is defined */
+#if defined(ESP32_LVGL_ESP_DISP) || defined(JC3248W535C_ESP_DISP_TOUCH)
+
+#include "esp_heap_caps.h"
+#include "driver/i2c.h"
+
+#include "esp_display_panel.hpp"
+#include "drivers/touch/esp_panel_touch_axs15231b.hpp"
+
+static std::shared_ptr<esp_panel::drivers::Touch> _touch = nullptr;
+
+#endif
+
+#if defined(JC3248W535C_TOUCH_DRV)
+
+#include "driver/axs15231b_touch.h"
+
+// Touch module
+#define TFT_rot   1
+#define TFT_res_W 320
+#define TFT_res_H 480
+
+#define Touch_SDA  4
+#define Touch_SCL  8
+#define Touch_INT  3
+#define Touch_ADDR 0x3B
+
+AXS15231B_Touch touch(Touch_SCL, Touch_SDA, Touch_INT, Touch_ADDR, TFT_rot);
+#endif
+
 
 #if defined(ESP32_LVGL_ESP_DISP)
 
@@ -64,12 +103,8 @@
 #error "This driver requires ESP-IDF v5.x (PlatformIO esp32 platform >= 6.x)."
 #endif
 
-#include "esp_heap_caps.h"
-#include "driver/i2c.h"
 #include "driver/ledc.h"
 
-#include "esp_display_panel.hpp"
-#include "drivers/touch/esp_panel_touch_axs15231b.hpp"
 #include "drivers/lcd/port/esp_panel_lcd_vendor_types.h"    // for esp_panel_lcd_vendor_init_cmd_t
 #include "ui/touch_calib/touch_calib.h"
 #include "debug.h"
@@ -114,10 +149,11 @@ static const esp_panel_lcd_vendor_init_cmd_t vendor_init_cmds[] = {
 static const char *TAG = "JC3248W535C";
 
 /* scratch objects (allocated only when ESP32_LVGL_ESP_DISP is defined) */
+#if defined(ESP32_LVGL_ESP_DISP)
 static std::shared_ptr<esp_panel::drivers::BusQSPI> _qspi_bus = nullptr;
 static std::shared_ptr<esp_panel::drivers::LCD_AXS15231B> _lcd = nullptr;
-static std::shared_ptr<esp_panel::drivers::Touch> _touch = nullptr;
 static std::shared_ptr<esp_panel::drivers::Backlight> _backlight = nullptr;
+#endif
 
 #else // !ESP32_LVGL_ESP_DISP
 
@@ -142,6 +178,12 @@ static const char *TAG = "JC3248W535C";
 
 #include "jc3248w535c/axs15231b_panel.h"
 #include "ui/touch_calib/touch_calib.h"
+
+#ifdef JC3248W535C_ESP_DISP_TOUCH
+#include "esp_display_panel.hpp"
+#include "drivers/touch/esp_panel_touch_axs15231b.hpp"
+#endif
+
 #include "debug.h"
 
 #endif // ESP32_LVGL_ESP_DISP
@@ -152,11 +194,18 @@ static const char *TAG = "JC3248W535C";
 #define DRAW_BUF_SIZE      (TFT_WIDTH * TFT_HEIGHT / 5 * BYTES_PER_PIXEL)
 // Full-frame buffer required by IDF-native path (AXS15231B needs full-screen updates)
 #define DRAW_BUF_FULL_SIZE (TFT_WIDTH * TFT_HEIGHT * BYTES_PER_PIXEL)
-// Size of each DMA bounce-buffer chunk (1/10 frame, internal SRAM, DMA-capable).
+// Size of each DMA bounce-buffer chunk (1/20 frame, internal SRAM, DMA-capable).
 // The LVGL draw buffer lives in PSRAM; DMA cannot directly read PSRAM safely because
 // the CPU D-cache may hold dirty lines that the GDMA never sees – producing the
 // characteristic ~8×8 block mosaic.  Copying PSRAM→internal-DMA-RAM first solves it.
-#define TRANS_SIZE         (TFT_WIDTH * (TFT_HEIGHT / 10) * BYTES_PER_PIXEL)
+//
+// Divisor controls the SRAM cost vs. flush iteration count tradeoff:
+//   /10 → 30,720 B each →  61 KB total, 10 DMA transactions/frame
+//   /20 → 15,360 B each →  31 KB total, 20 DMA transactions/frame  ← chosen
+//   /40 →  7,680 B each →  15 KB total, 40 DMA transactions/frame
+// At QSPI 80 MHz the per-transaction overhead of 20 chunks is negligible.
+#define TRANS_DIV          40
+#define TRANS_SIZE         (TFT_WIDTH * (TFT_HEIGHT / TRANS_DIV) * BYTES_PER_PIXEL)
 
 /* ── AXS15231B raw I2C touch protocol ──────────────────────────────────────
  * Write a fixed 11-byte payload to trigger a touch-data read, then read 8
@@ -364,6 +413,37 @@ static void display_flush(lv_display_t *disp, const lv_area_t *area,
 
 /* ── LVGL touch-input callback ──────────────────────────────────────────────*/
 static void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
+#if defined(JC3248W535C_TOUCH_DRV)
+    uint16_t x, y;
+    if (touch.touched()) {
+        // Read touched point from touch module
+        touch.readData(&x, &y);
+
+        // Set the coordinates
+        data->point.x = x;
+        data->point.y = y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+#elif defined(JC3248W535C_ESP_DISP_TOUCH)
+    /* use the esp_panel driver when the new flag is enabled */
+    if (!_touch) {
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
+    esp_panel::drivers::TouchPoint point;
+    if (_touch->readPoints(&point, 1, 0) > 0) {
+        data->state = LV_INDEV_STATE_PR;
+        float fx = TFT_WIDTH - (float)point.y;
+        float fy = TFT_HEIGHT - (float)point.x;
+        touch_calib_apply_inplace(&fx, &fy);
+        data->point.x = (lv_coord_t)fx;
+        data->point.y = (lv_coord_t)fy;
+    } else {
+        data->state = LV_INDEV_STATE_REL;
+    }
+#else
     // Write read-trigger command
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
@@ -410,6 +490,7 @@ static void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #if DEBUG_TOUCH != 0
     LOGI(TAG, "TOUCH: raw(%d,%d) → (%d,%d)", raw_x, raw_y,
          data->point.x, data->point.y);
+#endif
 #endif
 }
 
@@ -815,7 +896,14 @@ skip_te:;
     trans_done_sem = xSemaphoreCreateCounting(1, 0);
     assert(trans_done_sem && "trans_done_sem creation failed");
 
+#if defined(JC3248W535C_TOUCH_DRV)
+    if(!touch.begin()) {
+        LOGE("Failed to initialize touch module!");
+        return;
+    }
+#elif !defined(JC3248W535C_ESP_DISP_TOUCH)
     // ── 8. I2C for touch (I2C_NUM_0, SCL=8, SDA=4, addr=0x3B) ──────────
+    // manual configuration used when panel driver touch is disabled
     i2c_config_t i2c_cfg = {
         .mode             = I2C_MODE_MASTER,
         .sda_io_num       = TOUCH_SDA,
@@ -829,6 +917,53 @@ skip_te:;
     ESP_ERROR_CHECK(i2c_param_config((i2c_port_t)I2C_TOUCH_PORT, &i2c_cfg));
     ESP_ERROR_CHECK(i2c_driver_install((i2c_port_t)I2C_TOUCH_PORT,
                                        I2C_MODE_MASTER, 0, 0, 0));
+#else
+    // ── 8. Touch driver setup when JC3248W535C_ESP_DISP_TOUCH is enabled
+    {
+        esp_panel::drivers::BusI2C::Config i2c_cfg = {
+            .host_id = (i2c_port_t)I2C_TOUCH_PORT,
+            .host = esp_panel::drivers::BusI2C::HostPartialConfig{
+                .sda_io_num = TOUCH_SDA,
+                .scl_io_num = TOUCH_SCL,
+                .sda_pullup_en = true,
+                .scl_pullup_en = true,
+                .clk_speed = I2C_TOUCH_FREQUENCY,
+            },
+            .control_panel = ESP_PANEL_TOUCH_I2C_CONTROL_PANEL_CONFIG(AXS15231B),
+        };
+        esp_panel::drivers::BusFactory::Config touch_bus_cfg(i2c_cfg);
+
+        esp_panel::drivers::TouchAXS15231B::Config touch_cfg;
+        touch_cfg.device = esp_panel::drivers::Touch::DevicePartialConfig{
+            .x_max = 480,
+            .y_max = 320,
+            .rst_gpio_num = -1,
+            .int_gpio_num = -1,
+        };
+
+        _touch = std::make_shared<esp_panel::drivers::TouchAXS15231B>(
+            touch_bus_cfg, touch_cfg);
+        if (_touch && _touch->init() && _touch->begin()) {
+            _touch->swapXY(true);
+        } else {
+            LOGW(TAG, "Touch factory disabled; creating I2C bus manually");
+            esp_panel::drivers::BusI2C::ControlPanelFullConfig cp_cfg =
+                ESP_PANEL_TOUCH_I2C_CONTROL_PANEL_CONFIG(AXS15231B);
+            auto i2c_bus = std::make_shared<esp_panel::drivers::BusI2C>(
+                TOUCH_SCL, TOUCH_SDA, cp_cfg);
+            ESP_ERROR_CHECK(i2c_bus->init() ? ESP_OK : ESP_FAIL);
+            ESP_ERROR_CHECK(i2c_bus->begin() ? ESP_OK : ESP_FAIL);
+
+            _touch.reset();
+            _touch = std::make_shared<esp_panel::drivers::TouchAXS15231B>(
+                i2c_bus.get(), touch_cfg);
+            ESP_ERROR_CHECK(_touch ? ESP_OK : ESP_FAIL);
+            ESP_ERROR_CHECK(_touch->init() ? ESP_OK : ESP_FAIL);
+            ESP_ERROR_CHECK(_touch->begin() ? ESP_OK : ESP_FAIL);
+            _touch->swapXY(true);
+        }
+    }
+#endif
 
     // ── 8. LVGL wiring ───────────────────────────────────────────────────
     // AXS15231B MUST use FULL render mode; it has no partial-update capability
@@ -864,6 +999,20 @@ skip_te:;
 }
 
 #endif // ESP32_LVGL_ESP_DISP
+
+#if defined(LVGL_UI_MALLOC) && (LVGL_UI_MALLOC == lvgl_ui_spiram_malloc)
+
+void *lvgl_ui_spiram_malloc(size_t size) {
+    // check if SPIRAM is enabled and allocate on SPIRAM if allocatable
+#if defined(ESP32_HW) && defined(BOARD_HAS_PSRAM)
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    // try allocating in internal memory
+    return malloc(size);
+#endif
+}
+
+#endif
 
 #endif  // JC3248W535C
 

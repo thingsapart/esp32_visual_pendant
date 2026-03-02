@@ -9,6 +9,10 @@
 extern "C" {
 #endif
 
+#if defined(LVGL_UI_MALLOC) && (LVGL_UI_MALLOC == lvgl_ui_spiram_malloc)
+extern void *lvgl_ui_spiram_malloc(size_t size);
+#endif
+
 /**
  * @brief Creates the user interface as defined in the YAML specification.
  *

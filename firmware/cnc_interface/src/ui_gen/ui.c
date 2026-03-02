@@ -2,6 +2,7 @@
 
 #include "lvgl.h"
 #include "lvgl_ui.h"
+#include "lvgl_ui.h"
 #include <stdlib.h> // For malloc
 #include <stdio.h>  // For snprintf
 #include <string.h> // For strlen/getenv handling

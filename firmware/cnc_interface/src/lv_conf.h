@@ -99,7 +99,7 @@
  *====================*/
 
 /** Default display refresh, input device read and animation step period. */
-#define LV_DEF_REFR_PERIOD  33      /**< [ms] */
+#define LV_DEF_REFR_PERIOD  40      /**< [ms] */
 
 /** Default Dots Per Inch. Used to initialize default sizes such as widgets sized, style paddings.
  * (Not so important, you can adjust it to modify default sizes and spaces.) */
@@ -496,7 +496,7 @@
 #define LV_USE_OBJ_PROPERTY 0
 
 /** Enable property name support. */
-#define LV_USE_OBJ_PROPERTY_NAME 1
+#define LV_USE_OBJ_PROPERTY_NAME 0
 
 /* Use VG-Lite Simulator.
  * - Requires: LV_USE_THORVG_INTERNAL or LV_USE_THORVG_EXTERNAL */
@@ -600,7 +600,7 @@
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0
 #define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 1
+#define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_26 0
 #define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_30 0
@@ -679,7 +679,7 @@
 /** Support bidirectional text. Allows mixing Left-to-Right and Right-to-Left text.
  *  The direction will be processed according to the Unicode Bidirectional Algorithm:
  *  https://www.w3.org/International/articles/inline-bidi-markup/uba-basics */
-#define LV_USE_BIDI 0
+// #define LV_USE_BIDI 0
 #if LV_USE_BIDI
     /*Set the default direction. Supported values:
     *`LV_BASE_DIR_LTR` Left-to-Right

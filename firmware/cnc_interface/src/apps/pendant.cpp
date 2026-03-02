@@ -305,6 +305,7 @@ void lvgl_task(void *pv_params) {
     if ((ctr++ % 500) == 0) {
       LOGE(TAG, "LVGL task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
+      ram_usage();
     }
 
     // Update all components that rely on data from machine_interface.

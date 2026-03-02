@@ -24,8 +24,8 @@ fail and `abort = true` cascades to kill every subsequent task.
 | Allocation | Size | Location | Reason |
 |---|---|---|---|
 | `draw_buf` (LVGL frame buffer) | 307,200 B (320×480×2) | **PSRAM** | Too large for SRAM; CPU renders through D-cache so write-back cache keeps it fast |
-| `trans_buf1` (DMA bounce) | 30,720 B (1/10 frame) | **Internal SRAM, DMA-capable** | GDMA reads physical PSRAM, bypassing D-cache → stale pixels; bounce via SRAM solves it |
-| `trans_buf2` (DMA bounce) | 30,720 B (1/10 frame) | **Internal SRAM, DMA-capable** | Alternates with `trans_buf1` to overlap CPU copy with SPI DMA |
+| `trans_buf1` (DMA bounce) | 15,360 B (1/20 frame) | **Internal SRAM, DMA-capable** | GDMA reads physical PSRAM, bypassing D-cache → stale pixels; bounce via SRAM solves it |
+| `trans_buf2` (DMA bounce) | 15,360 B (1/20 frame) | **Internal SRAM, DMA-capable** | Alternates with `trans_buf1` to overlap CPU copy with SPI DMA |
 | TE semaphore (`te_sync_sem`) | ~88 B | Internal SRAM | Used in GPIO ISR — must be accessible without cache |
 | DMA-done semaphore (`trans_done_sem`) | ~88 B | Internal SRAM | Used in SPI DMA ISR callback |
 | `te_isr_handler` (ISR code) | ~60 B | **IRAM** (`IRAM_ATTR`) | Must not miss I-cache during interrupt |
@@ -54,6 +54,20 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
                                   # Requests > 4 KB → PSRAM; smaller → SRAM
                                   # Effect: task stacks (6–8 KB) go to PSRAM,
                                   #         FreeRTOS primitives stay in SRAM
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y            # Move .text/.rodata to XIP-PSRAM, growing
+                                  # DRAM heap by ~15–40 KB.
+                                  # NB: Tasmota's sdkconfig.defaults has both
+                                  # disabled; explicit override is required.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+                                  # 32 KB ICache keeps XIP-PSRAM code hot.
+                                  # Tasmota default is 16 KB; the extra 16 KB
+                                  # of SRAM0 previously used as IRAM is freed
+                                  # by FETCH_INSTRUCTIONS anyway.
+CONFIG_ESP32S3_DATA_CACHE_32KB=y  # 32 KB DCache for PSRAM rodata/data access
+CONFIG_ARDUINO_LOOP_STACK_SIZE=6144
+                                  # Was 10,280 (base default). HWM at boot
+                                  # showed only ~2 KB peak; 6 KB saves ~4 KB.
 ```
 
 ---
