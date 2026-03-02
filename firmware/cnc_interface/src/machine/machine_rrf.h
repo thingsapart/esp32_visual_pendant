@@ -155,6 +155,11 @@ typedef struct machine_rrf_t {
   // or long-running macro).  Only 5 bytes (+padding) of RAM.
   uint32_t last_poll_sent_ms;          // millis() when last poll cycle was actually sent
   uint8_t  unanswered_polls;           // consecutive poll cycles without a response
+
+  // --- Serial CRC-16 line numbering (serial transport only) ---
+  // Incremented for every line sent; reset to 1 on (re-)connect.
+  // Used when RRF_SERIAL_CRC16 is enabled in machine_rrf.c.
+  uint32_t serial_line_number;
 } machine_rrf_t;
 
 // --- Function Prototypes ---

@@ -54,6 +54,14 @@ static const char *TAG = "machine_rrf";
 #define M409_FAILED_JSON_MODE 1
 #endif
 
+// Set to 1 to prepend line numbers and append RRF CRC-16-CCITT checksums to
+// every serial G-code line (requires RRF firmware 3.4+).  Set to 0 to disable.
+// Format per line: "N<line_num> <gcode> *<crc5d>\n"
+// CRC polynomial: x16+x12+x5+1 (0x1021), initial value 0x0000.
+#ifndef RRF_SERIAL_CRC16
+#define RRF_SERIAL_CRC16 1
+#endif
+
 static void _maybe_forward_failed_json(machine_rrf_t *self,
                                       const char *json_response,
                                       const char *context) {
@@ -560,6 +568,27 @@ static void _dwc_proc_state_resp_impl(machine_interface_t *self, void *data,
 
 // --- Transport-Specific Implementations: Serial ---
 
+#if RRF_SERIAL_CRC16
+/* CRC-16-CCITT: polynomial 0x1021 (x16+x12+x5+1), initial value 0x0000.
+ * Computes the checksum over 'len' bytes of 'data'. */
+static uint16_t _crc16_ccitt(const uint8_t *data, size_t len) {
+  uint16_t crc = 0x0000u;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= (uint16_t)data[i] << 8;
+    for (int bit = 0; bit < 8; bit++) {
+      if (crc & 0x8000u)
+        crc = (uint16_t)((crc << 1) ^ 0x1021u);
+      else
+        crc = (uint16_t)(crc << 1);
+    }
+  }
+  return crc;
+}
+/* Worst-case extra bytes per signed line:
+ *   'N' + 10 digits + ' ' + ' ' + '*' + 5 digits = 19 chars  +'\n' = 20  */
+#define _RRF_CRC16_OVERHEAD 20
+#endif /* RRF_SERIAL_CRC16 */
+
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
   const char *start = gcode;
   const char *end;
@@ -570,6 +599,48 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
     size_t len = end ? (size_t)(end - start) : strlen(start);
 
     if (len > 0) {
+#if RRF_SERIAL_CRC16
+      /* Sign the line: "N<line_num> <gcode> *<crc5d>\n"
+       * The CRC-16-CCITT is computed over the entire prefix up to (not
+       * including) the '*', i.e. "N<line_num> <gcode> " with trailing space. */
+      size_t out_max = len + _RRF_CRC16_OVERHEAD + 1; /* +1 for NUL */
+      char stack_buf[MAX_GCODE_STR_LEN + _RRF_CRC16_OVERHEAD + 1];
+      char *out_buf = (out_max <= sizeof(stack_buf))
+                          ? stack_buf
+                          : (char *)malloc(out_max);
+      if (!out_buf) {
+        LOGE(TAG, "OOM composing crc16 gcode line");
+        start = end ? end + 1 : start + len;
+        continue;
+      }
+
+      uint32_t lnum = self->serial_line_number++;
+      /* Build "N<lnum> <gcode> " — trailing space is part of the CRC input */
+      int prefix_len = snprintf(out_buf, out_max, "N%lu %.*s ",
+                                (unsigned long)lnum, (int)len, start);
+      if (prefix_len <= 0 || (size_t)prefix_len >= out_max) {
+        if (out_buf != stack_buf) free(out_buf);
+        start = end ? end + 1 : start + len;
+        continue;
+      }
+
+      uint16_t crc = _crc16_ccitt((const uint8_t *)out_buf, (size_t)prefix_len);
+
+      /* Append "*<crc5d>\n" */
+      int suffix_len = snprintf(out_buf + prefix_len,
+                                out_max - (size_t)prefix_len,
+                                "*%05u\n", (unsigned)crc);
+      if (suffix_len <= 0) {
+        if (out_buf != stack_buf) free(out_buf);
+        start = end ? end + 1 : start + len;
+        continue;
+      }
+
+      size_t out_len = (size_t)prefix_len + (size_t)suffix_len;
+      serial_write_atomic(self->transport_state.serial.uart,
+                          (const uint8_t *)out_buf, out_len, true);
+      if (out_buf != stack_buf) free(out_buf);
+#else
       // Compose the full line including a single trailing newline into a
       // contiguous buffer and send atomically (write+flush) to avoid
       // interleaving from other writers.
@@ -596,6 +667,7 @@ static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode) {
                           (const uint8_t *)out_buf, out_len, true);
 
       if (out_buf != stack_buf) free(out_buf);
+#endif /* RRF_SERIAL_CRC16 */
     }
 
     if (!end) break;
@@ -978,6 +1050,9 @@ static void _serial_set_connected_impl(machine_rrf_t *self, bool connect) {
     if (connect) {
       self->message_box_last_dismissed_seq = -99999;
       self->consecutive_parse_failures = 0;
+#if RRF_SERIAL_CRC16
+      self->serial_line_number = 1;  /* reset line counter on (re-)connect */
+#endif
 #ifdef ESP32_HW
       self->last_response_ms = millis();
 #endif
