@@ -302,7 +302,7 @@ void lvgl_task(void *pv_params) {
     // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
     lvgl_ui_task_handler();
 
-    if ((ctr++ % 500) == 0) {
+    if ((ctr++ % 100) == 0) {
       LOGE(TAG, "LVGL task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
       ram_usage();

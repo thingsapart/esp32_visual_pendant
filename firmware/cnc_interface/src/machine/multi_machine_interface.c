@@ -7,7 +7,7 @@
 
 #include "config.h"
 #include "driver/remote_comms_wrapper.h"
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 static const char *TAG = "multi_machine";

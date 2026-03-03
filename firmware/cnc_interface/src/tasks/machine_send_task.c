@@ -29,7 +29,7 @@ extern "C" {
 #define DEFAULT_TASK_PRIORITY \
   (tskIDLE_PRIORITY + 1)  // Priority of the processing task
 
-#define QUEUE_LENGTH 25  // How many gcode commands to queue up before dropping.
+#define QUEUE_LENGTH 5  // How many gcode commands to queue up before dropping.
 
 static const char *TAG = "MACHINE_SEND_TASK";
 

@@ -100,7 +100,7 @@ typedef void (*cam_status_cb_t)(const cam_device_status_msg_t *status,
 #define CAM_RECEIVER_MAX_CALLBACKS  4
 #define CAM_RECEIVER_MAX_TILES      (8 * 8)   // Up to 8×8 tile grid
 #define CAM_RECEIVER_TILE_BUF_SIZE  (4 * 1024) // Max JPEG bytes per tile (80×80 JPEG ≈ 1–2 KB)
-#define CAM_RECEIVER_POOL_SIZE      4          // JPEG buffer pool slots (tiles decode
+#define CAM_RECEIVER_POOL_SIZE      2          // JPEG buffer pool slots (tiles decode
                                                // immediately, so ≤1–2 in flight at once)
 
 /// Opaque receiver handle.
