@@ -12,8 +12,10 @@
 // I2C Touch pin mapping (I2C_NUM_0):
 //   SCL = GPIO 8   SDA = GPIO 4   Address = 0x3B
 //
-// Physical resolution: TFT_WIDTH=320 columns, TFT_HEIGHT=480 rows (portrait native)
-// Logical resolution (landscape, rotation=90°): 480 wide × 320 tall
+// Build flags: TFT_WIDTH=480 (landscape width), TFT_HEIGHT=320 (landscape height).
+// Physical panel: 320 columns × 480 rows (portrait native).
+// The 90° CW pixel rotation is applied entirely inside the flush callbacks;
+// LVGL itself has no knowledge of it and always sees landscape 480×320.
 //
 // Activated by build flag: -D JC3248W535C=1
 //
@@ -135,45 +137,38 @@ static const char *TAG = "JC3248W535C";
 
 // DMA bounce buffer size.
 // Physical panel dimensions (portrait native):
-//   P_width  = TFT_WIDTH  = 320   (portrait columns)
-//   P_height = TFT_HEIGHT = 480   (portrait rows)
-// After 90° CW software rotation the logical (landscape) layout is:
-//   L_width  = TFT_HEIGHT = 480   (logical cols = buffer row stride)
-//   L_height = TFT_WIDTH  = 320   (logical rows)
+//   P_width  = TFT_HEIGHT = 320   (portrait columns  = landscape rows)
+//   P_height = TFT_WIDTH  = 480   (portrait rows     = landscape cols)
 // TRANS_DIV controls SRAM use vs. DMA transaction count:
 //   TRANS_SIZE = P_width * (P_height / TRANS_DIV) * BYTES_PER_PIXEL
 //   With TRANS_DIV=40: 320 * 12 * 2 = 7 680 B each → 40 transactions/frame
 //   Two alternating buffers (double-buffering): CPU rotation of chunk N+1
 //   overlaps DMA of chunk N.
 #define TRANS_DIV   40
-#define TRANS_SIZE  (TFT_WIDTH * (TFT_HEIGHT / TRANS_DIV) * BYTES_PER_PIXEL)
+#define TRANS_SIZE  (TFT_HEIGHT * (TFT_WIDTH / TRANS_DIV) * BYTES_PER_PIXEL)
 
-// Partial-mode LVGL render buffer size (internal SRAM).
-// Buffer holds PARTIAL_COLS logical columns × full logical height (TFT_WIDTH rows).
-#define PARTIAL_BUF_SIZE  (JC3248W535C_PARTIAL_COLS * TFT_WIDTH * BYTES_PER_PIXEL)
+// Partial-mode LVGL render buffer.
+// This must be a FULL-FRAME buffer (TFT_WIDTH × TFT_HEIGHT).
+//
+// Why full-frame is required:
+//   get_max_row() probes the rounder with LV_EVENT_INVALIDATE_AREA to find how
+//   many rows fit per pass.  Our ROUND_Y rounder always expands the probe to
+//   full logical height (TFT_HEIGHT = 320 rows).  For the probe to pass the
+//   condition (height ≤ max_row), max_row must be ≥ 320.
+//   max_row = buf_size / (dirty_area_width × BYTES_PER_PIXEL)
+//   → buf_size ≥ TFT_WIDTH × TFT_HEIGHT × BYTES_PER_PIXEL for all widths ≤ TFT_WIDTH.
+//
+// PARTIAL mode still saves CPU vs FULL mode: LVGL only re-renders dirty areas
+// and the flush callback rotates/DMAs only the dirty column strip.
+// JC3248W535C_PARTIAL_COLS no longer affects buffer sizing (LVGL controls
+// the dirty area width organically from UI invalidation).
+#define PARTIAL_BUF_SIZE  DRAW_BUF_FULL_SIZE
 
 // ──────────────────────────────────────────────────────────────────────────
 // Draw buffers (allocated in display_alloc)
 // ──────────────────────────────────────────────────────────────────────────
 static uint8_t *s_draw_buf  = NULL;   // primary draw buffer (all modes)
 static uint8_t *s_draw_buf2 = NULL;   // secondary buffer (DIRECT mode only)
-
-#if defined(JC3248W535C_RENDER_DIRECT)
-// lv_display_set_buffers() always reads lv_display_get_original_horizontal_resolution()
-// which returns disp->hor_res — set at lv_display_create() and never modified by
-// lv_display_set_rotation().  With TFT_WIDTH=320, TFT_HEIGHT=480 the wrapper would
-// have {w=320, h=480, stride=640}.  After 90° rotation LVGL renders at logical
-// 480×320.  When lv_draw_buf_goto_xy() is called for a sync_area with x1 ≥ 320 it
-// returns NULL → memcpy to 0x0 → StoreProhibited.
-//
-// Fix: initialise the two lv_draw_buf_t wrappers manually with the LOGICAL
-// (post-rotation, landscape) dimensions so the range-check always passes:
-//   w = TFT_HEIGHT = 480  (logical width)
-//   h = TFT_WIDTH  = 320  (logical height)
-//   stride = TFT_HEIGHT * BYTES_PER_PIXEL = 960
-static lv_draw_buf_t s_lv_draw_buf1;
-static lv_draw_buf_t s_lv_draw_buf2;
-#endif
 
 // DMA bounce buffers — internal SRAM, DMA-capable (MALLOC_CAP_DMA | INTERNAL).
 // Even in the ESP32_Display_Panel path these are needed as rotation-output
@@ -243,11 +238,11 @@ static void rotate_and_dma_range(const uint8_t *px_map,
                                   int end_row)
 {
     // Physical portrait column count = TFT_WIDTH = 320
-    // (= number of landscape rows after rotation)
-    constexpr int P_width  = TFT_WIDTH;
-    // Logical landscape row count = TFT_WIDTH = 320
+    // (= number of logical landscape rows)
+    constexpr int P_width  = TFT_HEIGHT;
+    // Logical landscape row count = TFT_HEIGHT = 320
     // (= physical portrait column count)
-    constexpr int L_height = TFT_WIDTH;
+    constexpr int L_height = TFT_HEIGHT;
 
     const int rows_per_chunk = TRANS_SIZE / (P_width * BYTES_PER_PIXEL);
 
@@ -312,9 +307,9 @@ static void display_flush_full(lv_display_t *disp,
 #endif
 
     // Full frame:
-    //   logical_stride = TFT_HEIGHT = 480  (landscape buffer row width)
-    //   end_row        = TFT_HEIGHT = 480  (physical portrait row count)
-    rotate_and_dma_range(px_map, TFT_HEIGHT, 0, 0, TFT_HEIGHT);
+    //   logical_stride = TFT_WIDTH = 480  (landscape buffer row width)
+    //   end_row        = TFT_WIDTH = 480  (physical portrait row count)
+    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);
 
     lv_display_flush_ready(disp);
 }
@@ -348,7 +343,7 @@ static void display_flush_direct(lv_display_t *disp,
     xSemaphoreGive(s_trans_done_sem);
 #endif
 
-    rotate_and_dma_range(px_map, TFT_HEIGHT, 0, 0, TFT_HEIGHT);
+    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);
 
     lv_display_flush_ready(disp);
 }
@@ -395,26 +390,27 @@ static void display_rounder_cb(lv_event_t *e)
 // ── Partial flush callback ──────────────────────────────────────────────────
 //
 // After the rounder, area is always {x1, 0, x2, TFT_HEIGHT-1}.
-// px_map has (x2-x1+1) * TFT_HEIGHT pixels in LOGICAL row-major order:
-//   pixel at logical(x, y) = ((uint16_t*)px_map)[y * area_width + (x - x1)]
+// In partial mode lv_refr sets layer->buf_area = sub_area, so the layer's
+// coordinate origin is (x1, 0).  LVGL stores display pixel (x, y) at:
+//   buf[(y - 0) * stride + (x - x1)]  =  buf[y * TFT_WIDTH + (x - x1)]
 //
-// Physical destination window: x_start=0, y_start=x1, x_end=TFT_HEIGHT, y_end=x2+1
+// Physical destination: portrait columns 0..TFT_HEIGHT-1, rows x1..x2.
 //   physical(C, R) = logical(R, TFT_HEIGHT-1-C)
-//                  = ((uint16_t*)px_map)[(TFT_HEIGHT-1-C) * area_width + (R-x1)]
+//                  = buf[(TFT_HEIGHT-1-C) * TFT_WIDTH + (R - x1)]
 //
+// → logical_stride = TFT_WIDTH, col_offset = area->x1.
+//   (LVGL stores pixel (x,y) at buf[y*TFT_WIDTH + (x-x1)] because
+//    layer->buf_area.x1 = area->x1 in partial mode, shifting the origin).
 static void display_flush_partial(lv_display_t *disp,
                                    const lv_area_t *area,
                                    uint8_t *px_map)
 {
-    const int area_width = area->x2 - area->x1 + 1;  // logical cols = physical rows
-
 #if !defined(ESP32_LVGL_ESP_DISP)
     xSemaphoreGive(s_trans_done_sem);
 #endif
 
-    // logical_stride = area_width (partial buffer row stride, not TFT_WIDTH)
-    // col_offset     = area->x1  (first physical row in this flush)
-    rotate_and_dma_range(px_map, area_width, area->x1,
+    // stride = TFT_WIDTH (full row), col_offset = area->x1 (layer x-origin).
+    rotate_and_dma_range(px_map, TFT_WIDTH, area->x1,
                           area->x1, area->x2 + 1);
 
     lv_display_flush_ready(disp);
@@ -471,15 +467,14 @@ void display_alloc()
 
 #elif defined(JC3248W535C_RENDER_PARTIAL)
 
-    LOGI(TAG, "alloc PARTIAL: %u B SRAM draw buf (%d cols) + 2 × %u B SRAM DMA bounce",
-         (unsigned)PARTIAL_BUF_SIZE, JC3248W535C_PARTIAL_COLS, (unsigned)TRANS_SIZE);
+    LOGI(TAG, "alloc PARTIAL: %u B PSRAM draw buf + 2 × %u B SRAM DMA bounce",
+         (unsigned)PARTIAL_BUF_SIZE, (unsigned)TRANS_SIZE);
 
-    // Partial draw buffer in internal SRAM: small enough to fit without PSRAM,
-    // and directly DMA-accessible (no cache-coherency workaround needed).
+    // Full-frame PSRAM buffer (same size as FULL mode).
+    // LVGL renders dirty areas into it; the flush callback DMAs only the
+    // dirty column strip, so CPU and DMA work scale with dirty area size.
     s_draw_buf = (uint8_t *)heap_caps_malloc(PARTIAL_BUF_SIZE,
-                                              MALLOC_CAP_INTERNAL |
-                                              MALLOC_CAP_8BIT     |
-                                              MALLOC_CAP_DMA);
+                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
 #endif  // render mode buffer allocation
 
@@ -545,35 +540,13 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev)
     });
 #endif
 
-    // ── 4. LVGL: software rotation — MUST be set before lv_display_set_buffers ──
+    // ── 4. LVGL: flush callback + draw buffer ─────────────────────────────
     //
-    // Physical panel: portrait 320 (H) × 480 (V).
-    // ROTATION_90 swaps the logical resolution to landscape (TFT_WIDTH × TFT_HEIGHT)
-    // and maps touch events accordingly.  Our flush callbacks handle the physical
-    // rotation of pixel data themselves.
-    //
-    // WHY ROTATION FIRST:
-    // lv_display_set_buffers() internally initialises lv_draw_buf_t wrappers whose
-    // stride = hor_res × bpp, using the CURRENT horizontal resolution at call time.
-    //
-    // If rotation is set AFTER set_buffers:
-    //   • At set_buffers time hor_res == TFT_WIDTH (portrait physical, e.g. 320)
-    //     → stride = 320×2 = 640 bytes / row
-    //   • After rotation, LVGL's logical hor_res becomes TFT_HEIGHT (e.g. 480)
-    //   • In DIRECT mode, lv_draw_buf_copy() iterates 480 pixels × 2 bytes = 960
-    //     bytes/row but advances the pointer only 640 bytes → overruns the buffer
-    //     within a few rows → eventually writes to address 0x0 → StoreProhibited
-    //
-    // With rotation set FIRST:
-    //   • At set_buffers time hor_res == TFT_HEIGHT (landscape logical, e.g. 480)
-    //     → stride = 480×2 = 960 bytes / row
-    //   • 480 × 2 × 320 rows = 307 200 B == DRAW_BUF_FULL_SIZE ✓
-    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
-
-    // ── 5. LVGL: flush callback + draw buffer ─────────────────────────────
-    //
-    // Set buffers AFTER rotation so lv_draw_buf_t stride is computed from the
-    // post-rotation (landscape) horizontal resolution.
+    // TFT_WIDTH=480, TFT_HEIGHT=320 match the logical landscape resolution
+    // that lv_display_create() is called with, so lv_display_set_buffers()
+    // computes the correct stride (480×2 = 960 bytes/row) without any LVGL
+    // rotation trick.  The 90° CW pixel rotation lives entirely in the flush
+    // callbacks; LVGL itself has no knowledge of it.
 
 #if defined(JC3248W535C_RENDER_FULL)
 
@@ -585,20 +558,9 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev)
 #elif defined(JC3248W535C_RENDER_DIRECT)
 
     lv_display_set_flush_cb(disp, display_flush_direct);
-
-    // Use logical (landscape, post-rotation) dimensions for the draw_buf headers.
-    // See the comment above s_lv_draw_buf1/2 for the full explanation.
-    constexpr uint32_t L_W      = TFT_HEIGHT;                    // 480 logical columns
-    constexpr uint32_t L_H      = TFT_WIDTH;                     // 320 logical rows
-    constexpr uint32_t L_STRIDE = TFT_HEIGHT * BYTES_PER_PIXEL;  // 960 bytes / row
-    lv_draw_buf_init(&s_lv_draw_buf1, L_W, L_H,
-                     LV_COLOR_FORMAT_RGB565, L_STRIDE,
-                     s_draw_buf, DRAW_BUF_FULL_SIZE);
-    lv_draw_buf_init(&s_lv_draw_buf2, L_W, L_H,
-                     LV_COLOR_FORMAT_RGB565, L_STRIDE,
-                     s_draw_buf2, DRAW_BUF_FULL_SIZE);
-    lv_display_set_draw_buffers(disp, &s_lv_draw_buf1, &s_lv_draw_buf2);
-    lv_display_set_render_mode(disp, LV_DISPLAY_RENDER_MODE_DIRECT);
+    lv_display_set_buffers(disp, s_draw_buf, s_draw_buf2,
+                           DRAW_BUF_FULL_SIZE,
+                           LV_DISPLAY_RENDER_MODE_DIRECT);
 
 #elif defined(JC3248W535C_RENDER_PARTIAL)
 
@@ -625,7 +587,7 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev)
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touch_indev_read);
 
-    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (90° SW rotation)",
+    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (flush-side CW rotation)",
          TFT_WIDTH, TFT_HEIGHT);
 }
 

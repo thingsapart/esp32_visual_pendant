@@ -303,7 +303,7 @@ void lvgl_task(void *pv_params) {
     lvgl_ui_task_handler();
 
     if ((ctr++ % 100) == 0) {
-      LOGE(TAG, "LVGL task stack size high: %d\n",
+      LOGD(TAG, "LVGL task stack size high: %d\n",
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
       ram_usage();
     }

@@ -1,0 +1,51 @@
+/* Minimal stub for ESP32_IO_Expander interface
+ * Used when the real library is intentionally ignored (see platformio.ini).
+ * Only the symbols referenced by ESP32_Display_Panel are declared here so
+ * that the panel code compiles; none of the functions actually perform
+ * hardware I/O.
+ *
+ * This file lives in the project include path and is picked up ahead of the
+ * library version.  It is *not* a full expander implementation.
+*/
+#ifndef ESP_IO_EXPANDER_STUB_HPP_
+#define ESP_IO_EXPANDER_STUB_HPP_
+
+#include "port/esp_io_expander.h"  // C API stubs live here (install into port/)
+
+#ifdef __cplusplus
+
+namespace esp_expander {
+    struct Base {
+        struct Config {
+            bool isHostConfigValid() const { return false; }
+        };
+        struct HostPartialConfig {};
+        struct HostFullConfig {};
+        enum class State { BEGIN };
+
+        virtual ~Base() = default;
+        virtual bool isOverState(State) const { return true; }
+        /* methods used by panel drivers */
+        virtual bool pinMode(int /*io*/, int /*mode*/) { return true; }
+        virtual bool digitalWrite(int /*io*/, bool /*level*/) { return true; }
+        /* extra helpers referenced by panel code */
+        virtual esp_io_expander_handle_t getDeviceHandle() { return nullptr; }
+    };
+
+    struct CH422G;
+    struct HT8574;
+    struct TCA95XX_8BIT;
+    struct TCA95XX_16BIT;
+} // namespace esp_expander
+
+#endif // __cplusplus
+
+/* generic I/O direction macros used by panel source */
+#ifndef INPUT
+#define INPUT 0
+#endif
+#ifndef OUTPUT
+#define OUTPUT 1
+#endif
+
+#endif // ESP_IO_EXPANDER_STUB_HPP_

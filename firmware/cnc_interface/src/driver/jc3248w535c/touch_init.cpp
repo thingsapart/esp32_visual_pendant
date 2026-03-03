@@ -40,8 +40,8 @@ static std::shared_ptr<esp_panel::drivers::Touch> s_touch = nullptr;
 #include "driver/axs15231b_touch.h"
 
 #define TFT_rot   1
-#define TFT_res_W 320
-#define TFT_res_H 480
+#define TFT_res_W 480
+#define TFT_res_H 320
 
 static AXS15231B_Touch s_touch(Touch_SCL, Touch_SDA, Touch_INT, Touch_ADDR, TFT_rot);
 
@@ -87,8 +87,8 @@ bool touch_hw_init() {
 
     esp_panel::drivers::TouchAXS15231B::Config touch_cfg;
     touch_cfg.device = esp_panel::drivers::Touch::DevicePartialConfig{
-        .x_max        = 320,
-        .y_max        = 480,
+        .x_max        = 480,
+        .y_max        = 320,
         .rst_gpio_num = -1,
         .int_gpio_num = -1,
     };
@@ -231,8 +231,11 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     esp_panel::drivers::TouchPoint point;
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
+        // No LVGL rotation — map portrait hardware coords to landscape explicitly.
+        // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
+        // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
         float fx = (float)point.x;
-        float fy = (float)point.y;
+        float fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
         touch_calib_apply_inplace(&fx, &fy);
         data->point.x = (lv_coord_t)fx;
         data->point.y = (lv_coord_t)fy;
@@ -250,9 +253,11 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     esp_panel::drivers::TouchPoint point;
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
-        // Landscape: raw coords come in portrait space, swap to landscape
-        float fx = TFT_WIDTH  - (float)point.y;
-        float fy = TFT_HEIGHT - (float)point.x;
+        // No LVGL rotation — map portrait hardware coords to landscape explicitly.
+        // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
+        // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
+        float fx = (float)point.x;
+        float fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
         touch_calib_apply_inplace(&fx, &fy);
         data->point.x = (lv_coord_t)fx;
         data->point.y = (lv_coord_t)fy;
@@ -311,8 +316,10 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t raw_x = ((uint16_t)(td[2] & 0x0F) << 8) | td[3];
     uint16_t raw_y = ((uint16_t)(td[4] & 0x0F) << 8) | td[5];
 
-    float fx = (float)raw_x;
-    float fy = (float)raw_y;
+    // No LVGL rotation — map portrait hardware coords to landscape.
+    // 90° CW: landscape_x = raw_y (portrait row), landscape_y = (TFT_HEIGHT-1) - raw_x
+    float fx = (float)raw_y;
+    float fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
     touch_calib_apply_inplace(&fx, &fy);
 
     data->state   = LV_INDEV_STATE_PR;

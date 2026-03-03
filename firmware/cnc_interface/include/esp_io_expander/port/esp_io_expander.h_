@@ -1,0 +1,50 @@
+/* C‑API stub for esp_io_expander.*
+ * The real library provides these functions/types; we declare just enough
+ * so that ESP32_Display_Panel's C drivers compile when the expander library
+ * is ignored.  Functions simply return ESP_OK or no-op.
+*/
+#ifndef ESP_IO_EXPANDER_C_STUB_H_
+#define ESP_IO_EXPANDER_C_STUB_H_
+
+#include <stdbool.h>
+#include <stdint.h>
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* dummy forward declarations matching the real header */
+typedef struct esp_io_expander_s esp_io_expander_t;
+typedef esp_io_expander_t *esp_io_expander_handle_t;
+
+/* pin mask type; panel code only ever casts into it, so uint32_t is fine */
+typedef uint32_t esp_io_expander_pin_num_t;
+
+/* direction enum used by panel drivers */
+typedef enum {
+    IO_EXPANDER_INPUT  = 0,
+    IO_EXPANDER_OUTPUT = 1,
+} esp_io_expander_dir_t;
+
+/* stub functions used by panel code */
+static inline esp_err_t esp_io_expander_set_dir(esp_io_expander_t *h,
+        esp_io_expander_pin_num_t pin, esp_io_expander_dir_t dir) {
+    (void)h; (void)pin; (void)dir; return ESP_OK;
+}
+
+static inline esp_err_t esp_io_expander_set_level(esp_io_expander_t *h,
+        esp_io_expander_pin_num_t pin, bool level) {
+    (void)h; (void)pin; (void)level; return ESP_OK;
+}
+
+/* panel drivers also reference "IO_COUNT_MAX" and a few other symbols
+   only when they compute bitmasks; provide a harmless definition. */
+#define IO_COUNT_MAX (32U)
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // ESP_IO_EXPANDER_C_STUB_H_

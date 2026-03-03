@@ -79,7 +79,7 @@
      * tasks can still be created after the UI is loaded. */
     #define LV_MEM_SIZE (48 * 1024U)           /**< [bytes] */
 #else
-    #define LV_MEM_SIZE (48 * 1024U)          /**< [bytes] */
+    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
 #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
@@ -163,7 +163,11 @@
  * and can't be drawn in chunks. */
 
 /** The target buffer size for simple layer chunks. */
-#define LV_DRAW_LAYER_SIMPLE_BUF_SIZE    (24 * 1024)    /**< [bytes]*/
+#if !defined(BOARD_HAS_PSRAM) || defined(HW_ESP32_C3)
+    #define LV_DRAW_LAYER_SIMPLE_BUF_SIZE    (12 * 1024)    /**< [bytes]*/
+#else
+    #define LV_DRAW_LAYER_SIMPLE_BUF_SIZE    (24 * 1024)    /**< [bytes]*/
+#endif
 
 /* Limit the max allocated memory for simple and transformed layers.
  * It should be at least `LV_DRAW_LAYER_SIMPLE_BUF_SIZE` sized but if transformed layers are also used
@@ -186,7 +190,7 @@
      */
     #define LV_DRAW_SW_SUPPORT_RGB565       1
     #define LV_DRAW_SW_SUPPORT_RGB565A8     0
-    #define LV_DRAW_SW_SUPPORT_RGB888       1
+    #define LV_DRAW_SW_SUPPORT_RGB888       0
     #define LV_DRAW_SW_SUPPORT_XRGB8888     0
     #define LV_DRAW_SW_SUPPORT_ARGB8888     0
     #define LV_DRAW_SW_SUPPORT_L8           0
@@ -197,7 +201,11 @@
     /** Set number of draw units.
      *  - > 1 requires operating system to be enabled in `LV_USE_OS`.
      *  - > 1 means multiple threads will render the screen in parallel. */
-    #define LV_DRAW_SW_DRAW_UNIT_CNT    2
+    #if !defined(BOARD_HAS_PSRAM) || defined(HW_ESP32_C3)
+        #define LV_DRAW_SW_DRAW_UNIT_CNT    1
+    #else
+        #define LV_DRAW_SW_DRAW_UNIT_CNT    2
+    #endif
 
     /** Use Arm-2D to accelerate software (sw) rendering. */
     #define LV_USE_DRAW_ARM2D_SYNC      0
@@ -1023,7 +1031,7 @@
 #define LV_USE_SNAPSHOT 0
 
 /** 1: Enable system monitor component */
-#define LV_USE_SYSMON   1
+#define LV_USE_SYSMON   0
 #if LV_USE_SYSMON
     /** Get the idle percentage. E.g. uint32_t my_get_idle(void); */
     #define LV_SYSMON_GET_IDLE lv_timer_get_idle
