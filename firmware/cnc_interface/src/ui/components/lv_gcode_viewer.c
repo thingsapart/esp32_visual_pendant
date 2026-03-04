@@ -792,8 +792,11 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
                 /* Bounds check */
                 if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
                 if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
-                gc_pt2_t p1 = { (int16_t)(sx - xpx_n * tlen), (int16_t)(sy - xpy_n * tlen) };
-                gc_pt2_t p2 = { (int16_t)(sx + xpx_n * tlen), (int16_t)(sy + xpy_n * tlen) };
+                /* Render tick arms axis-aligned for cheaper rasterisation:
+                 * X-axis ticks are vertical, Y-axis ticks are horizontal.
+                 * Keep the original perpendicular (xpx_n/xpy_n) for label offset. */
+                gc_pt2_t p1 = { (int16_t)(sx), (int16_t)(sy - tlen) };
+                gc_pt2_t p2 = { (int16_t)(sx), (int16_t)(sy + tlen) };
                 draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
                 if (maj) {
                     /* Label offset along +perpendicular (away from grid) */
@@ -838,8 +841,11 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
                 float sy   = (float)op.y + yv * ydy;
                 if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
                 if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
-                gc_pt2_t p1 = { (int16_t)(sx - ypx_n * tlen), (int16_t)(sy - ypy_n * tlen) };
-                gc_pt2_t p2 = { (int16_t)(sx + ypx_n * tlen), (int16_t)(sy + ypy_n * tlen) };
+                /* Render tick arms axis-aligned for cheaper rasterisation:
+                 * Y-axis ticks are horizontal (arm along X screen axis).
+                 * Keep the original perpendicular (ypx_n/ypy_n) for label offset. */
+                gc_pt2_t p1 = { (int16_t)(sx - tlen), (int16_t)(sy) };
+                gc_pt2_t p2 = { (int16_t)(sx + tlen), (int16_t)(sy) };
                 draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
                 if (maj) {
                     float lo = tlen + 2.0f;
