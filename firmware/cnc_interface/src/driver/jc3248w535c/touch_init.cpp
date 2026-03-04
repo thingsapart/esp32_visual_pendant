@@ -24,6 +24,8 @@
 
 static const char *TAG = "JC3248W535C/touch";
 
+#define DEBUG_TOUCH 0
+
 /* ── Build-path includes ───────────────────────────────────────────────────*/
 
 #if defined(ESP32_LVGL_ESP_DISP) || defined(JC3248W535C_ESP_DISP_TOUCH)
@@ -221,46 +223,43 @@ bool touch_hw_init() {
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
+    float fx = 0.0f, fy = 0.0f;
+
 #if defined(ESP32_LVGL_ESP_DISP)
 
+    esp_panel::drivers::TouchPoint point;
     // ── ESP32_Display_Panel path ──────────────────────────────────────────
     if (!s_touch) {
         data->state = LV_INDEV_STATE_REL;
-        return;
+        goto done;
     }
-    esp_panel::drivers::TouchPoint point;
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
         // No LVGL rotation — map portrait hardware coords to landscape explicitly.
         // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
         // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
-        float fx = (float)point.x;
-        float fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
-        touch_calib_apply_inplace(&fx, &fy);
-        data->point.x = (lv_coord_t)fx;
-        data->point.y = (lv_coord_t)fy;
+        fx = (float)point.x;
+        fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
 
 #elif defined(JC3248W535C_ESP_DISP_TOUCH)
 
+    esp_panel::drivers::TouchPoint point;
+
     // ── esp_panel touch driver only (IDF-native LCD path) ────────────────
     if (!s_touch) {
         data->state = LV_INDEV_STATE_REL;
-        return;
+        goto done;
     }
-    esp_panel::drivers::TouchPoint point;
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
         // No LVGL rotation — map portrait hardware coords to landscape explicitly.
         // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
         // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
-        float fx = (float)point.x;
-        float fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
-        touch_calib_apply_inplace(&fx, &fy);
-        data->point.x = (lv_coord_t)fx;
-        data->point.y = (lv_coord_t)fy;
+        fx = (float)point.x;
+        fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
@@ -271,8 +270,8 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t x, y;
     if (s_touch.touched()) {
         s_touch.readData(&x, &y);
-        data->point.x = x;
-        data->point.y = y;
+        fx = x;
+        fy = y;
         data->state   = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
@@ -293,7 +292,7 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
     if (ret != ESP_OK) {
         data->state = LV_INDEV_STATE_REL;
-        return;
+        goto done;
     }
 
     // Read 8 bytes of touch data
@@ -309,7 +308,7 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
     if (ret != ESP_OK || td[1] == 0) {
         data->state = LV_INDEV_STATE_REL;
-        return;
+        goto done;
     }
 
     // Decode coordinates (native portrait 320×480)
@@ -318,20 +317,25 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
     // No LVGL rotation — map portrait hardware coords to landscape.
     // 90° CW: landscape_x = raw_y (portrait row), landscape_y = (TFT_HEIGHT-1) - raw_x
-    float fx = (float)raw_y;
-    float fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
-    touch_calib_apply_inplace(&fx, &fy);
-
+    fx = (float)raw_y;
+    fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
     data->state   = LV_INDEV_STATE_PR;
+
+#endif // touch path selection
+
+    // Now apply calibration to the coordinates we just computed.
+    touch_calib_apply_inplace(&fx, &fy);
     data->point.x = (lv_coord_t)fx;
     data->point.y = (lv_coord_t)fy;
 
+done:
 #if DEBUG_TOUCH != 0
-    LOGI(TAG, "TOUCH: raw(%d,%d) → (%d,%d)", raw_x, raw_y,
-         data->point.x, data->point.y);
+    if (data->state == LV_INDEV_STATE_REL) {
+        LOGI(TAG, "TOUCH: RELEASED");
+    } else {
+        LOGI(TAG, "TOUCH: PRESSED - (%d,%d)", data->point.x, data->point.y);
+    }
 #endif
-
-#endif // touch path selection
 }
 
 #endif // JC3248W535C

@@ -21,6 +21,7 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "driver/task_registry.h"
 #else
 #include <time.h>
 
@@ -591,11 +592,6 @@ void machine_response_proc_task(void *vpargs) {
       // Notification received, try to get data from the ring buffer
       size_t line_len;
 
-      // LOGI(TAG, "%s task stack size high: %d\n", task_name,
-      //     uxTaskGetStackHighWaterMark(NULL));
-
-      machine->set_connected(machine, true);
-
 #if 0
             // Loop to process all available lines in the buffer before blocking again
             while (ring_buffer_get_line(&response_buffer, line_buffer, MAX_LINE_LENGTH, &line_len)) {
@@ -607,9 +603,12 @@ void machine_response_proc_task(void *vpargs) {
                 }
             }
 #else
-      // Loop to process all available lines in the buffer before blocking again
-      while (
-          (line_buffer = ring_buffer_line_data(response_buffer, &line_len))) {
+      // Loop to process available lines in the buffer before blocking again.
+      // To avoid starving lower-priority tasks (e.g., the LVGL UI task),
+      // process a limited batch per wake and then yield briefly.
+      const int MAX_PROCESS_PER_WAKE = 8;
+      int processed = 0;
+      while ((line_buffer = ring_buffer_line_data(response_buffer, &line_len))) {
         LOGI(TAG, "[%s] Processing line (len %d): %p, machine %p, queue %p",
              task_name, line_len, line_buffer, machine, queue);
         if (line_len > 0) {
@@ -619,6 +618,12 @@ void machine_response_proc_task(void *vpargs) {
                                                            line_len);
         }
         ring_buffer_purge_line(response_buffer);
+        processed++;
+        if (processed >= MAX_PROCESS_PER_WAKE) {
+          // Give other tasks a chance to run before continuing to process
+          vTaskDelay(pdMS_TO_TICKS(1));
+          processed = 0;
+        }
       }
 
 #endif
@@ -718,6 +723,7 @@ bool machine_response_proc_task_run(const char *task_name,
   }
 
   LOGI(TAG, "Machine response processing task started successfully.");
+  task_registry_register_handle(*task_handle, task_name);
   return true;
 }
 

@@ -12,6 +12,7 @@
 #include "ui/components/mos_machine_handler.h"
 #include "ui/components/lv_cam_positioning.h"
 #include "ui/components/lv_cnc_io_panel.h"
+#include "ui/components/lv_settings.h"
 #include "machine/machine_interface.h"
 #include "config/app_settings.h"
 
@@ -34,8 +35,13 @@ typedef struct {
 
 // Handler for "OK / close" buttons on machine modals.
 static void _modal_btn_event_cb(lv_event_t *e) {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_event_code_t code = lv_event_get_code(e);
   modal_btn_ctx_t *ctx = (modal_btn_ctx_t *)lv_event_get_user_data(e);
+  if (code == LV_EVENT_DELETE) {
+    free(ctx);
+    return;
+  }
+  if (code != LV_EVENT_CLICKED) return;
   if (!ctx || !ctx->machine) return;
 
   lv_obj_t *btn = lv_event_get_current_target(e);
@@ -731,7 +737,7 @@ void interface_tick(interface_t *interface) {
             ctx->machine = machine;
             ctx->seq = mb->seq;
             ctx->button_index = (int)i;
-            lv_obj_add_event_cb(btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx);
+            lv_obj_add_event_cb(btn, _modal_btn_event_cb, LV_EVENT_ALL, ctx);
           }
         }
       } else if (mb->mode == MESSAGE_OK_CANCEL) {
@@ -739,13 +745,13 @@ void interface_tick(interface_t *interface) {
         modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
         if (ctx_ok) {
           ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
-          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_ALL, ctx_ok);
         }
         lv_obj_t *ca_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
         modal_btn_ctx_t *ctx_ca = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
         if (ctx_ca) {
           ctx_ca->machine = machine; ctx_ca->seq = mb->seq; ctx_ca->button_index = 1;
-          lv_obj_add_event_cb(ca_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ca);
+          lv_obj_add_event_cb(ca_btn, _modal_btn_event_cb, LV_EVENT_ALL, ctx_ca);
         }
       } else if (mb->mode == MESSAGE_INFO || mb->mode == MESSAGE) {
         // Non-blocking info - add a close button only.
@@ -753,7 +759,7 @@ void interface_tick(interface_t *interface) {
         modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
         if (ctx_ok) {
           ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
-          lv_obj_add_event_cb(close_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+          lv_obj_add_event_cb(close_btn, _modal_btn_event_cb, LV_EVENT_ALL, ctx_ok);
         }
       } else {
         // MESSAGE_OK and blocking input types: show OK button.
@@ -761,7 +767,7 @@ void interface_tick(interface_t *interface) {
         modal_btn_ctx_t *ctx_ok = (modal_btn_ctx_t *)malloc(sizeof(modal_btn_ctx_t));
         if (ctx_ok) {
           ctx_ok->machine = machine; ctx_ok->seq = mb->seq; ctx_ok->button_index = 0;
-          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_CLICKED, ctx_ok);
+          lv_obj_add_event_cb(ok_btn, _modal_btn_event_cb, LV_EVENT_ALL, ctx_ok);
         }
       }
 

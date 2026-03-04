@@ -78,7 +78,7 @@ for libroot in panel_dirs:
                     bf.write(content)
             with open(conf_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(out_lines) + '\n')
-            print(f"[patch] patched {conf_path} (backup at {backup})")
+            # print(f"[patch] patched {conf_path} (backup at {backup})")
         except Exception as e:
             print(f"[patch] failed to write patched file: {e}")
     else:

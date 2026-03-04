@@ -19,7 +19,7 @@ Import("env")
 
 proj = env.get("PROJECT_DIR")
 pioenv = env.get("PIOENV", "")
-print(f"[patch] copy_expander_stub.py: PROJECT_DIR={proj!r}, PIOENV={pioenv!r}")
+# print(f"[patch] copy_expander_stub.py: PROJECT_DIR={proj!r}, PIOENV={pioenv!r}")
 
 if not proj or not pioenv:
     print("[patch] missing PROJECT_DIR or PIOENV from env, skipping script")
@@ -65,7 +65,7 @@ if not targets:
     print(f"[patch] no ESP32_Display_Panel library found under {libdeps_root}")
     sys.exit(0)
 
-print(f"[patch] found panel library directories: {targets}")
+# print(f"[patch] found panel library directories: {targets}")
 
 for libroot in targets:
     # ensure common locations exist (src/ and include/) and copy into both
@@ -82,7 +82,7 @@ for libroot in targets:
         master_dest = os.path.join(libroot, "esp_io_expander.hpp")
         try:
             shutil.copy(master_stub, master_dest)
-            print(f"[patch] copied master {master_stub} -> {master_dest}")
+            # print(f"[patch] copied master {master_stub} -> {master_dest}")
         except Exception as e:
             print(f"[patch] failed to copy master {master_stub} -> {master_dest}: {e}")
 
@@ -94,7 +94,7 @@ for libroot in targets:
             try:
                 with open(wrapper_path, "w") as wf:
                     wf.write("#pragma once\n#include \"../esp_io_expander.hpp\"\n")
-                print(f"[patch] wrote wrapper {wrapper_path}")
+                # print(f"[patch] wrote wrapper {wrapper_path}")
             except Exception as e:
                 print(f"[patch] failed to write wrapper {wrapper_path}: {e}")
 
@@ -109,6 +109,6 @@ for libroot in targets:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             try:
                 shutil.copy(src_path, dest)
-                print(f"[patch] copied {src_path} -> {dest}")
+                # print(f"[patch] copied {src_path} -> {dest}")
             except Exception as e:
                 print(f"[patch] failed to copy {src_path} -> {dest}: {e}")

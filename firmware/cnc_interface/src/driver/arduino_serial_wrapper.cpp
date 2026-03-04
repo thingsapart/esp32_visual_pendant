@@ -679,10 +679,23 @@ serial_handle_t get_serial_handle(int uart_num) {
 }
 
 void default_serial_write(const uint8_t *buf, size_t len) {
+#ifdef ESP32_HW
+  // Skip write entirely when no USB-CDC host is connected.  Without this,
+  // every LOGI/LOGE call stalls the calling task waiting for TinyUSB to flush
+  // a full TX buffer into the void.
+  if (!Serial) return;
+#endif
   serial_handle_t handle = get_serial_handle(-1);
   if (handle) {
     serial_write(handle, buf, len);
-    serial_flush(handle);
+    // NOTE: Do NOT call serial_flush() here.  Flushing after every single log
+    // line acquires the write_mutex a second time and blocks waiting for the
+    // USB host to drain the TX FIFO.  High-priority tasks (WiFi callback at
+    // prio=22, machine_send_task at prio=5) calling this function would then
+    // continuously hold the mutex, starving lower-priority tasks such as the
+    // lvgl_task (prio=2) from ever emitting their own log output.  The TinyUSB
+    // CDC stack drains the TX FIFO automatically every USB SOF interval (~1 ms)
+    // so explicit flushing is not needed for timely log delivery.
   } else {
     // Fallback if standard serial wasn't initialized/added
     // printf("%.*s", (int)len, (const char *)buf);

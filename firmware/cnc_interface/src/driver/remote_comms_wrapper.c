@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "debug.h"
+#include "driver/task_registry.h"
 
 static const char *TAG = "remote_comms_wrapper";
 
@@ -144,6 +145,8 @@ TaskHandle_t remote_send_task_run() {
   }
 
   LOGI(TAG, "Remote send task started successfully.");
+
+    task_registry_register_handle(task_handle, "remote_send_task");
 
   remote_send_queue = queue;
 
@@ -654,6 +657,8 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
         return false;
     }
 
+    task_registry_register_handle(g_rx_task, "c6_bridge_rx");
+
     LOGI(TAG, "C6 ESP-NOW bridge ready");
 
     // Send plain-text hello on the bridge UART at boot so a human monitoring
@@ -1024,6 +1029,8 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
         LOGE(TAG, "Failed to start C6 SDIO RX task");
         return false;
     }
+
+    task_registry_register_handle(g_rx_task, "c6_sdio_rx");
 
     LOGI(TAG, "C6 SDIO ESP-NOW bridge ready");
     return true;

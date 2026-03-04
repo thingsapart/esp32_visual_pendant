@@ -16,6 +16,18 @@
 
 static const char *TAG = "cam_xport";
 
+#if defined(ESP32P4_HW)
+// ESP32-P4 does not support ESP-NOW in this build; provide a stubbed create
+// function so callers gracefully detect absence of ESP-NOW support.
+cam_transport_t *cam_transport_espnow_create(const uint8_t cam_mac[6])
+{
+    LOGW(TAG, "ESP-NOW disabled on ESP32-P4");
+    (void)cam_mac;
+    return NULL;
+}
+
+#else
+
 // ---------------------------------------------------------------------------
 // Private state
 // ---------------------------------------------------------------------------
@@ -201,3 +213,5 @@ const uint8_t *cam_transport_espnow_get_mac(const cam_transport_t *self)
 {
     return ((const cam_transport_espnow_t *)self)->cam_mac;
 }
+
+#endif // ESP32P4_HW

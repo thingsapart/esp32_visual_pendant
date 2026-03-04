@@ -796,8 +796,10 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(CAM_BOOT_PIN), boot_isr, FALLING);
 
     // Start LED animation task early so LED changes are visible during toggles.
+    TaskHandle_t led_task_handle = NULL;
     xTaskCreatePinnedToCore(led_task, "led", 2048, NULL,
-                            tskIDLE_PRIORITY + 1, NULL, 0);
+                            tskIDLE_PRIORITY + 1, &led_task_handle, 0);
+    task_registry_register_handle(led_task_handle, "led");
 
     // If not calibrated, start web UI at boot so user can configure.
     if (!g_settings.calibrated) {

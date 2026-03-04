@@ -1024,6 +1024,7 @@ void remote_recv_task_run() {
 
   xTaskCreatePinnedToCore(remote_recv_task, "remote_recv_task", 6 * 1024, NULL,
                           5, &recv_task_handle, TASK_MACHINE_STATE_PROC_CORE);
+  task_registry_register_handle(recv_task_handle, "remote_recv_task");
 }
 
 #endif
@@ -1268,6 +1269,7 @@ TaskHandle_t hub_task_handle = NULL;
 void setup_hub_tasks() {
   xTaskCreatePinnedToCore(hub_task, "hub_task", 12 * 1024, NULL,
                           HUB_TASK_PRIORITY, &hub_task_handle, 0);
+  task_registry_register_handle(hub_task_handle, "hub_task");
 }
 
 TaskHandle_t machine_rrf_proc_task_handle = NULL;

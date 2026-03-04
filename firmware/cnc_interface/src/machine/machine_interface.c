@@ -485,7 +485,7 @@ uint32_t machine_interface_next_poll_state(machine_interface_t *self) {
   if (self->polli % 3 == 0) poll_state |= SPINDLE;              // ~150 ms at 50 ms base
   if (self->polli % 17 == 0) poll_state |= TOOLS;               // ~850 ms
   if (self->polli % 23 == 0) poll_state |= IO_SENSORS;          // ~1150 ms
-  if (self->polli % 89 == 0) poll_state |= (LIST_MACROS | LIST_FILES); // ~ 4.5 s
+  if (self->polli % 257 == 0) poll_state |= (LIST_MACROS | LIST_FILES); // ~ 12.5 s
   return poll_state;
 }
 

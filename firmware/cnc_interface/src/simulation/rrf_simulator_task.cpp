@@ -359,7 +359,9 @@ static void rrf_sim_task(void *arg) {
 }
 
 void rrf_device_simulator_start() {
-    xTaskCreate(rrf_sim_task, "RRF_SIM_DEV", 4096 * 2, NULL, 1, NULL);
+    TaskHandle_t sim_handle = NULL;
+    xTaskCreate(rrf_sim_task, "RRF_SIM_DEV", 4096 * 2, NULL, 1, &sim_handle);
+    task_registry_register_handle(sim_handle, "RRF_SIM_DEV");
 }
 
 #endif

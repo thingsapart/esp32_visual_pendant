@@ -391,13 +391,18 @@ void multi_machine_interface_destroy(multi_machine_interface_t *self) {
   (memcpy(mm->base.prop, mach->prop, sizeof(mach->prop)))
 #define MACH_ARRCPY(prop)                                        \
   do {                                                           \
-    if (mm->base.num_##prop > 0) {                               \
+    if (mm->base.prop) {                                         \
       free(mm->base.prop);                                       \
+      mm->base.prop = NULL;                                      \
     }                                                            \
+    mm->base.num_##prop = 0;                                     \
     if (mach->num_##prop > 0) {                                  \
       size_t __len_a = sizeof(mach->prop[0]) * mach->num_##prop; \
       mm->base.prop = malloc(__len_a);                           \
-      memcpy(mm->base.prop, mach->prop, __len_a);                \
+      if (mm->base.prop) {                                       \
+        memcpy(mm->base.prop, mach->prop, __len_a);              \
+        mm->base.num_##prop = mach->num_##prop;                  \
+      }                                                          \
     }                                                            \
   } while (0)
 

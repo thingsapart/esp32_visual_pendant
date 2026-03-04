@@ -11,6 +11,7 @@
 #define ESP_IO_EXPANDER_STUB_HPP_
 
 #include "port/esp_io_expander.h"  // C API stubs live here (install into port/)
+#include <variant>
 
 #ifdef __cplusplus
 

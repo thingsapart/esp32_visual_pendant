@@ -1,9 +1,8 @@
 //*********************************************************************************************************/
-//  WT32-SC01-PLUS template for platform.io
-//  created by Frits Jan / productbakery on 11 oktober 2022
+//  Status-display app (trimmed pendant for minimal devices)
 //*********************************************************************************************************/
 
-#ifdef APP_PENDANT
+#ifdef APP_STATUS_DISPLAY
 
 #include <stdio.h>
 
@@ -20,7 +19,7 @@
 #include "esp_freertos_hooks.h" // For xTaskCreateStaticWithCaps
 #include "driver/task_registry.h"
 
-static const char *TAG = "ESP32_CNC_HMI";
+static const char *TAG = "ESP32_STATUS_DISPLAY";
 
 #include "driver/encoder.hpp"
 #include "tasks/machine_response_proc_task.h"
@@ -34,15 +33,6 @@ extern void ram_usage();
 static bool uiMode = false;
 void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
-  /*
-  //if (uiMode == false && encoder.isUiMode() == true) {
-  if (uiMode) {
-    data->state = LV_INDEV_STATE_PRESSED;
-  } else {
-    data->state = LV_INDEV_STATE_RELEASED;
-  }
-  */
-
   uiMode = encoder.isUiMode();
   data->state = LV_INDEV_STATE_RELEASED;
 
@@ -56,41 +46,11 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #if DEBUG_ENCODER != 0
       LOGI(TAG, "Data ENC delta: %d.", data->enc_diff);
 #endif
-    } else {
-      // data->state = LV_INDEV_STATE_RELEASED;
     }
   }
 #else
   data->state = LV_INDEV_STATE_RELEASED;
   data->enc_diff = 0;
-#endif
-}
-
-//************************************************************************************
-//  SETUP AND LOOP
-//************************************************************************************
-
-#include "driver/driver_interface.hpp"
-#include "machine/machine_interface.h"
-#include "machine/machine_remote.h"
-#include "machine/machine_rrf.h"
-#include "machine/multi_machine_interface.h"
-#include "ui/interface.h"
-#ifdef UPDATE_JOG_DIAL
-#include "ui/tab_jog.h"
-#endif
-
-// DWC Mode specific includes
-#ifdef DWC_MACHINE_MODE
-#include <WiFi.h>
-
-#include "config/dwc_settings.h"
-#include "driver/wifi_manager.h"
-
-// Global flag to communicate startup failure to UI
-bool g_dwc_startup_connection_failed = false;
-char g_dwc_startup_host[65] = {0};
-
 #endif
 
 #ifndef DWC_MACHINE_MODE
@@ -122,30 +82,6 @@ extern "C" void test_ui(lv_obj_t *screen);
 
 #include "driver/arduino_serial_wrapper.h"
 
-#ifdef ESP32_HW
-#include "driver/cam_transport_espnow.h"
-#include "driver/cam_receiver.h"
-#include "ui/components/lv_cam_stream.h"
-
-static cam_transport_t *s_cam_transport = NULL;
-static cam_receiver_t  *s_cam_receiver  = NULL;
-
-static void cam_init(void)
-{
-    static const uint8_t cam_mac[] = CAM_MAC_ADDR;
-    s_cam_transport = cam_transport_espnow_create(cam_mac);
-    if (!s_cam_transport) { LOGE(TAG, "cam_transport_espnow_create failed"); return; }
-
-    //cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = 640, .max_height = 480 };
-    cam_receiver_config_t cfg = { .transport = s_cam_transport, .max_width = TFT_HEIGHT, .max_height = TFT_WIDTH };
-    s_cam_receiver = cam_receiver_create(&cfg);
-    if (!s_cam_receiver) { LOGE(TAG, "cam_receiver_create failed"); return; }
-
-    lv_cam_stream_set_default_receiver(s_cam_receiver);
-    cam_receiver_start(s_cam_receiver);
-    LOGI(TAG, "Camera receiver started");
-}
-#endif
 
 #include "ui/touch_calib/ui_touch_calib.h"
 #include "ui/touch_calib/touch_calib.h"
@@ -321,17 +257,12 @@ void lvgl_task(void *pv_params) {
       int diff = encoder.readAndReset();
       if (diff != 0) {
 #ifdef UPDATE_JOG_DIAL
-        // interface->tab_jog->jog_dial->setValue(encoder.position());
         auto dial = interface.tab_jog->jog_dial;
         if (jog_dial_axis_selected(dial)) {
           jog_dial_apply_diff(dial, diff);
         }
 #endif
 
-        /* Post to the accumulator queue instead of issuing a G-Code
-         * directly.  The jog_accumulator_task will batch these clicks,
-         * send a single consolidated move, and self-throttle using a
-         * kinematic sleep so the controller is never overwhelmed.       */
         jog_accumulator_post_clicks(diff);
 
         LOGI(TAG, "ENCODER DIFF %d", diff);
@@ -369,31 +300,6 @@ void init_touch_cal() {
   LOGI(TAG, "LV_INIT DISPLAY");
   display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
   indev = lv_indev_create();
-
-  LOGI(TAG, "Display setup...");
-  display_setup(display1, indev);
-  LOGI(TAG, "Display setup... DONE");
-
-  LOGI(TAG, "No touch calibration found — running calibration wizard");
-  ui_run_touch_calib_blocking();
-
-  // Infinite loop.
-  while (true) {
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-  }
-}
-
-void init_lvgl() {
-  LOGI(TAG, "LV_INIT");
-
-  lv_init();
-
-  LOGI(TAG, "LV_INIT DISPLAY");
-  display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
-  indev = lv_indev_create();
-#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
-  indev_encoder = lv_indev_create();
-#endif
 
   LOGI(TAG, "Display setup...");
   display_setup(display1, indev);
@@ -457,11 +363,6 @@ void setup() {
 
   LOGI(TAG, "Loading touch calib... ");
   touch_calib_load();
-#endif
-
-#if defined(ESP32_HW) && defined(BOARD_HAS_PSRAM)
-  LOGI(TAG, "Initializing camera receiver...");
-  cam_init();
 #endif
 
   LOGI(TAG, "Creating Machine Interfaces... ");
@@ -701,4 +602,20 @@ void loop() {
   vTaskDelete(NULL);
 }
 
+void init_lvgl() {
+  LOGI(TAG, "LV_INIT");
+
+  lv_init();
+
+  LOGI(TAG, "LV_INIT DISPLAY");
+  display1 = lv_display_create(TFT_WIDTH, TFT_HEIGHT);
+  indev = lv_indev_create();
+#if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
+  indev_encoder = lv_indev_create();
 #endif
+
+  LOGI(TAG, "Display setup...");
+  display_setup(display1, indev);
+  LOGI(TAG, "Display setup... DONE");
+
+#endif // APP_STATUS_DISPLAY

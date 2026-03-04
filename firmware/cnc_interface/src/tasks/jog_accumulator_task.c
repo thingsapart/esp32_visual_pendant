@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "driver/task_registry.h"
 
 #include "config/app_settings.h"
 
@@ -276,6 +277,7 @@ bool jog_accumulator_init(machine_interface_t *machine) {
     }
 
     s_running = true;
+    task_registry_register_handle(s_task, "jog_accum");
     LOGI(TAG, "Jog accumulator initialised (queue_len=%d prio=%d core=%d)",
          JOG_ACCUM_QUEUE_LEN, JOG_ACCUM_TASK_PRIO, JOG_ACCUM_TASK_CORE);
     return true;

@@ -17,6 +17,7 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "driver/task_registry.h"
 #else
 #include "compat/threads.h"
 #endif
@@ -97,6 +98,7 @@ bool machine_task_run(const char *task_name, machine_interface_t *machine,
     return false;
   }
   LOGI(TAG, "Machine response processing task started successfully.");
+  task_registry_register_handle(*machine_task_handle, "Machine");
   return true;
 }
 

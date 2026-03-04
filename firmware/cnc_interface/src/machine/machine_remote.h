@@ -39,6 +39,14 @@ typedef struct {
 #endif
 #endif
 
+  /* File-list request exponential back-off.
+   * When ESP-NOW sends fail (hub out of range), file-list requests are skipped
+   * until update_count reaches list_files_next_update.  Each failure doubles
+   * list_files_backoff (capped at 300 ticks ≈ 30 s at 100 ms/tick). */
+  uint32_t update_count;            /* incremented each _update_machine_state call */
+  uint32_t list_files_next_update;  /* defer until update_count >= this value      */
+  uint32_t list_files_backoff;      /* current backoff length in ticks             */
+
 } machine_interface_remote_t;
 
 machine_interface_remote_t *machine_interface_remote_create(

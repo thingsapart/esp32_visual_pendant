@@ -19,6 +19,7 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "driver/task_registry.h"
 #else
 #include "compat/threads.h"
 #endif
@@ -85,13 +86,13 @@ void machine_send_task(void *pvParameters) {
   while (!abort) {
     TickType_t now = xTaskGetTickCount();
     TickType_t time_since_poll = now - last_poll_time;
-    TickType_t ticks_to_wait = 0;
+    TickType_t ticks_to_wait = 5;
 
     // Calculate how long we can block waiting for G-code before we must poll again
     if (time_since_poll < poll_interval_ticks) {
         ticks_to_wait = poll_interval_ticks - time_since_poll;
     } else {
-        ticks_to_wait = 0; // Poll is overdue, don't wait
+        ticks_to_wait = 5; // Poll is overdue, don't wait long.
     }
 
 #ifdef ESP32_HW
@@ -222,6 +223,7 @@ bool machine_send_task_run(const char *task_name, machine_interface_t *machine,
   }
 
   LOGI(TAG, "Machine gcode sending task started successfully.");
+  task_registry_register_handle(*machine_task_handle, task_name);
   return true;
 }
 

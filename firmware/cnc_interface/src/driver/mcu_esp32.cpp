@@ -18,42 +18,55 @@
 
 static const char *TAG = "mcu_esp32";
 
+// Declared in freertos_hooks.cpp
+extern void freertos_install_oom_hook(void);
+
 void ram_usage() {
-    // Wait for serial connection with a timeout before printing
-    unsigned long start_time = millis();
-    while (!Serial && (millis() - start_time < 1000)) {
-        delay(10);
-    }
     if (!Serial) return; // Don't print if not connected
+
+    // Build the entire report into a stack buffer, then emit it as a single
+    // mutex-protected write via default_serial_write().  Using Serial.printf()
+    // directly would bypass the write_mutex, interleaving with log output from
+    // the machine_send_task and the WiFi ESP-NOW send callback and producing
+    // garbled / truncated lines in the host terminal.
+    char buf[512];
+    int n = 0;
+
+#define RAM_APPEND(...) \
+    n += snprintf(buf + n, (int)sizeof(buf) > n ? sizeof(buf) - n : 0, __VA_ARGS__)
 
     // --- Internal SRAM ---
     size_t internal_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t internal_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    Serial.printf("Internal SRAM:\n");
-    Serial.printf("  Total: %u bytes\n", internal_total);
-    Serial.printf("  Free: %u bytes\n", internal_free);
-    Serial.printf("  Largest Free Block: %u bytes\n", internal_largest_free);
+    RAM_APPEND("Internal SRAM:\n");
+    RAM_APPEND("  Total: %u bytes\n", internal_total);
+    RAM_APPEND("  Free: %u bytes\n", internal_free);
+    RAM_APPEND("  Largest Free Block: %u bytes\n", internal_largest_free);
 
     // --- PSRAM ---
-    // Check if PSRAM is enabled in the config
 #if CONFIG_SPIRAM
     size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     if (psram_total > 0) {
         size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         size_t psram_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-        Serial.printf("PSRAM (SPIRAM):\n");
-        Serial.printf("  Total: %u bytes\n", psram_total);
-        Serial.printf("  Free: %u bytes\n", psram_free);
-        Serial.printf("  Largest Free Block: %u bytes\n", psram_largest_free);
+        RAM_APPEND("PSRAM (SPIRAM):\n");
+        RAM_APPEND("  Total: %u bytes\n", psram_total);
+        RAM_APPEND("  Free: %u bytes\n", psram_free);
+        RAM_APPEND("  Largest Free Block: %u bytes\n", psram_largest_free);
     } else {
-        Serial.println("PSRAM: Not available or size is 0.");
+        RAM_APPEND("PSRAM: Not available or size is 0.\n");
     }
 #else
-    Serial.println("PSRAM: Not enabled in menuconfig/sdkconfig.");
+    RAM_APPEND("PSRAM: Not enabled in menuconfig/sdkconfig.\n");
 #endif
-    Serial.println("-------------------");
-    Serial.flush();
+    RAM_APPEND("-------------------\n");
+
+#undef RAM_APPEND
+
+    // Single atomic write through the shared serial mutex – no separate flush
+    // needed; the TinyUSB CDC stack drains the TX FIFO every USB SOF (~1 ms).
+    default_serial_write((const uint8_t *)buf, (size_t)n);
 }
 
 #ifdef HAS_CORE_DUMP
@@ -192,6 +205,9 @@ void mcu_setup() {
   Serial.setDebugOutput(true);
   LOGI(TAG, "PRE-INIT");
   delay(200);
+
+  // Arm the heap OOM diagnostics callback (logs failed allocs + RAM state).
+  freertos_install_oom_hook();
 }
 
 void mcu_startup() {

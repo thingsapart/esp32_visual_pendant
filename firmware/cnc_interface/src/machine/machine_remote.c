@@ -55,6 +55,7 @@ static void _machine_interface_remote_send_gcode(machine_interface_t *self,
                                                  const char *gcode,
                                                  uint32_t poll_state);
 static bool _machine_interface_remote_is_connected(machine_interface_t *self);
+static bool _do_send_list_files(machine_interface_remote_t *self, const char *path);
 static void _machine_interface_remote_list_files(machine_interface_t *self,
                                                  const char *path);
 static void _machine_interface_remote_run_macro(machine_interface_t *self,
@@ -106,11 +107,15 @@ void *message_box_t_to_payload(const message_box_t *msg_box, size_t *out_size);
 message_box_t *message_box_t_from_payload(const void *payload,
                                           message_box_t *const msg_box);
 
-static void _send_command(machine_interface_remote_t *self, const uint8_t *data,
+static bool _send_command(machine_interface_remote_t *self, const uint8_t *data,
                           size_t len) {
-  if (!remote_wrapper_send(self->hub_mac_address, data, len)) {
-    LOGE(TAG, "Failed to send command via ESP-NOW");
+  bool ok = remote_wrapper_send(self->hub_mac_address, data, len);
+  if (!ok) {
+    // Demoted to LOGD: this fires from machine_send_task (prio=5) and causes
+    // serial-mutex contention that can starve the lvgl_task (prio=2).
+    LOGD(TAG, "Failed to send command via ESP-NOW");
   }
+  return ok;
 }
 
 static void _machine_interface_remote_send_gcode(machine_interface_t *self,
@@ -147,19 +152,26 @@ static bool _machine_interface_remote_is_connected(machine_interface_t *self) {
   return mach->hub_mac_received;
 }
 
-static void _machine_interface_remote_list_files(machine_interface_t *self,
-                                                 const char *path) {
+// Returns true on successful queue (does not wait for an ACK).
+static bool _do_send_list_files(machine_interface_remote_t *self,
+                                const char *path) {
   size_t len = sizeof(list_files_cmd_t) + strlen(path) + 1;
   list_files_cmd_t *cmd = (list_files_cmd_t *)malloc(len);
   if (!cmd) {
     LOGE(TAG, "Failed to allocate list files");
-    return;
+    return false;
   }
   cmd->type = CMD_TYPE_LIST_FILES;
   cmd->len = strlen(path);
   strcpy(cmd->path, path);
-  _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
+  bool ok = _send_command(self, (uint8_t *)cmd, len);
   free(cmd);
+  return ok;
+}
+
+static void _machine_interface_remote_list_files(machine_interface_t *self,
+                                                 const char *path) {
+  _do_send_list_files((machine_interface_remote_t *)self, path);
 }
 
 static void _machine_interface_remote_run_macro(machine_interface_t *self,
@@ -431,6 +443,11 @@ machine_interface_remote_t *machine_interface_remote_init(
   memcpy(self->hub_mac_address, hub_mac, 6);
   self->hub_mac_received = false;
 
+  // File-list back-off state
+  self->update_count           = 0;
+  self->list_files_next_update = 0;
+  self->list_files_backoff     = 0;
+
 #ifdef ASYNC_RESPONSE_PROCESSING
   self->proc_task_event_queue = NULL;
 #endif
@@ -522,20 +539,44 @@ void _machine_interface_remote_update_machine_state(
   machine_interface_remote_t *self = (machine_interface_remote_t *)base_self;
   machine_interface_remote_process_messages(self);
 
+  self->update_count++;
+
   // Periodically request file-listings from the hub.  The base class sets
-  // LIST_FILES | LIST_MACROS every ~9973 ticks; consume those bits here and
-  // send the corresponding CMD_TYPE_LIST_FILES commands so the hub will run
-  // M20 and return the current file-list over ESP-NOW.
-  if (self->hub_mac_received) {
+  // LIST_FILES | LIST_MACROS every ~257 ticks (~12.8 s at 50 ms/tick).
+  // When the hub is out of range and sends fail we apply exponential back-off
+  // to avoid continuously emitting high-priority log/serial traffic that would
+  // starve the lvgl_task of the serial write-mutex.
+  if (self->hub_mac_received &&
+      (poll_state & (LIST_FILES | LIST_MACROS)) &&
+      (self->update_count >= self->list_files_next_update)) {
+
+    bool any_fail = false;
     if (poll_state & LIST_FILES) {
-      LOGI(TAG, "Requesting file list: gcodes");
-      _machine_interface_remote_list_files(base_self, "gcodes");
+      LOGD(TAG, "Requesting file list: gcodes");
+      if (!_do_send_list_files(self, "gcodes")) any_fail = true;
     }
     if (poll_state & LIST_MACROS) {
-      LOGI(TAG, "Requesting file list: macros");
-      _machine_interface_remote_list_files(base_self, "macros");
+      LOGD(TAG, "Requesting file list: macros");
+      if (!_do_send_list_files(self, "macros")) any_fail = true;
+    }
+
+    if (any_fail) {
+      // Exponential back-off: 5 → 10 → 20 → … → 300 ticks (≈30 s cap)
+      self->list_files_backoff =
+          (self->list_files_backoff == 0)   ? 5u :
+          (self->list_files_backoff < 150u) ? self->list_files_backoff * 2u :
+                                              300u;
+      self->list_files_next_update = self->update_count + self->list_files_backoff;
+      LOGD(TAG, "file list send failed – backoff %u ticks",
+           (unsigned)self->list_files_backoff);
+    } else {
+      // Successful send – reset back-off so the next cycle fires on schedule
+      self->list_files_backoff     = 0;
+      self->list_files_next_update = 0;
     }
   }
+
+  //machine_interface_next_poll_state(base_self);
 }
 
 void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
@@ -997,11 +1038,16 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     case MSG_TYPE_BINARY: {
       uint8_t *ptr = (uint8_t *)data;
       uint8_t target_slot = data[1];
+      if (target_slot >= MAX_CONCURRENT_FRAGMENTED_MSGS) {
+        LOGE(TAG, "MSG_TYPE_BINARY: invalid slot %u (max %u), dropping",
+             target_slot, MAX_CONCURRENT_FRAGMENTED_MSGS);
+        break;
+      }
       binary_payload_buffer_t *target_buffer =
           &g_binary_payload_buffers[target_slot];
       LOGT(TAG, "Processsing binary PAYLOAD: slot %d", target_slot);
-      LOGT(TAG, "mach %p, sub_type %d, total_sz %d", &self->base,
-           target_buffer->sub_type, target_buffer->buffer,
+      LOGT(TAG, "mach %p, sub_type %d, buf %p, total_sz %u", &self->base,
+           target_buffer->sub_type, (void *)target_buffer->buffer,
            target_buffer->total_size);
 
       process_binary_payload(&self->base, target_buffer->sub_type,
@@ -1047,7 +1093,10 @@ static void _machine_interface_remote_process_state(machine_interface_t *self,
 
 static void _machi_remote_esp_now_data_sent(const uint8_t *mac_addr, int status,
                                             void *user_data) {
-  if (status != 0) LOGW(TAG, "ESP-NOW send failed");
+  // Demoted to LOGD: this callback runs in the WiFi task (ESP-IDF priority 22).
+  // Logging at WARN/INFO from that context acquires the serial write-mutex at
+  // high priority and can lock out the lvgl_task (prio 2) for extended periods.
+  if (status != 0) LOGD(TAG, "ESP-NOW send failed (WiFi CB)");
 }
 
 void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
@@ -1070,6 +1119,8 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr,
       return;
     }
     self->hub_mac_received = true;
+    // Notify the connection-changed callbacks now that the hub is reachable.
+    machine_interface_connected_updated(&self->base);
   }
 
 #ifdef ASYNC_RESPONSE_PROCESSING
