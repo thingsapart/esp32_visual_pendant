@@ -235,7 +235,9 @@ void lvgl_task(void *pv_params) {
   while (true) {
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
-    vTaskDelay(sleep_time / portTICK_PERIOD_MS);
+    TickType_t delay_ticks = pdMS_TO_TICKS(sleep_time ? sleep_time : 1);
+    if (delay_ticks == 0) delay_ticks = 1;
+    vTaskDelay(delay_ticks);
 
     // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
     lvgl_ui_task_handler();
@@ -481,6 +483,7 @@ void setup() {
 
   ram_usage();
 
+#ifdef MACH_UART_PIN_TX
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
       machine_response_proc_task_run(
@@ -499,6 +502,7 @@ void setup() {
   }
 
   ram_usage();
+#endif  // MACH_UART_PIN_TX
 
 #else  // MACHINE_REMOTE_ONLY — single task wired directly to machine_remote
   LOGI(TAG, "Creating Machine Task (remote-only)... ");

@@ -174,14 +174,16 @@ def parse_defines(text, constants):
     for m in DEFINE_RE.finditer(text):
         name, rest = m.group(1), m.group(2)
         # skip header-guard defines entirely
-        if name.upper().endswith('_H'):
+        if name.upper().endswith('_H') or name.upper().endswith('_H__'):
             continue
         # ignore function-like defines
         if "(" in name:
+            print("DROPPED: NAME, REST:",name,rest)
             continue
         # keep the RHS verbatim (but strip trailing comments/whitespace)
         rest = rest.split("//")[0].rstrip()
         if rest == "":
+            print("DROPPED - EMPTY: NAME, REST:",name,rest)
             continue
         # Include defines that alias to something else: multi-token RHS,
         # or RHS that starts with a preprocessor directive (#include, #ifdef),
@@ -189,7 +191,9 @@ def parse_defines(text, constants):
         tokens = re.split(r"\s+", rest.strip())
         # Only accept preprocessor RHS if it's an #include (not #ifdef/#endif/etc.)
         is_preproc_include = rest.lstrip().startswith('#include')
-        if len(tokens) > 1 or is_preproc_include or '"' in rest:
+        print("USING: NAME, REST:",name,rest, len(tokens) > 1,
+              is_preproc_include, '"' in rest,  ("(" in rest and ")" in rest))
+        if len(tokens) > 1 or is_preproc_include or '"' in rest or ("(" in rest and ")" in rest):
             constants[name] = rest.strip()
 
 

@@ -129,7 +129,7 @@ extern "C" {
 #endif
 
 #ifndef JOG_ACCUM_TASK_STACK
-#define JOG_ACCUM_TASK_STACK      2048
+#define JOG_ACCUM_TASK_STACK      4096
 #endif
 
 #ifndef JOG_ACCUM_TASK_PRIO

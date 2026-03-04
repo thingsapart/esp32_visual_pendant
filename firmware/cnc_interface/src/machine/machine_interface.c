@@ -699,6 +699,10 @@ void machine_interface_current_move_axis_updated(machine_interface_t *self) {
   call_callbacks(current_move_axis_changed_cb);
 }
 
+void machine_interface_gcode_buffer_updated(machine_interface_t *self) {
+  call_callbacks(gcode_buffer_changed_cb);
+}
+
 bool machine_interface_log_message_updated(machine_interface_t *self,
                                            const char *message) {
   bool handled = false;
@@ -853,3 +857,38 @@ add_callback_fn(machine_interface, state_change)
                                                 connected_changed)
                                     add_callback_fn(machine_interface,
                                                     current_move_axis_changed)
+                                        add_callback_fn(machine_interface,
+                                                        gcode_buffer_changed)
+
+// --- G-code line buffer helpers ---
+
+void machine_interface_push_gcode_line(machine_interface_t *self,
+                                       const char *line) {
+  if (!self || !line) return;
+  size_t len = strlen(line);
+  if (len >= GCODE_LINE_BUF_LINE_LEN) len = GCODE_LINE_BUF_LINE_LEN - 1;
+  memcpy(self->gcode_line_buf[self->gcode_line_head], line, len);
+  self->gcode_line_buf[self->gcode_line_head][len] = '\0';
+  self->gcode_line_head = (self->gcode_line_head + 1) % GCODE_LINE_BUF_LINES;
+  if (self->gcode_line_count < GCODE_LINE_BUF_LINES)
+    self->gcode_line_count++;
+  machine_interface_gcode_buffer_updated(self);
+}
+
+const char *machine_interface_get_gcode_line(const machine_interface_t *self,
+                                              uint16_t i) {
+  if (!self || i >= self->gcode_line_count) return NULL;
+  uint16_t start;
+  if (self->gcode_line_count < GCODE_LINE_BUF_LINES)
+    start = 0;
+  else
+    start = self->gcode_line_head;  /* oldest is at head */
+  uint16_t idx = (start + i) % GCODE_LINE_BUF_LINES;
+  return self->gcode_line_buf[idx];
+}
+
+void machine_interface_clear_gcode_lines(machine_interface_t *self) {
+  if (!self) return;
+  self->gcode_line_head  = 0;
+  self->gcode_line_count = 0;
+}

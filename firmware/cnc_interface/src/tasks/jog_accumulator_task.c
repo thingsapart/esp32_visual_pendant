@@ -98,23 +98,26 @@ static float _estimate_move_ms(float dist_mm, float feed_mm_per_min,
 static void _jog_accumulator_task(void *pv) {
     (void)pv;
 
+/* Avoid expensive floating-point conversion at task startup (newlib's
+ * dtoa) which can push this small task stack over the guard. Print
+ * rounded integer values instead. */
 #if JOG_ACCUM_MOTION_ESTIMATION
     LOGI(TAG, "Jog accumulator task started [motion-estimation ON] "
-         "(feed_xy=%.0f feed_z=%.0f accel_x=%.0f accel_y=%.0f accel_z=%.0f "
+         "(feed_xy=%d feed_z=%d accel_x=%d accel_y=%d accel_z=%d "
          "lead=%d min=%d max=%d)",
-         (double)s_feed_xy(),
-         (double)s_feed_z(),
-         (double)s_accel_x(),
-         (double)s_accel_y(),
-         (double)s_accel_z(),
+         (int)lroundf(s_feed_xy()),
+         (int)lroundf(s_feed_z()),
+         (int)lroundf(s_accel_x()),
+         (int)lroundf(s_accel_y()),
+         (int)lroundf(s_accel_z()),
          s_lead_ahead_ms(),
          s_min_sleep_ms(),
          s_max_sleep_ms());
 #else
     LOGI(TAG, "Jog accumulator task started [motion-estimation OFF] "
-         "(feed_xy=%.0f feed_z=%.0f)",
-         (double)s_feed_xy(),
-         (double)s_feed_z());
+         "(feed_xy=%d feed_z=%d)",
+         (int)lroundf(s_feed_xy()),
+         (int)lroundf(s_feed_z()));
 #endif
 
     for (;;) {

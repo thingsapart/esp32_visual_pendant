@@ -60,7 +60,11 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
-#define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
+#ifdef ESP32P4_HW
+    #define LV_USE_STDLIB_SPRINTF   LV_STDLIB_BUILTIN
+#else
+    #define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
+#endif
 
 #define LV_STDINT_INCLUDE       <stdint.h>
 #define LV_STDDEF_INCLUDE       <stddef.h>
@@ -72,7 +76,9 @@
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
 #ifdef ESP32P4_HW
-    #define LV_MEM_SIZE (105 * 1024U)          /**< [bytes] */
+    #undef LV_USE_STDLIB_SPRINTF
+    #define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
+    #define LV_MEM_SIZE (164 * 1024U)          /**< [bytes] */
 #elif defined(__riscv)
     /* RISC-V ESP32 targets (C3, C6, H2 …) have no PSRAM and the builtin LVGL
      * pool shares SRAM with task stacks.  Keep it small enough that FreeRTOS

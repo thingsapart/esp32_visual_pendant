@@ -306,6 +306,15 @@ typedef struct machine_interface_t {
 
   message_box_t *message_box;
 
+  // --- G-code line buffer for visualizer ---
+  // Ring buffer of recent G-code lines from the movement queue.
+  // Written by the machine driver, read by the G-code viewer widget.
+#define GCODE_LINE_BUF_LINES    64
+#define GCODE_LINE_BUF_LINE_LEN 96
+  char    gcode_line_buf[GCODE_LINE_BUF_LINES][GCODE_LINE_BUF_LINE_LEN];
+  uint16_t gcode_line_head;           ///< Next write index
+  uint16_t gcode_line_count;          ///< Number of valid lines
+
 #ifdef ASYNC_GCODE_SENDING
 #ifdef ESP32_HW
   QueueHandle_t gcode_queue;
@@ -327,6 +336,7 @@ typedef struct machine_interface_t {
   machine_change_callback_t spindles_tools_changed_cb[MAX_CALLBACKS];
   machine_change_callback_t connected_changed_cb[MAX_CALLBACKS];
   machine_change_callback_t current_move_axis_changed_cb[MAX_CALLBACKS];
+  machine_change_callback_t gcode_buffer_changed_cb[MAX_CALLBACKS];
   files_changed_callback_t files_changed_cb[MAX_CALLBACKS];
   log_message_callback_t log_message_cb[MAX_CALLBACKS];
 
@@ -420,6 +430,7 @@ void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir);
 void machine_interface_connected_updated(machine_interface_t *self);
 void machine_interface_current_move_axis_updated(machine_interface_t *self);
+void machine_interface_gcode_buffer_updated(machine_interface_t *self);
 bool machine_interface_log_message_updated(machine_interface_t *self,
                                            const char *message);
 void machine_interface_update_position(machine_interface_t *self, float *values,
@@ -499,6 +510,17 @@ add_callback_proto(machine_interface, dialogs_changed);
 add_callback_proto(machine_interface, spindles_tools_changed);
 add_callback_proto(machine_interface, connected_changed);
 add_callback_proto(machine_interface, current_move_axis_changed);
+add_callback_proto(machine_interface, gcode_buffer_changed);
+
+// --- G-code line buffer helpers ---
+// Push a G-code line into the ring buffer and fire gcode_buffer_changed_cb.
+void machine_interface_push_gcode_line(machine_interface_t *self,
+                                       const char *line);
+// Get line at logical index i (0 = oldest).  Returns NULL if out of range.
+const char *machine_interface_get_gcode_line(const machine_interface_t *self,
+                                              uint16_t i);
+// Clear the gcode line buffer.
+void machine_interface_clear_gcode_lines(machine_interface_t *self);
 
 #define add_callback_fn(type, cbs_name)                                  \
   bool type##_add_##cbs_name##_cb(type##_t *self, void *user_data,       \

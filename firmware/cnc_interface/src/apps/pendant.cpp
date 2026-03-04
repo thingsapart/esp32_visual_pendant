@@ -80,6 +80,10 @@ void encoder_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #include "ui/tab_jog.h"
 #endif
 
+#ifdef ESP32_HW
+#include <esp_task_wdt.h>
+#endif
+
 // DWC Mode specific includes
 #ifdef DWC_MACHINE_MODE
 #include <WiFi.h>
@@ -296,10 +300,29 @@ void lvgl_task(void *pv_params) {
   // is to run the LVGL handler and UI update loop.
   LOGI(TAG, "LVGL task started.");
 
+  // Subscribe this task to the WDT.  On the ESP32-P4 the two swdraw
+  // software-render worker threads (priority 3, unpinned → land on CPU0)
+  // continuously preempt lvgl_task (priority 2) and IDLE0 (priority 0)
+  // during every render cycle.  IDLE0 therefore never runs while a frame is
+  // being rendered, starving the default WDT sentinel.  By subscribing
+  // lvgl_task directly and resetting the timer once per loop iteration we
+  // detect real hangs (loop stuck forever) while tolerating the expected
+  // CPU0 starvation of IDLE0 during rendering.
+#ifdef ESP32_HW
+  esp_task_wdt_add(NULL);
+#endif
+
+  vTaskDelay(1);
+
   while (true) {
+#ifdef ESP32_HW
+    esp_task_wdt_reset();
+#endif
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
-    vTaskDelay(sleep_time / portTICK_PERIOD_MS);
+    TickType_t delay_ticks = pdMS_TO_TICKS(sleep_time ? sleep_time : 1);
+    if (delay_ticks == 0) delay_ticks = 1;
+    vTaskDelay(delay_ticks);
 
     // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
     lvgl_ui_task_handler();
@@ -484,7 +507,11 @@ void setup() {
   BaseType_t create_res = xTaskCreateWithCaps(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
+#ifdef UI_LARGE
+      1024 * 24,    // Full UI at once usually
+#else
       1024 * 12,    // Reduced stack size for runtime loop
+#endif
       NULL,         // Task input parameter (not used here)
       tskIDLE_PRIORITY + 2,  // Task priority (adjust as needed) - higher than machine task
       &lvgl_task_handle,  // Task handle (optional, can be used to control the
@@ -494,7 +521,9 @@ void setup() {
   BaseType_t create_res = xTaskCreatePinnedToCore(
       lvgl_task,    // Function that implements the task
       "lvgl_task",  // Task name (for debugging)
-#ifdef __riscv
+#ifdef UI_LARGE
+      1024 * 24,    // Reduced stack size for runtime loop
+#elif __riscv
       1024 * 6,     // Reduced stack for RISC-V: no PSRAM, tight on SRAM
 #else
       1024 * 10,    // Reduced stack size for runtime loop
@@ -580,6 +609,12 @@ void setup() {
 
   ram_usage();
 
+#ifdef MACH_UART_PIN_TX
+  // MachineRRFProc is only meaningful when an RRF serial transport was
+  // configured (MACH_UART_PIN_TX defined).  On boards that rely solely on
+  // the remote/bridge machine interface (e.g. ESP32-P4 without a UART wired
+  // to the CNC controller) skip this task to avoid a misleading error log
+  // and the wasted 6 KB stack.
   LOGI(TAG, "Creating RRF Machine State Processing Task... ");
   if (!abort &&
       machine_response_proc_task_run(
@@ -598,6 +633,7 @@ void setup() {
   }
 
   ram_usage();
+#endif  // MACH_UART_PIN_TX
 
 #else  // MACHINE_REMOTE_ONLY — single task wired directly to machine_remote
   LOGI(TAG, "Creating Machine Task (remote-only)... ");

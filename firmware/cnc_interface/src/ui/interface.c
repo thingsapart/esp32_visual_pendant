@@ -13,6 +13,7 @@
 #include "ui/components/lv_cam_positioning.h"
 #include "ui/components/lv_cnc_io_panel.h"
 #include "ui/components/lv_settings.h"
+#include "ui/components/lv_gcode_viewer.h"
 #include "machine/machine_interface.h"
 #include "config/app_settings.h"
 
@@ -437,6 +438,16 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
       lv_cam_positioning_set_probe_cbs(cam_pos, &probe_cbs);
   }
 
+  // Set up gcode_viewer with access to machine_interface
+  lv_obj_t* gc_view = obj_registry_get("gcode_viewer");
+  if (gc_view) {
+    lv_gcode_viewer_set_machine(gc_view, machine);
+    lv_gcode_viewer_load_gcode(gc_view,
+        "G21\nG90\nG1 X10 Y20 F600\nG1 X30\nG2 X10 Y20 I-10 J0\n");
+    lv_gcode_viewer_set_view(gc_view, LV_GCVIEW_ISOMETRIC);
+    lv_gcode_viewer_fit(gc_view);
+  }
+
   // Set initial overlay text (will be overwritten by data bindings as state arrives)
   data_binding_notify_state_changed(
       "machine.overlay_status_text",
@@ -472,6 +483,16 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
 void interface_tick(interface_t *interface) {
   // Flush MDI log-buffer and busy-state to data-binding observers every tick.
   mdi_handler_tick(&interface->mdi);
+
+  // Lazy-resolve probing_wizard: the tile is deferred-loaded so the widget
+  // may not exist at interface_init() time.  Re-try every tick until found.
+  if (!interface->probing_wizard) {
+    interface->probing_wizard = obj_registry_get("probing_wizard");
+    if (interface->probing_wizard) {
+      lv_probing_wizard_register_mos_callbacks(interface->probing_wizard,
+                                               interface->machine);
+    }
+  }
 
   if (interface->dirty_flags == UI_DIRTY_NONE) {
     return;

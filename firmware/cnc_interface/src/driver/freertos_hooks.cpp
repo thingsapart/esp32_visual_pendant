@@ -12,7 +12,8 @@
     #ifdef ESP32P4_HW
       #include "esp_psram.h"
     #else
-      #include "esp_spiram.h"
+      // #include "esp_spiram.h"
+      #include "esp_psram.h"
     #endif
   #endif
 #endif
@@ -48,7 +49,8 @@ static void _print_heap_state_safe(void) {
     #ifdef ESP32P4_HW
     if (esp_psram_is_initialized()) {
     #else
-    if (esp_spiram_is_initialized()) {
+    // if (esp_spiram_is_initialized()) {
+    if (esp_psram_is_initialized()) {
     #endif
         size_t psram_free  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         size_t psram_lfb   = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);

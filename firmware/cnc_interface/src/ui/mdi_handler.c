@@ -301,6 +301,20 @@ void mdi_handler_tick(mdi_handler_t *mdi)
 {
     if (!mdi) return;
 
+    /* Lazy-resolve widget references that live in deferred-loaded tiles.
+     * mdi_handler_init() runs before any tile is loaded, so the lookup
+     * returns NULL on boot.  Re-try every tick until both are found. */
+    if (!mdi->input_field) {
+        mdi->input_field = (lv_obj_t *)obj_registry_get("mdi_input_field");
+        if (mdi->input_field) {
+            lv_obj_add_event_cb(mdi->input_field, _input_ready_cb,
+                                LV_EVENT_READY, mdi);
+        }
+    }
+    if (!mdi->log_area) {
+        mdi->log_area = (lv_obj_t *)obj_registry_get("mdi_log_area");
+    }
+
     /* Flush log buffer to the UI data-binding observer. */
     if (mdi->log_dirty) {
         mdi->log_dirty = false;
