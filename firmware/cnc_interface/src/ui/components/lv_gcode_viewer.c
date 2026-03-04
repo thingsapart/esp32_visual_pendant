@@ -23,6 +23,55 @@
 #include "gcode_viewer/gcode_sim.h"
 #include "gcode_viewer/gcode_view.h"
 #include "machine/machine_interface.h"
+#include "config/app_settings.h"
+
+#ifndef ISO_COS
+#define ISO_COS  0.86602540378f
+#define ISO_SIN  0.50000000000f
+#endif
+
+/* Grid subdivisions (compile-time default, can be overridden). */
+#ifndef GCVIEW_GRID_SUBDIVISIONS
+#define GCVIEW_GRID_SUBDIVISIONS 10
+#endif
+
+/* File-local orthographic projection helper (copy of gcode_view::ortho_project)
+ * Exposed here because gcode_view's static helper is not available. */
+static inline void local_ortho_project(gc_view_mode_t mode,
+                                       gc_vec3_t w,
+                                       float *out_h, float *out_v)
+{
+    switch (mode) {
+    case GCVIEW_TOP:
+        *out_h =  w.x;
+        *out_v = -w.y;
+        break;
+    case GCVIEW_FRONT:
+        *out_h =  w.x;
+        *out_v = -w.z;
+        break;
+    case GCVIEW_RIGHT:
+        *out_h =  w.y;
+        *out_v = -w.z;
+        break;
+    case GCVIEW_LEFT:
+        *out_h = -w.y;
+        *out_v = -w.z;
+        break;
+    case GCVIEW_BACK:
+        *out_h = -w.x;
+        *out_v = -w.z;
+        break;
+    case GCVIEW_ISOMETRIC:
+        *out_h =  (w.x - w.y) * ISO_COS;
+        *out_v = -(w.x + w.y) * ISO_SIN - w.z;
+        break;
+    default:
+        *out_h = w.x;
+        *out_v = -w.y;
+        break;
+    }
+}
 
 #include <stdlib.h>
 #include <string.h>
@@ -93,18 +142,71 @@ static inline lv_color_t seg_color(gc_move_type_t type) {
  * Internal: draw primitives
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Draw a single line segment between two screen points. */
+/**
+ * Liang-Barsky line clipping against an axis-aligned rectangle.
+ * Modifies (cx0,cy0)-(cx1,cy1) to the clipped segment.
+ * Returns false if the segment is entirely outside the clip rect.
+ */
+static bool lv_clip_line(const lv_area_t *clip,
+                         int x0, int y0, int x1, int y1,
+                         int *cx0, int *cy0, int *cx1, int *cy1)
+{
+    float dx = (float)(x1 - x0);
+    float dy = (float)(y1 - y0);
+    float t0 = 0.0f, t1 = 1.0f;
+    float p[4] = { -dx,  dx,  -dy,  dy };
+    float q[4] = {
+        (float)(x0 - clip->x1),
+        (float)(clip->x2 - x0),
+        (float)(y0 - clip->y1),
+        (float)(clip->y2 - y0)
+    };
+    for (int i = 0; i < 4; i++) {
+        if (fabsf(p[i]) < 0.5f) {
+            if (q[i] < 0.0f) return false;   /* parallel and outside */
+        } else {
+            float r = q[i] / p[i];
+            if (p[i] < 0.0f) { if (r > t0) t0 = r; }
+            else              { if (r < t1) t1 = r; }
+            if (t0 > t1) return false;        /* clipped away */
+        }
+    }
+    *cx0 = x0 + (int)(t0 * dx + 0.5f);
+    *cy0 = y0 + (int)(t0 * dy + 0.5f);
+    *cx1 = x0 + (int)(t1 * dx + 0.5f);
+    *cy1 = y0 + (int)(t1 * dy + 0.5f);
+    return true;
+}
+
+/**
+ * Draw a single line segment between two screen points.
+ *
+ * Lines are software-clipped to the layer's clip area before being
+ * submitted to LVGL.  This avoids the anti-alias rasteriser running
+ * on out-of-viewport portions (critical for diagonal ISO grid lines
+ * which otherwise extend to the full viewport diagonal).
+ *
+ * round_start/round_end are forced to 0 — round line-caps nearly
+ * double the work for short grid tick marks.
+ */
 static void draw_line(lv_layer_t *layer,
                       gc_pt2_t p1, gc_pt2_t p2,
                       lv_color_t color, lv_opa_t opa, int width)
 {
+    int cx0, cy0, cx1, cy1;
+    if (!lv_clip_line(&layer->_clip_area,
+                      p1.x, p1.y, p2.x, p2.y,
+                      &cx0, &cy0, &cx1, &cy1)) return;
+
     lv_draw_line_dsc_t dsc;
     lv_draw_line_dsc_init(&dsc);
-    dsc.color = color;
-    dsc.opa   = opa;
-    dsc.width = width;
-    dsc.p1.x  = p1.x;  dsc.p1.y = p1.y;
-    dsc.p2.x  = p2.x;  dsc.p2.y = p2.y;
+    dsc.color       = color;
+    dsc.opa         = opa;
+    dsc.width       = width;
+    dsc.round_start = 0;
+    dsc.round_end   = 0;
+    dsc.p1.x = cx0;  dsc.p1.y = cy0;
+    dsc.p2.x = cx1;  dsc.p2.y = cy1;
     lv_draw_line(layer, &dsc);
 }
 
@@ -356,14 +458,521 @@ static void draw_limits(lv_layer_t *layer, const gc_view_t *view,
 
 typedef struct {
     lv_layer_t *layer;
+    const gc_view_t *view;
+    lv_gcview_priv_t *priv;
 } grid_draw_ctx_t;
 
 static void grid_line_cb(bool is_major, gc_pt2_t p1, gc_pt2_t p2, void *ctx) {
     grid_draw_ctx_t *gc = (grid_draw_ctx_t *)ctx;
-    lv_color_t col = is_major ? lv_color_hex(GCVIEW_COL_GRID_MAJOR)
-                              : lv_color_hex(GCVIEW_COL_GRID);
-    lv_opa_t opa = is_major ? (lv_opa_t)(GCVIEW_OPA_GRID + 40) : GCVIEW_OPA_GRID;
-    draw_line(gc->layer, p1, p2, col, opa, GCVIEW_GRID_LINE_WIDTH);
+    if (gc->view && gc->view->mode == GCVIEW_ISOMETRIC) {
+        /* Iso: ALL lines width=1 to avoid LVGL's expensive AA thick-line
+         * rasteriser on 30° diagonals.  Major lines are distinguished by
+         * brightness only (no width difference). */
+        lv_color_t col = is_major ? lv_color_hex(0x00BB00) : lv_color_hex(0x005500);
+        lv_opa_t opa = is_major ? LV_OPA_COVER : LV_OPA_60;
+        draw_line(gc->layer, p1, p2, col, opa, 1);
+    } else {
+        lv_color_t col = is_major ? lv_color_hex(GCVIEW_COL_GRID_MAJOR)
+                                  : lv_color_hex(GCVIEW_COL_GRID);
+        lv_opa_t opa = is_major ? (lv_opa_t)(GCVIEW_OPA_GRID + 40) : GCVIEW_OPA_GRID;
+        draw_line(gc->layer, p1, p2, col, opa, GCVIEW_GRID_LINE_WIDTH);
+    }
+}
+
+/* Draw a grid using explicit spacing from app settings (fallback) and
+ * machine limits when available. Colour is dark green for a subtle overlay. */
+static void draw_settings_grid(lv_layer_t *layer, const gc_view_t *view,
+                               lv_gcview_priv_t *priv)
+{
+    /* local_ortho_project is defined at file scope */
+    /* Get fallback spacing from app settings */
+    float gdx = app_settings_get_float(APP_SETTINGS_GROUP_CAM,
+                                      APP_SETTINGS_CAM_FALLBACK_GRID_DX);
+    float gdy = app_settings_get_float(APP_SETTINGS_GROUP_CAM,
+                                      APP_SETTINGS_CAM_FALLBACK_GRID_DY);
+
+    /* If invalid, fall back to auto spacing from view */
+    if (!(gdx > 0.0f)) gdx = gc_view_grid_spacing(view);
+    if (!(gdy > 0.0f)) gdy = gc_view_grid_spacing(view);
+
+    /* Determine visible world-range. For isometric we must compute
+     * world X/Y bounds by inverting the iso projection; for other views
+     * we can reuse h/v approach. */
+    float h0, v0, h1, v1;
+    if (view->mode == GCVIEW_ISOMETRIC) {
+        /* Unproject screen corners to world XY (z = 0) using iso inverse */
+        int sx[4] = { view->vp_x, view->vp_x + view->vp_w - 1,
+                      view->vp_x, view->vp_x + view->vp_w - 1 };
+        int sy[4] = { view->vp_y, view->vp_y, view->vp_y + view->vp_h - 1,
+                      view->vp_y + view->vp_h - 1 };
+        float wx[4], wy[4];
+        float cx = (float)(view->vp_x + view->vp_w / 2);
+        float cy = (float)(view->vp_y + view->vp_h / 2);
+        for (int i = 0; i < 4; i++) {
+            float sxp = ((float)sx[i] - cx - view->pan_x) / view->ppm; /* = (x - y) * ISO_COS */
+            float syp = ((float)sy[i] - cy - view->pan_y) / view->ppm; /* = -(x + y) * ISO_SIN */
+            float xp = (sxp / ISO_COS + (-syp / ISO_SIN)) * 0.5f;
+            float yp = ((-syp / ISO_SIN) - (sxp / ISO_COS)) * 0.5f;
+            wx[i] = xp; wy[i] = yp;
+        }
+        float minx = wx[0], maxx = wx[0], miny = wy[0], maxy = wy[0];
+        for (int i = 1; i < 4; i++) {
+            if (wx[i] < minx) minx = wx[i]; if (wx[i] > maxx) maxx = wx[i];
+            if (wy[i] < miny) miny = wy[i]; if (wy[i] > maxy) maxy = wy[i];
+        }
+        h0 = minx; h1 = maxx; v0 = miny; v1 = maxy;
+    } else {
+        gc_pt2_t tl = { view->vp_x, view->vp_y };
+        gc_pt2_t br = { (int16_t)(view->vp_x + view->vp_w - 1),
+                        (int16_t)(view->vp_y + view->vp_h - 1) };
+        gc_vec3_t w_tl, w_br;
+        gc_view_unproject(view, tl, 0, &w_tl);
+        gc_view_unproject(view, br, 0, &w_br);
+        local_ortho_project(view->mode, w_tl, &h0, &v0);
+        local_ortho_project(view->mode, w_br, &h1, &v1);
+        if (h0 > h1) { float t = h0; h0 = h1; h1 = t; }
+        if (v0 > v1) { float t = v0; v0 = v1; v1 = t; }
+    }
+
+    /* Choose step sizes for h and v axes. Map gdx->h and gdy->v for TOP view,
+     * for other views we keep the mapping generic: h->gdx, v->gdy. */
+    float step_h = gdx;
+    float step_v = gdy;
+
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = lv_color_hex(0x003300); /* dark green */
+    dsc.width = 1;
+    dsc.opa = LV_OPA_60;
+
+    /* Draw subdivision lines + main grid lines. */
+    int subdiv = GCVIEW_GRID_SUBDIVISIONS > 1 ? GCVIEW_GRID_SUBDIVISIONS : 1;
+    float sub_step_h = step_h / (float)subdiv;
+    float sub_step_v = step_v / (float)subdiv;
+
+    if (view->mode == GCVIEW_ISOMETRIC) {
+        /* For iso: draw lines of constant X and constant Y on the Z=0 plane. */
+        int subdiv = GCVIEW_GRID_SUBDIVISIONS > 1 ? GCVIEW_GRID_SUBDIVISIONS : 1;
+        float subx = step_h / (float)subdiv;
+        float suby = step_v / (float)subdiv;
+
+        float x_first = floorf(h0 / subx) * subx; /* Start from the nearest lower multiple */
+        for (float x = x_first; x <= h1 + 1e-6f; x += subx) {
+            bool is_major = (fabsf(fmodf(x, step_h)) < (subx * 0.5f)) || (fabsf(x) < 1e-6f);
+            gc_vec3_t w1 = gc_vec3(x, v0, 0);
+            gc_vec3_t w2 = gc_vec3(x, v1, 0);
+            gc_pt2_t p1, p2;
+            gc_view_project(view, w1, &p1);
+            gc_view_project(view, w2, &p2);
+            draw_line(layer, p1, p2, is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, is_major ? 2 : 1);
+        }
+
+        float y_first = floorf(v0 / suby) * suby; /* Start from the nearest lower multiple */
+        for (float y = y_first; y <= v1 + 1e-6f; y += suby) {
+            bool is_major = (fabsf(fmodf(y, step_v)) < (suby * 0.5f)) || (fabsf(y) < 1e-6f);
+            gc_vec3_t w1 = gc_vec3(h0, y, 0);
+            gc_vec3_t w2 = gc_vec3(h1, y, 0);
+            gc_pt2_t p1, p2;
+            gc_view_project(view, w1, &p1);
+            gc_view_project(view, w2, &p2);
+            draw_line(layer, p1, p2, is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, is_major ? 2 : 1);
+        }
+    } else {
+        /* Existing non-iso logic (unchanged) */
+        float h_sub_first = ceilf(h0 / sub_step_h) * sub_step_h;
+        float tol_h = sub_step_h * 0.25f;
+        for (float hh = h_sub_first; hh <= h1 + 1e-6f; hh += sub_step_h) {
+            bool is_major = (fabsf(fmodf(fabsf(hh), step_h)) < tol_h) || (fabsf(hh) < tol_h);
+            gc_vec3_t w1, w2;
+            switch (view->mode) {
+            case GCVIEW_TOP:    w1 = gc_vec3(hh, -v0, 0); w2 = gc_vec3(hh, -v1, 0); break;
+            case GCVIEW_FRONT:  w1 = gc_vec3(hh, 0, -v0); w2 = gc_vec3(hh, 0, -v1); break;
+            case GCVIEW_RIGHT:  w1 = gc_vec3(0, hh, -v0); w2 = gc_vec3(0, hh, -v1); break;
+            case GCVIEW_LEFT:   w1 = gc_vec3(0, -hh, -v0); w2 = gc_vec3(0, -hh, -v1); break;
+            case GCVIEW_BACK:   w1 = gc_vec3(-hh, 0, -v0); w2 = gc_vec3(-hh, 0, -v1); break;
+            default:            w1 = gc_vec3(hh, -v0, 0); w2 = gc_vec3(hh, -v1, 0); break;
+            }
+            gc_pt2_t p1, p2;
+            gc_view_project(view, w1, &p1);
+            gc_view_project(view, w2, &p2);
+            draw_line(layer, p1, p2,
+                      is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
+                      is_major ? LV_OPA_COVER : LV_OPA_70,
+                      is_major ? 2 : 1);
+        }
+
+        float v_sub_first = ceilf(v0 / sub_step_v) * sub_step_v;
+        float tol_v = sub_step_v * 0.25f;
+        for (float vv = v_sub_first; vv <= v1 + 1e-6f; vv += sub_step_v) {
+            bool is_major = (fabsf(fmodf(fabsf(vv), step_v)) < tol_v) || (fabsf(vv) < tol_v);
+            gc_vec3_t w1, w2;
+            switch (view->mode) {
+            case GCVIEW_TOP:    w1 = gc_vec3(h0, -vv, 0); w2 = gc_vec3(h1, -vv, 0); break;
+            case GCVIEW_FRONT:  w1 = gc_vec3(h0, 0, -vv); w2 = gc_vec3(h1, 0, -vv); break;
+            case GCVIEW_RIGHT:  w1 = gc_vec3(0, h0, -vv); w2 = gc_vec3(0, h1, -vv); break;
+            case GCVIEW_LEFT:   w1 = gc_vec3(0, -h0, -vv); w2 = gc_vec3(0, -h1, -vv); break;
+            case GCVIEW_BACK:   w1 = gc_vec3(-h0, 0, -vv); w2 = gc_vec3(-h1, 0, -vv); break;
+            default:            w1 = gc_vec3(h0, -vv, 0); w2 = gc_vec3(h1, -vv, 0); break;
+            }
+            gc_pt2_t p1, p2;
+            gc_view_project(view, w1, &p1);
+            gc_view_project(view, w2, &p2);
+            draw_line(layer, p1, p2,
+                      is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
+                      is_major ? LV_OPA_COVER : LV_OPA_70,
+                      is_major ? 2 : 1);
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Internal: grid tick-mark ruler
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Pick a tick step from the set {1, 5, 10} × 10^n (n integer) such that
+ * consecutive ticks are at least @p min_px screen pixels apart.
+ */
+static float nice_135_step(float ppm, float min_px)
+{
+    /* Ascending series: 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000 */
+    static const float base[] = {
+        0.01f, 0.05f, 0.1f, 0.5f, 1.0f,
+        5.0f,  10.0f, 50.0f, 100.0f, 500.0f, 1000.0f
+    };
+    for (int i = 0; i < (int)(sizeof(base)/sizeof(base[0])); i++) {
+        if (base[i] * ppm >= min_px) return base[i];
+    }
+    return 1000.0f;
+}
+
+/**
+ * Draw ruler tick marks along the four viewport edges (orthographic views),
+ * or along the projected X / Y axis lines (isometric view).
+ *
+ * Tick step is chosen from {1,5,10}×10^n so the smallest step gives at
+ * least 8 px.  Major ticks fire every 5 (or 10) steps and optionally carry
+ * a numeric label (controlled via GCVIEW_GRID_LABEL_ENABLE and the minimum
+ * pixel spacing GCVIEW_GRID_LABEL_MIN_PX).
+ *
+ * Axis flip (machine origin convention) is handled by delegating all
+ * screen-position queries to gc_view_project(), so this function is
+ * flip-agnostic for both ISO and orthographic modes.
+ *
+ * Performance notes
+ * -----------------
+ * - All label rendering is compiled out when GCVIEW_GRID_LABEL_ENABLE == 0.
+ * - Labels are also skipped at runtime when major_step × ppm < GCVIEW_GRID_LABEL_MIN_PX.
+ * - Each label string is formatted into a local stack buffer and passed with
+ *   text_local = 1 so LVGL owns a copy — this avoids dangling-pointer issues
+ *   if LVGL defers rendering across the loop.
+ * - Each loop is capped at GCVIEW_MAX_GRID_LINES / 2 iterations.
+ */
+static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
+{
+    const int   TICK_MINOR  = 4;    /* tick arm length (px) */
+    const int   TICK_MAJOR  = 8;
+    const float MIN_PX      = 8.0f; /* min px between minor ticks */
+    const int   MAX_TICKS   = GCVIEW_MAX_GRID_LINES / 2;
+
+    float ppm   = view->ppm;
+    int   vp_x  = view->vp_x, vp_y  = view->vp_y;
+    int   vp_w  = view->vp_w, vp_h  = view->vp_h;
+
+    /* ── Step selection ── */
+    float minor_step = nice_135_step(ppm, MIN_PX);
+    /* Major every 5 if that gives >= 40 px, else every 10 */
+    float major_step = minor_step * ((minor_step * 5.0f * ppm >= 40.0f) ? 5.0f : 10.0f);
+
+#if GCVIEW_GRID_LABEL_ENABLE
+    bool do_labels = (major_step * ppm >= (float)GCVIEW_GRID_LABEL_MIN_PX);
+#else
+    bool do_labels = false;
+#endif
+
+    lv_color_t col_minor = lv_color_hex(0x336633);
+    lv_color_t col_major = lv_color_hex(0x66BB66);
+    lv_color_t col_label = lv_color_hex(0x99DD99);
+
+    /* ── Helpers ── */
+#define IS_MAJOR(v)  (fabsf(fmodf(fabsf(v), major_step)) < minor_step * 0.1f \
+                      || fabsf(v) < minor_step * 0.01f)
+#define TICK_LEN(m)  ((m) ? TICK_MAJOR : TICK_MINOR)
+#define TICK_COL(m)  ((m) ? col_major  : col_minor)
+#define TICK_OPA(m)  ((m) ? LV_OPA_COVER : LV_OPA_70)
+
+    /* Draw a single tick label.  Uses a local stack buffer and text_local=1
+     * so LVGL makes its own copy — safe even if rendering is deferred. */
+#define DRAW_LABEL(val, x1, y1, x2, y2, halign) do {                   \
+    if (do_labels) {                                                    \
+        char _lb[16];                                                   \
+        if (fabsf((float)(val) - roundf((float)(val))) < 5e-3f)        \
+            snprintf(_lb, sizeof(_lb), "%d", (int)roundf((float)(val)));\
+        else                                                            \
+            snprintf(_lb, sizeof(_lb), "%.1f", (float)(val));          \
+        lv_draw_label_dsc_t _ld;                                        \
+        lv_draw_label_dsc_init(&_ld);                                   \
+        _ld.color      = col_label; _ld.opa = LV_OPA_80;               \
+        _ld.align      = (halign);                                      \
+        _ld.text       = _lb;                                           \
+        _ld.text_local = 1;   /* LVGL copies the string */              \
+        lv_area_t _la = { (x1), (y1), (x2), (y2) };                   \
+        lv_draw_label(layer, &_ld, &_la);                               \
+    }                                                                   \
+} while(0)
+
+    if (view->mode == GCVIEW_ISOMETRIC) {
+        /* ── Isometric ──────────────────────────────────────────────────
+         * We delegate screen-position queries to gc_view_project() so that
+         * axis_flip is handled automatically.
+         *
+         * The approach:
+         *   1. Project origin (0,0,0) and unit vectors (1,0,0), (0,1,0).
+         *   2. Derive per-mm screen deltas → axis direction + perpendicular.
+         *   3. Determine visible world-value range on each axis by intersecting
+         *      screen H and V viewport constraints (via the linear projection).
+         *   4. Iterate and draw ticks; labels at major ticks.
+         * ──────────────────────────────────────────────────────────────── */
+
+        gc_pt2_t op, xp, yp;
+        gc_view_project(view, gc_vec3(0, 0, 0), &op);
+        gc_view_project(view, gc_vec3(1, 0, 0), &xp);
+        gc_view_project(view, gc_vec3(0, 1, 0), &yp);
+
+        /* X-axis: screen delta per world-X mm */
+        float xdx = (float)(xp.x - op.x);   /* expected: ±ISO_COS*ppm */
+        float xdy = (float)(xp.y - op.y);   /* expected: ∓ISO_SIN*ppm */
+        float xsc = sqrtf(xdx*xdx + xdy*xdy);
+        if (xsc < 0.1f) xsc = 0.1f;
+        /* Perpendicular (90° CCW): (-xdy/xsc, xdx/xsc) */
+        float xpx_n = -xdy / xsc;  /* normalised perp X */
+        float xpy_n =  xdx / xsc;
+
+        /* Y-axis: screen delta per world-Y mm */
+        float ydx = (float)(yp.x - op.x);
+        float ydy = (float)(yp.y - op.y);
+        float ysc = sqrtf(ydx*ydx + ydy*ydy);
+        if (ysc < 0.1f) ysc = 0.1f;
+        float ypx_n = -ydy / ysc;
+        float ypy_n =  ydx / ysc;
+
+        /* ── X-axis visible range ──
+         * Screen position of (xv,0,0): sx = op.x + xv*xdx, sy = op.y + xv*xdy
+         * Clip to viewport H: vp_x <= op.x + xv*xdx <= vp_x+vp_w-1
+         * Clip to viewport V: vp_y <= op.y + xv*xdy <= vp_y+vp_h-1   */
+        float xa, xb;
+        {
+            float xh0 = 1e9f, xh1 = -1e9f, xv0 = 1e9f, xv1 = -1e9f;
+            if (fabsf(xdx) > 0.1f) {
+                float r0 = ((float)vp_x           - (float)op.x) / xdx;
+                float r1 = ((float)(vp_x + vp_w - 1) - (float)op.x) / xdx;
+                xh0 = r0 < r1 ? r0 : r1;
+                xh1 = r0 > r1 ? r0 : r1;
+            } else { xh0 = -1e9f; xh1 = 1e9f; }
+            if (fabsf(xdy) > 0.1f) {
+                float r0 = ((float)vp_y           - (float)op.y) / xdy;
+                float r1 = ((float)(vp_y + vp_h - 1) - (float)op.y) / xdy;
+                xv0 = r0 < r1 ? r0 : r1;
+                xv1 = r0 > r1 ? r0 : r1;
+            } else { xv0 = -1e9f; xv1 = 1e9f; }
+            xa = xh0 > xv0 ? xh0 : xv0;
+            xb = xh1 < xv1 ? xh1 : xv1;
+        }
+
+        if (xa < xb) {
+            float xs = floorf(xa / minor_step) * minor_step;
+            int cnt = 0;
+            for (float xv = xs; xv <= xb + 1e-4f && cnt < MAX_TICKS; xv += minor_step, cnt++) {
+                bool maj   = IS_MAJOR(xv);
+                float tlen = (float)TICK_LEN(maj);
+                float sx   = (float)op.x + xv * xdx;
+                float sy   = (float)op.y + xv * xdy;
+                /* Bounds check */
+                if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
+                if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
+                gc_pt2_t p1 = { (int16_t)(sx - xpx_n * tlen), (int16_t)(sy - xpy_n * tlen) };
+                gc_pt2_t p2 = { (int16_t)(sx + xpx_n * tlen), (int16_t)(sy + xpy_n * tlen) };
+                draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
+                if (maj) {
+                    /* Label offset along +perpendicular (away from grid) */
+                    float lo = tlen + 2.0f;
+                    DRAW_LABEL(xv,
+                        (int16_t)(sx + xpx_n * lo - 16),
+                        (int16_t)(sy + xpy_n * lo - 1),
+                        (int16_t)(sx + xpx_n * lo + 16),
+                        (int16_t)(sy + xpy_n * lo + 11),
+                        LV_TEXT_ALIGN_CENTER);
+                }
+            }
+        }
+
+        /* ── Y-axis visible range ── */
+        float ya, yb;
+        {
+            float yh0 = 1e9f, yh1 = -1e9f, yv0 = 1e9f, yv1 = -1e9f;
+            if (fabsf(ydx) > 0.1f) {
+                float r0 = ((float)vp_x           - (float)op.x) / ydx;
+                float r1 = ((float)(vp_x + vp_w - 1) - (float)op.x) / ydx;
+                yh0 = r0 < r1 ? r0 : r1;
+                yh1 = r0 > r1 ? r0 : r1;
+            } else { yh0 = -1e9f; yh1 = 1e9f; }
+            if (fabsf(ydy) > 0.1f) {
+                float r0 = ((float)vp_y           - (float)op.y) / ydy;
+                float r1 = ((float)(vp_y + vp_h - 1) - (float)op.y) / ydy;
+                yv0 = r0 < r1 ? r0 : r1;
+                yv1 = r0 > r1 ? r0 : r1;
+            } else { yv0 = -1e9f; yv1 = 1e9f; }
+            ya = yh0 > yv0 ? yh0 : yv0;
+            yb = yh1 < yv1 ? yh1 : yv1;
+        }
+
+        if (ya < yb) {
+            float ys = floorf(ya / minor_step) * minor_step;
+            int cnt = 0;
+            for (float yv = ys; yv <= yb + 1e-4f && cnt < MAX_TICKS; yv += minor_step, cnt++) {
+                bool maj   = IS_MAJOR(yv);
+                float tlen = (float)TICK_LEN(maj);
+                float sx   = (float)op.x + yv * ydx;
+                float sy   = (float)op.y + yv * ydy;
+                if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
+                if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
+                gc_pt2_t p1 = { (int16_t)(sx - ypx_n * tlen), (int16_t)(sy - ypy_n * tlen) };
+                gc_pt2_t p2 = { (int16_t)(sx + ypx_n * tlen), (int16_t)(sy + ypy_n * tlen) };
+                draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
+                if (maj) {
+                    float lo = tlen + 2.0f;
+                    DRAW_LABEL(yv,
+                        (int16_t)(sx + ypx_n * lo),
+                        (int16_t)(sy + ypy_n * lo - 7),
+                        (int16_t)(sx + ypx_n * lo + 28),
+                        (int16_t)(sy + ypy_n * lo + 7),
+                        LV_TEXT_ALIGN_LEFT);
+                }
+            }
+        }
+
+    } else {
+        /* ── Orthographic ────────────────────────────────────────────────
+         * H ticks along top and bottom edges; V ticks along left and right.
+         * screen_x = h * ppm + pan_x + cx  (linear in h) — flip is handled
+         * by gc_view_project, and we derive the same formula from it here.
+         * ──────────────────────────────────────────────────────────────── */
+
+        /* Derive screen mapping for H and V from gc_view_project  */
+        gc_pt2_t o0, h1, v1;
+        gc_view_project(view, gc_vec3(0, 0, 0), &o0);
+        gc_view_project(view, gc_vec3(1, 0, 0), &h1);
+        gc_view_project(view, gc_vec3(0, -1, 0), &v1);  /* -1 because v = -y in TOP */
+
+        /* For views other than TOP the horizontal axis is not world-X.
+         * Use the view mode to pick the right unit vectors. */
+        gc_vec3_t h_unit, v_unit;           /* unit steps for h and v axes */
+        switch (view->mode) {
+        case GCVIEW_TOP:   h_unit = gc_vec3( 1,  0, 0); v_unit = gc_vec3(0, -1, 0); break;
+        case GCVIEW_FRONT: h_unit = gc_vec3( 1,  0, 0); v_unit = gc_vec3(0,  0,-1); break;
+        case GCVIEW_RIGHT: h_unit = gc_vec3( 0,  1, 0); v_unit = gc_vec3(0,  0,-1); break;
+        case GCVIEW_LEFT:  h_unit = gc_vec3( 0, -1, 0); v_unit = gc_vec3(0,  0,-1); break;
+        case GCVIEW_BACK:  h_unit = gc_vec3(-1,  0, 0); v_unit = gc_vec3(0,  0,-1); break;
+        default:           h_unit = gc_vec3( 1,  0, 0); v_unit = gc_vec3(0, -1, 0); break;
+        }
+        (void)h1; (void)v1; /* computed above for reference; use unit vecs below */
+
+        /* Project origin and unit steps to get screen scale */
+        gc_pt2_t hp, vp_pt;
+        gc_view_project(view, gc_vec3(0, 0, 0), &o0);
+        {
+            gc_vec3_t hw = { h_unit.x, h_unit.y, h_unit.z };
+            gc_vec3_t vw = { v_unit.x, v_unit.y, v_unit.z };
+            gc_view_project(view, hw, &hp);
+            gc_view_project(view, vw, &vp_pt);
+        }
+        float h_sx = (float)(hp.x - o0.x);   /* screen-x delta per 1 mm of h */
+        float h_sy = (float)(hp.y - o0.y);   /* should be ~0 for ortho; ~ppm for h */
+        float v_sx = (float)(vp_pt.x - o0.x);
+        float v_sy = (float)(vp_pt.y - o0.y);
+
+        /* Visible world-H range */
+        float h0, h1_f;
+        if (fabsf(h_sx) > 0.1f) {
+            h0   = ((float)vp_x           - (float)o0.x) / h_sx;
+            h1_f = ((float)(vp_x + vp_w - 1) - (float)o0.x) / h_sx;
+            if (h0 > h1_f) { float t = h0; h0 = h1_f; h1_f = t; }
+        } else { h0 = -1000.0f; h1_f = 1000.0f; }
+
+        /* Visible world-V range */
+        float v0, v1_f;
+        if (fabsf(v_sy) > 0.1f) {
+            v0   = ((float)vp_y           - (float)o0.y) / v_sy;
+            v1_f = ((float)(vp_y + vp_h - 1) - (float)o0.y) / v_sy;
+            if (v0 > v1_f) { float t = v0; v0 = v1_f; v1_f = t; }
+        } else { v0 = -1000.0f; v1_f = 1000.0f; }
+
+        /* H ticks: draw at top and bottom viewport edges, sweep h-range */
+        float hs = floorf(h0 / minor_step) * minor_step;
+        int cnt = 0;
+        for (float hh = hs; hh <= h1_f + 1e-4f && cnt < MAX_TICKS; hh += minor_step, cnt++) {
+            bool  maj  = IS_MAJOR(hh);
+            int   tlen = TICK_LEN(maj);
+            float sx   = (float)o0.x + hh * h_sx;
+            if (sx < (float)vp_x || sx > (float)(vp_x + vp_w - 1)) continue;
+            int isx = (int)sx;
+
+            gc_pt2_t ta = { (int16_t)isx, (int16_t)vp_y };
+            gc_pt2_t tb = { (int16_t)isx, (int16_t)(vp_y + tlen) };
+            draw_line(layer, ta, tb, TICK_COL(maj), TICK_OPA(maj), 1);
+
+            gc_pt2_t ba = { (int16_t)isx, (int16_t)(vp_y + vp_h - 1 - tlen) };
+            gc_pt2_t bb = { (int16_t)isx, (int16_t)(vp_y + vp_h - 1) };
+            draw_line(layer, ba, bb, TICK_COL(maj), TICK_OPA(maj), 1);
+
+            if (maj) {
+                /* world coord = hh (h_unit already accounts for sign) */
+                DRAW_LABEL(hh,
+                    (int16_t)(isx - 18),
+                    (int16_t)(vp_y + vp_h - 1 - tlen - 14),
+                    (int16_t)(isx + 18),
+                    (int16_t)(vp_y + vp_h - 1 - tlen - 1),
+                    LV_TEXT_ALIGN_CENTER);
+            }
+        }
+
+        /* V ticks: draw at left and right viewport edges, sweep v-range */
+        float vs = floorf(v0 / minor_step) * minor_step;
+        cnt = 0;
+        for (float vv = vs; vv <= v1_f + 1e-4f && cnt < MAX_TICKS; vv += minor_step, cnt++) {
+            bool  maj  = IS_MAJOR(vv);
+            int   tlen = TICK_LEN(maj);
+            float sy   = (float)o0.y + vv * v_sy;
+            if (sy < (float)vp_y || sy > (float)(vp_y + vp_h - 1)) continue;
+            int isy = (int)sy;
+
+            gc_pt2_t la = { (int16_t)vp_x,        (int16_t)isy };
+            gc_pt2_t lb = { (int16_t)(vp_x + tlen),(int16_t)isy };
+            draw_line(layer, la, lb, TICK_COL(maj), TICK_OPA(maj), 1);
+
+            gc_pt2_t ra = { (int16_t)(vp_x + vp_w - 1 - tlen), (int16_t)isy };
+            gc_pt2_t rb = { (int16_t)(vp_x + vp_w - 1),        (int16_t)isy };
+            draw_line(layer, ra, rb, TICK_COL(maj), TICK_OPA(maj), 1);
+
+            if (maj) {
+                /* world coord = vv (v_unit already accounts for sign) */
+                DRAW_LABEL(vv,
+                    (int16_t)(vp_x + tlen + 2),
+                    (int16_t)(isy - 7),
+                    (int16_t)(vp_x + tlen + 30),
+                    (int16_t)(isy + 7),
+                    LV_TEXT_ALIGN_LEFT);
+            }
+        }
+    }
+
+#undef IS_MAJOR
+#undef TICK_LEN
+#undef TICK_COL
+#undef TICK_OPA
+#undef DRAW_LABEL
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -412,11 +1021,18 @@ static void draw_cb(lv_event_t *e) {
 
     /* ── 2. Grid ── */
     if (priv->show_grid) {
-        grid_draw_ctx_t gctx = { .layer = layer };
-        gc_view_iter_grid(view,
-                          priv->has_limits ? priv->axis_min : NULL,
-                          priv->has_limits ? priv->axis_max : NULL,
-                          grid_line_cb, &gctx);
+        /* For isometric view use the existing iterator (handles iso better)
+         * and draw colors via grid_line_cb. For other views use settings grid. */
+        if (view->mode == GCVIEW_ISOMETRIC) {
+            grid_draw_ctx_t gctx = { .layer = layer, .view = view, .priv = priv };
+            gc_view_iter_grid(view,
+                              priv->has_limits ? priv->axis_min : NULL,
+                              priv->has_limits ? priv->axis_max : NULL,
+                              grid_line_cb, &gctx);
+        } else {
+            draw_settings_grid(layer, view, priv);
+        }
+        draw_grid_ticks(layer, view);
     }
 
     /* ── 3. Machine limits ── */
@@ -491,11 +1107,7 @@ static void draw_cb(lv_event_t *e) {
                        LV_OPA_COVER, GCVIEW_POSITION_SIZE);
     }
 
-    /* ── 8. View label badge ── */
-    {
-        const char *name = lv_gcode_viewer_view_name(obj);
-        draw_badge(layer, &vp, name, true);
-    }
+    /* View label replaced by dropdown in widget UI */
 
     /* ── 9. Segment count badge ── */
     if (priv->segbuf && priv->segbuf->count > 0) {
@@ -587,6 +1199,28 @@ static void on_delete(lv_event_t *e) {
     lv_obj_set_user_data(obj, NULL);
 }
 
+/* Dropdown change handler - set view based on selection index */
+static void view_dropdown_cb(lv_event_t *e) {
+    lv_obj_t *dd = lv_event_get_target(e);
+    lv_obj_t *root = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!root || !dd) return;
+    uint32_t sel = lv_dropdown_get_selected(dd);
+    if (sel >= (uint32_t)GCVIEW_COUNT) return;
+    lv_gcode_viewer_set_view(root, (lv_gcode_viewer_view_t)sel);
+}
+
+/* Zoom buttons */
+static void zoom_in_cb(lv_event_t *e) {
+    lv_obj_t *root = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!root) return;
+    lv_gcode_viewer_zoom(root, 1.2f);
+}
+static void zoom_out_cb(lv_event_t *e) {
+    lv_obj_t *root = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!root) return;
+    lv_gcode_viewer_zoom(root, 1.0f/1.2f);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API: lifecycle
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -626,6 +1260,61 @@ lv_obj_t *lv_gcode_viewer_create(lv_obj_t *parent) {
     lv_obj_add_event_cb(root, draw_cb,  LV_EVENT_DRAW_MAIN_END, priv);
     lv_obj_add_event_cb(root, press_cb, LV_EVENT_PRESSING, priv);
     lv_obj_add_event_cb(root, on_delete, LV_EVENT_DELETE, NULL);
+
+    /* --- UI controls: view dropdown + zoom buttons --- */
+    /* Build options string from view_names */
+    char opts[256] = {0};
+    const char *local_view_names[] = {
+        "Top (XY)",
+        "Front (XZ)",
+        "Right (YZ)",
+        "Left (YZ)",
+        "Back (XZ)",
+        "Isometric",
+    };
+    for (int i = 0; i < (int)GCVIEW_COUNT && i < (int)(sizeof(local_view_names)/sizeof(local_view_names[0])); i++) {
+        if (i > 0) strlcat(opts, "\n", sizeof(opts));
+        strlcat(opts, local_view_names[i], sizeof(opts));
+    }
+
+    lv_obj_t *dd = lv_dropdown_create(root);
+    lv_dropdown_set_options(dd, opts);
+    /* Make slightly wider and add internal padding */
+    lv_obj_set_width(dd, 130);
+    lv_obj_set_style_pad_left(dd, 10, 0);
+    lv_obj_set_style_pad_right(dd, 10, 0);
+    /* Start in isometric view */
+    lv_dropdown_set_selected(dd, (uint16_t)GCVIEW_ISOMETRIC);
+    lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, -6, 6);
+    lv_obj_add_event_cb(dd, view_dropdown_cb, LV_EVENT_VALUE_CHANGED, root);
+    /* Ensure viewer is in isometric mode at start */
+    lv_gcode_viewer_set_view(root, LV_GCVIEW_ISOMETRIC);
+
+    /* Zoom in */
+    /* Zoom buttons: top-left, larger, dark gray with white font, small radius */
+    lv_obj_t *btn_minus = lv_btn_create(root);
+    lv_obj_set_size(btn_minus, 40, 40);
+    lv_obj_align(btn_minus, LV_ALIGN_TOP_LEFT, 6, 6); /* place just below dd */
+    lv_obj_set_style_radius(btn_minus, 2, 0);
+    lv_obj_set_style_bg_color(btn_minus, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(btn_minus, LV_OPA_COVER, 0);
+    lv_obj_t *lblm = lv_label_create(btn_minus);
+    lv_label_set_text(lblm, "-");
+    lv_obj_set_style_text_color(lblm, lv_color_white(), 0);
+    lv_obj_center(lblm);
+    lv_obj_add_event_cb(btn_minus, zoom_out_cb, LV_EVENT_CLICKED, root);
+
+    lv_obj_t *btn_plus = lv_btn_create(root);
+    lv_obj_set_size(btn_plus, 40, 40);
+    lv_obj_align(btn_plus, LV_ALIGN_TOP_LEFT, 6 + 46, 6);
+    lv_obj_set_style_radius(btn_plus, 2, 0);
+    lv_obj_set_style_bg_color(btn_plus, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(btn_plus, LV_OPA_COVER, 0);
+    lv_obj_t *lblp = lv_label_create(btn_plus);
+    lv_label_set_text(lblp, "+");
+    lv_obj_set_style_text_color(lblp, lv_color_white(), 0);
+    lv_obj_center(lblp);
+    lv_obj_add_event_cb(btn_plus, zoom_in_cb, LV_EVENT_CLICKED, root);
 
     return root;
 }
@@ -759,7 +1448,7 @@ static gc_view_mode_t lv_to_gc_view_mode(lv_gcode_viewer_view_t v) {
     }
 }
 
-static lv_gcode_viewer_view_t gc_to_lv_view_mode(gc_view_mode_t v) {
+static gc_view_mode_t gc_to_lv_view_mode(gc_view_mode_t v) {
     switch (v) {
     case GCVIEW_TOP:       return LV_GCVIEW_TOP;
     case GCVIEW_FRONT:     return LV_GCVIEW_FRONT;
@@ -839,6 +1528,38 @@ void lv_gcode_viewer_set_position(lv_obj_t *obj, bool show) {
 void lv_gcode_viewer_set_wcs_origin(lv_obj_t *obj, bool show) {
     lv_gcview_priv_t *priv = get_priv(obj);
     if (priv) { priv->show_wcs_origin = show; lv_obj_invalidate(obj); }
+}
+
+void lv_gcode_viewer_set_machine_origin(lv_obj_t *obj,
+                                         lv_gcview_machine_origin_t origin)
+{
+    lv_gcview_priv_t *priv = get_priv(obj);
+    if (!priv) return;
+
+    /* Map origin enum to axis flip flags:
+     *
+     *  FRONT_LEFT  → X+→right (+1), Y+→back (+1)   (standard default)
+     *  FRONT_RIGHT → X+→left  (-1), Y+→back (+1)
+     *  BACK_LEFT   → X+→right (+1), Y+→front (-1)  (Y axis mirrored)
+     *  BACK_RIGHT  → X+→left  (-1), Y+→front (-1)  (typical Grbl home)
+     *
+     *  In the TOP projection: h = x * flip_x, v = -(y * flip_y).
+     *  So flip_x=-1 puts X+ leftward; flip_y=-1 puts Y+ upward on screen
+     *  (since v is already negated, double-negation reverses the direction).
+     */
+    int8_t fx, fy;
+    switch (origin) {
+    default:
+    case LV_GCVIEW_ORIGIN_FRONT_LEFT:  fx = +1; fy = +1; break;
+    case LV_GCVIEW_ORIGIN_FRONT_RIGHT: fx = -1; fy = +1; break;
+    case LV_GCVIEW_ORIGIN_BACK_LEFT:   fx = +1; fy = -1; break;
+    case LV_GCVIEW_ORIGIN_BACK_RIGHT:  fx = -1; fy = -1; break;
+    }
+
+    priv->view.axis_flip_x = fx;
+    priv->view.axis_flip_y = fy;
+    priv->auto_fit_pending = true;
+    lv_obj_invalidate(obj);
 }
 
 void lv_gcode_viewer_invalidate(lv_obj_t *obj) {

@@ -15,6 +15,7 @@ import re
 import sys
 import argparse
 import subprocess
+import shutil
 from pathlib import Path
 
 REG_RE = re.compile(r"^\s*(MEPC|RA|SP|GP|TP|T[0-6]|S[0-9]|A[0-7]|MCAUSE|MTVAL)\s*:\s*(0x[0-9a-fA-F]+)")
@@ -52,6 +53,26 @@ def extract_addresses(text):
     return addrs
 
 
+def read_clipboard():
+    """Try to read clipboard using common tools (pbpaste, xclip, xsel).
+    Returns tuple (text, used_cmd) or (None, None) if none available.
+    """
+    candidates = [
+        (['pbpaste'], 'pbpaste'),
+        (['xclip', '-selection', 'clipboard', '-o'], 'xclip'),
+        (['xsel', '--clipboard', '--output'], 'xsel'),
+    ]
+    for cmd, name in candidates:
+        if shutil.which(cmd[0]):
+            try:
+                p = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            except FileNotFoundError:
+                continue
+            if p.returncode == 0:
+                return p.stdout, name
+    return None, None
+
+
 def run_addr2line(addr2line, elf, addrs):
     if not addrs:
         print("No addresses found in input.")
@@ -72,11 +93,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('-e', '--elf', required=True, help='Path to firmware ELF')
     ap.add_argument('--addr2line', help='Path to riscv addr2line binary')
+    ap.add_argument('--clipboard', action='store_true', help='Read crash log from system clipboard when file is omitted')
     ap.add_argument('file', nargs='?', help='Crash log file (defaults to stdin)')
     args = ap.parse_args()
 
     if args.file:
         txt = Path(args.file).read_text()
+    elif args.clipboard:
+        txt, used = read_clipboard()
+        if txt is None:
+            print('Clipboard paste command not found (tried pbpaste/xclip/xsel).', file=sys.stderr)
+            return 3
+        print(f'Input read from clipboard via {used}.', file=sys.stderr)
     else:
         txt = sys.stdin.read()
 

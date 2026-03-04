@@ -28,6 +28,7 @@ def main():
     if real:
         try:
             # Call the real esp_idf_size with cleaned args
+            print("Running", " ".join(([real] + cleaned)))
             rc = subprocess.call([real] + cleaned)
             return rc
         except Exception as e:

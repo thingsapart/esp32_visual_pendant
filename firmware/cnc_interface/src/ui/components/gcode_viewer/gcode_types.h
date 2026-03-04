@@ -44,6 +44,24 @@ extern "C" {
 #define GCVIEW_DEFAULT_PPM  2.0f
 #endif
 
+/** Grid ruler tick labels: set to 0 to disable all text labels on the ruler
+ *  (saves significant draw time on constrained hardware). */
+#ifndef GCVIEW_GRID_LABEL_ENABLE
+#define GCVIEW_GRID_LABEL_ENABLE 1
+#endif
+
+/** Minimum pixel distance between MAJOR tick marks before labels are suppressed.
+ *  If ppm × major_step < this value, no labels are drawn for that zoom level. */
+#ifndef GCVIEW_GRID_LABEL_MIN_PX
+#define GCVIEW_GRID_LABEL_MIN_PX 40
+#endif
+
+/** Maximum number of grid lines (h + v combined) drawn per frame.
+ *  Safety cap to prevent stalls when zoomed deep in. */
+#ifndef GCVIEW_MAX_GRID_LINES
+#define GCVIEW_MAX_GRID_LINES 200
+#endif
+
 /** Minimum / maximum zoom (pixels per mm). */
 #ifndef GCVIEW_MIN_PPM
 #define GCVIEW_MIN_PPM  0.2f
@@ -194,6 +212,29 @@ typedef enum {
     GCVIEW_COUNT     = 6,
 } gc_view_mode_t;
 
+/** Describes where the machine's physical origin (home / zero) is
+ *  relative to the operator standing at the front of the machine.
+ *
+ *  This controls the sign of the X and Y axes in the TOP view so the
+ *  display matches the physical layout:
+ *
+ *         BACK_LEFT   BACK_RIGHT
+ *            ┌──────────┐
+ *            │  machine │
+ *            └──────────┘
+ *        FRONT_LEFT  FRONT_RIGHT  ← operator
+ *
+ *  For a standard Grbl router with home switches at back-right:
+ *  use GCVIEW_ORIGIN_BACK_RIGHT so the workspace (negative machine
+ *  coordinates) appears in the lower-left quadrant as expected.
+ */
+typedef enum {
+    GCVIEW_ORIGIN_FRONT_LEFT  = 0, /**< X+ right,  Y+ away (home front-left)  */
+    GCVIEW_ORIGIN_FRONT_RIGHT = 1, /**< X+ left,   Y+ away (home front-right) */
+    GCVIEW_ORIGIN_BACK_LEFT   = 2, /**< X+ right,  Y+ toward (home back-left) */
+    GCVIEW_ORIGIN_BACK_RIGHT  = 3, /**< X+ left,   Y+ toward (home back-right, common Grbl) */
+} gc_machine_origin_t;
+
 /* ─── data structures ──────────────────────────────────────────────────── */
 
 /** A 3-D point in machine coordinates (mm). */
@@ -293,6 +334,8 @@ typedef struct {
     int16_t         vp_w, vp_h;     /**< viewport width / height (px) */
     int16_t         vp_x, vp_y;     /**< viewport origin on screen (px) */
     bool            dirty;          /**< true → recalc projection cache */
+    int8_t          axis_flip_x;    /**< +1 = normal,  -1 = flip X axis in projection */
+    int8_t          axis_flip_y;    /**< +1 = normal,  -1 = flip Y axis in projection */
 } gc_view_t;
 
 /* ─── inline helpers ───────────────────────────────────────────────────── */

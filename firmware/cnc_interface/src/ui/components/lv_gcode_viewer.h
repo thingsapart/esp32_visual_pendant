@@ -40,6 +40,30 @@ typedef enum {
     LV_GCVIEW_COUNT     = 6,
 } lv_gcode_viewer_view_t;
 
+/** Machine coordinate origin (home / hard-limit corner) convention.
+ *
+ *  Describes where the machine's physical home position is relative to
+ *  the operator standing at the front of the machine.  The viewer uses
+ *  this to orient the X and Y axes so the on-screen layout matches the
+ *  physical machine:
+ *
+ *         BACK_LEFT   BACK_RIGHT
+ *            ┌──────────┐
+ *            │  machine │
+ *            └──────────┘
+ *        FRONT_LEFT  FRONT_RIGHT  ← operator
+ *
+ *  Common Grbl routers with home switches at back-right: use
+ *  LV_GCVIEW_ORIGIN_BACK_RIGHT so the workspace (negative machine
+ *  coordinates) fills the lower-left of the top view as expected.
+ */
+typedef enum {
+    LV_GCVIEW_ORIGIN_FRONT_LEFT  = 0,  /**< X+→right, Y+→away  (home front-left)  */
+    LV_GCVIEW_ORIGIN_FRONT_RIGHT = 1,  /**< X+→left,  Y+→away  (home front-right) */
+    LV_GCVIEW_ORIGIN_BACK_LEFT   = 2,  /**< X+→right, Y+→toward (home back-left) */
+    LV_GCVIEW_ORIGIN_BACK_RIGHT  = 3,  /**< X+→left,  Y+→toward (home back-right, typical Grbl) */
+} lv_gcview_machine_origin_t;
+
 /* ─── lifecycle ────────────────────────────────────────────────────────── */
 
 /** Create the G-code viewer widget.
@@ -105,6 +129,17 @@ void lv_gcode_viewer_set_position(lv_obj_t *obj, bool show);
 
 /** Show / hide the WCS origin marker. */
 void lv_gcode_viewer_set_wcs_origin(lv_obj_t *obj, bool show);
+
+/** Set the machine coordinate origin convention.
+ *
+ *  This controls the orientation of the X and Y axes in the viewer so
+ *  the displayed layout matches the physical machine.  Call this once
+ *  after creating the viewer (before the first fit / draw).
+ *
+ *  Default: LV_GCVIEW_ORIGIN_FRONT_LEFT (X+→right, Y+→away from operator).
+ */
+void lv_gcode_viewer_set_machine_origin(lv_obj_t *obj,
+                                         lv_gcview_machine_origin_t origin);
 
 /** Force a redraw (invalidates the widget). */
 void lv_gcode_viewer_invalidate(lv_obj_t *obj);

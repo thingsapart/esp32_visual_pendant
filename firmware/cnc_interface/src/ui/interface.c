@@ -442,10 +442,11 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   lv_obj_t* gc_view = obj_registry_get("gcode_viewer");
   if (gc_view) {
     lv_gcode_viewer_set_machine(gc_view, machine);
-    lv_gcode_viewer_load_gcode(gc_view,
-        "G21\nG90\nG1 X10 Y20 F600\nG1 X30\nG2 X10 Y20 I-10 J0\n");
+    lv_gcode_viewer_set_machine_origin(gc_view, LV_GCVIEW_ORIGIN_FRONT_LEFT);
     lv_gcode_viewer_set_view(gc_view, LV_GCVIEW_ISOMETRIC);
     lv_gcode_viewer_fit(gc_view);
+    lv_gcode_viewer_load_gcode(gc_view,
+        "G21\nG90\nG1 X10 Y20 F600\nG1 X30\nG2 X10 Y20 I-10 J0\n");
   }
 
   // Set initial overlay text (will be overwritten by data bindings as state arrives)

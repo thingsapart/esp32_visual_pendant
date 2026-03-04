@@ -13,6 +13,9 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
+// Forward declarations.
+static inline gc_vec3_t flip_world(const gc_view_t *view, gc_vec3_t w);
+
 /* ─── isometric projection constants ───────────────────────────────────── */
 
 /* Standard isometric angles: 30° from the horizontal.
@@ -88,7 +91,7 @@ static inline void ortho_project(gc_view_mode_t mode,
 
 void gc_view_project(const gc_view_t *view, gc_vec3_t world, gc_pt2_t *out) {
     float h, v;
-    ortho_project(view->mode, world, &h, &v);
+    ortho_project(view->mode, flip_world(view, world), &h, &v);
 
     /* World mm → screen px: multiply by ppm, add pan, add viewport centre. */
     out->x = (int16_t)(h * view->ppm + view->pan_x + view->vp_x + view->vp_w / 2);
@@ -135,6 +138,17 @@ void gc_view_unproject(const gc_view_t *view, gc_pt2_t screen,
  * Auto-fit
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/** Apply the per-axis flip flags from @p view to a world point before it is
+ *  passed to ortho_project().  This helper centralises the flip logic so that
+ *  gc_view_fit() and gc_view_iter_grid() produce results consistent with
+ *  gc_view_project(). */
+static inline gc_vec3_t flip_world(const gc_view_t *view, gc_vec3_t w)
+{
+    if (view->axis_flip_x) w.x *= (float)view->axis_flip_x;
+    if (view->axis_flip_y) w.y *= (float)view->axis_flip_y;
+    return w;
+}
+
 void gc_view_fit(gc_view_t *view,
                  const gc_segbuf_t *buf,
                  const float *machine_min,
@@ -156,7 +170,7 @@ void gc_view_fit(gc_view_t *view,
         }
         for (int i = 0; i < 8; i++) {
             float h, v;
-            ortho_project(view->mode, corners[i], &h, &v);
+            ortho_project(view->mode, flip_world(view, corners[i]), &h, &v);
             if (h < min_h) min_h = h;
             if (h > max_h) max_h = h;
             if (v < min_v) min_v = v;
@@ -172,11 +186,11 @@ void gc_view_fit(gc_view_t *view,
             if (!seg) continue;
 
             float h, v;
-            ortho_project(view->mode, seg->from, &h, &v);
+            ortho_project(view->mode, flip_world(view, seg->from), &h, &v);
             if (h < min_h) min_h = h;  if (h > max_h) max_h = h;
             if (v < min_v) min_v = v;  if (v > max_v) max_v = v;
 
-            ortho_project(view->mode, seg->to, &h, &v);
+            ortho_project(view->mode, flip_world(view, seg->to), &h, &v);
             if (h < min_h) min_h = h;  if (h > max_h) max_h = h;
             if (v < min_v) min_v = v;  if (v > max_v) max_v = v;
 
@@ -266,6 +280,53 @@ void gc_view_iter_grid(const gc_view_t *view,
     if (h0 > h1) { float t = h0; h0 = h1; h1 = t; }
     if (v0 > v1) { float t = v0; v0 = v1; v1 = t; }
 
+    /* For isometric the unproject→ortho_project round-trip gives incorrect
+     * world X/Y bounds because gc_view_unproject cannot fully invert the iso
+     * projection (it approximates with y=0).  Instead, directly invert the
+     * iso formula for all four viewport corners at z=0 to obtain true world
+     * X (→h) and world Y (→v) extents.
+     *
+     *   screen_h = (wx - wy) * ISO_COS   ⟹  wx - wy = sh / ISO_COS
+     *   screen_v = -(wx + wy) * ISO_SIN  ⟹  wx + wy = -sv / ISO_SIN
+     *   ⟹  wx = (sh/ISO_COS + (-sv/ISO_SIN)) / 2
+     *       wy = ((-sv/ISO_SIN) - sh/ISO_COS) / 2
+     */
+    if (view->mode == GCVIEW_ISOMETRIC) {
+        gc_pt2_t corners[4] = {
+            tl,
+            { br.x,  tl.y },
+            { tl.x,  br.y },
+            br
+        };
+        float scx = (float)(view->vp_x + view->vp_w / 2);
+        float scy = (float)(view->vp_y + view->vp_h / 2);
+        /* Per-axis flip: for \u00b11 values, 1/f == f, so we just multiply. */
+        float fx = (view->axis_flip_x != 0) ? (float)view->axis_flip_x : 1.0f;
+        float fy = (view->axis_flip_y != 0) ? (float)view->axis_flip_y : 1.0f;
+        float wx[4], wy[4];
+        for (int c = 0; c < 4; c++) {
+            float sh = ((float)corners[c].x - scx - view->pan_x) / view->ppm;
+            float sv = ((float)corners[c].y - scy - view->pan_y) / view->ppm;
+            /* With flip:
+             *  sh = (wx*fx - wy*fy) * ISO_COS
+             *  -sv/ISO_SIN = wx*fx + wy*fy
+             *  => wx = (sh/ISO_COS + (-sv/ISO_SIN)) * 0.5 * fx
+             *     wy = ((-sv/ISO_SIN) - sh/ISO_COS) * 0.5 * fy  */
+            wx[c] = (sh / ISO_COS + (-sv / ISO_SIN)) * 0.5f * fx;
+            wy[c] = ((-sv / ISO_SIN) - (sh / ISO_COS)) * 0.5f * fy;
+        }
+        h0 = h1 = wx[0];
+        v0 = v1 = wy[0];
+        for (int c = 1; c < 4; c++) {
+            if (wx[c] < h0) h0 = wx[c];  if (wx[c] > h1) h1 = wx[c];
+            if (wy[c] < v0) v0 = wy[c];  if (wy[c] > v1) v1 = wy[c];
+        }
+        /* Now h0..h1 = world X range, v0..v1 = world Y range — exactly what
+         * the iso grid loops below expect:
+         *   X-sweep: gc_vec3(x, v0..v1, 0)   (constant X, varying Y)
+         *   Y-sweep: gc_vec3(h0..h1, y, 0)   (constant Y, varying X)   */
+    }
+
     /* Extend to grid boundaries */
     float g_h0 = floorf(h0 / spacing) * spacing;
     float g_v0 = floorf(v0 / spacing) * spacing;
@@ -273,8 +334,12 @@ void gc_view_iter_grid(const gc_view_t *view,
     /* Determine major line interval (every 5 lines) */
     float major_spacing = spacing * 5.0f;
 
+    /* Safety cap: skip grid if spacing is too fine or range too large */
+    int max_lines = GCVIEW_MAX_GRID_LINES;
+    int drawn = 0;
+
     /* Vertical grid lines (sweep h-axis) */
-    for (float h = g_h0; h <= h1; h += spacing) {
+    for (float h = g_h0; h <= h1 && drawn < max_lines; h += spacing, drawn++) {
         bool is_major = (fabsf(fmodf(h, major_spacing)) < spacing * 0.01f) ||
                         (fabsf(h) < spacing * 0.01f);  /* origin */
 
@@ -311,7 +376,7 @@ void gc_view_iter_grid(const gc_view_t *view,
     }
 
     /* Horizontal grid lines (sweep v-axis) */
-    for (float v = g_v0; v <= v1; v += spacing) {
+    for (float v = g_v0; v <= v1 && drawn < max_lines; v += spacing, drawn++) {
         bool is_major = (fabsf(fmodf(v, major_spacing)) < spacing * 0.01f) ||
                         (fabsf(v) < spacing * 0.01f);
 
@@ -352,13 +417,15 @@ void gc_view_init(gc_view_t *view, gc_view_mode_t mode,
                   int16_t vp_w, int16_t vp_h)
 {
     memset(view, 0, sizeof(*view));
-    view->mode  = mode;
-    view->ppm   = GCVIEW_DEFAULT_PPM;
-    view->vp_x  = vp_x;
-    view->vp_y  = vp_y;
-    view->vp_w  = vp_w;
-    view->vp_h  = vp_h;
-    view->dirty = true;
+    view->mode        = mode;
+    view->ppm         = GCVIEW_DEFAULT_PPM;
+    view->vp_x        = vp_x;
+    view->vp_y        = vp_y;
+    view->vp_w        = vp_w;
+    view->vp_h        = vp_h;
+    view->dirty       = true;
+    view->axis_flip_x = 1;  /* no flip by default */
+    view->axis_flip_y = 1;
 }
 
 void gc_view_set_mode(gc_view_t *view, gc_view_mode_t mode) {
