@@ -129,12 +129,13 @@ static gc_view_mode_t lv_to_gc_view_mode(lv_gcode_viewer_view_t v);
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static inline lv_color_t seg_color(gc_move_type_t type) {
+    /* Use a non-green palette so g-code stands out from the grid. */
     switch (type) {
-    case GCMOVE_RAPID:   return lv_color_hex(GCVIEW_COL_RAPID);
-    case GCMOVE_LINEAR:  return lv_color_hex(GCVIEW_COL_FEED);
-    case GCMOVE_ARC_CW:  return lv_color_hex(GCVIEW_COL_ARC_CW);
-    case GCMOVE_ARC_CCW: return lv_color_hex(GCVIEW_COL_ARC_CCW);
-    default:             return lv_color_hex(GCVIEW_COL_FEED);
+    case GCMOVE_RAPID:   return lv_color_hex(0xFFAA33); /* orange */
+    case GCMOVE_LINEAR:  return lv_color_hex(0x2196F3); /* blue */
+    case GCMOVE_ARC_CW:  return lv_color_hex(0x9C27B0); /* purple */
+    case GCMOVE_ARC_CCW: return lv_color_hex(0x00BCD4); /* cyan */
+    default:             return lv_color_hex(0x2196F3);
     }
 }
 
@@ -189,6 +190,23 @@ static bool lv_clip_line(const lv_area_t *clip,
  * round_start/round_end are forced to 0 — round line-caps nearly
  * double the work for short grid tick marks.
  */
+static void fast_set_pixel(lv_draw_buf_t *buf, int x, int y, lv_color_t color, lv_opa_t opa)
+{
+    if (!buf) return;
+    /* Bounds in draw_buf_goto_xy are not checked here; callers clip beforehand. */
+    void *ptr = lv_draw_buf_goto_xy(buf, (uint32_t)x, (uint32_t)y);
+    if (!ptr) return;
+    uint8_t cf = (uint8_t)buf->header.cf;
+    size_t sz = (size_t)LV_COLOR_FORMAT_GET_SIZE(buf->header.cf);
+
+    /* Convert color to a packed integer and memcpy only the bytes needed.
+     * Using lv_color_to_u32 provides a convenient packed representation. */
+    uint32_t v32 = lv_color_to_u32(color);
+    memcpy(ptr, &v32, sz);
+}
+
+/* Bresenham integer line draw (width==1 fast path) writing directly into
+ * the layer draw buffer. Falls back to LVGL thick/AA line for width>1. */
 static void draw_line(lv_layer_t *layer,
                       gc_pt2_t p1, gc_pt2_t p2,
                       lv_color_t color, lv_opa_t opa, int width)
@@ -198,6 +216,66 @@ static void draw_line(lv_layer_t *layer,
                       p1.x, p1.y, p2.x, p2.y,
                       &cx0, &cy0, &cx1, &cy1)) return;
 
+    /* Fast path when a draw buffer exists. Provide special handling for
+     * single-pixel lines (Bresenham) and 2px wide axis-aligned lines. */
+    if (layer->draw_buf) {
+        lv_draw_buf_t *db = layer->draw_buf;
+        int x0 = cx0, y0 = cy0, x1 = cx1, y1 = cy1;
+        lv_area_t clip = layer->_clip_area;
+
+        /* Width==2 fast path for pure vertical or horizontal segments. */
+        if (width == 2) {
+            if (x0 == x1) {
+                /* Vertical 2px line: draw two adjacent columns. */
+                int ys = y0 < y1 ? y0 : y1;
+                int ye = y0 < y1 ? y1 : y0;
+                for (int y = ys; y <= ye; y++) {
+                    if (y >= clip.y1 && y <= clip.y2) {
+                        if (x0 >= clip.x1 && x0 <= clip.x2)
+                            fast_set_pixel(db, x0, y, color, opa);
+                        if ((x0 + 1) >= clip.x1 && (x0 + 1) <= clip.x2)
+                            fast_set_pixel(db, x0 + 1, y, color, opa);
+                    }
+                }
+                return;
+            } else if (y0 == y1) {
+                /* Horizontal 2px line: draw two adjacent rows. */
+                int xs = x0 < x1 ? x0 : x1;
+                int xe = x0 < x1 ? x1 : x0;
+                for (int x = xs; x <= xe; x++) {
+                    if (x >= clip.x1 && x <= clip.x2) {
+                        if (y0 >= clip.y1 && y0 <= clip.y2)
+                            fast_set_pixel(db, x, y0, color, opa);
+                        if ((y0 + 1) >= clip.y1 && (y0 + 1) <= clip.y2)
+                            fast_set_pixel(db, x, y0 + 1, color, opa);
+                    }
+                }
+                return;
+            }
+            /* Non-axis-aligned 2px: fall through to LVGL rasteriser. */
+        }
+
+        /* Width==1 Bresenham integer line draw with per-pixel clip check. */
+        if (width == 1) {
+            int dx = abs(x1 - x0);
+            int sx = x0 < x1 ? 1 : -1;
+            int dy = -abs(y1 - y0);
+            int sy = y0 < y1 ? 1 : -1;
+            int err = dx + dy; /* error value e_xy */
+
+            while (1) {
+                if (x0 >= clip.x1 && x0 <= clip.x2 && y0 >= clip.y1 && y0 <= clip.y2)
+                    fast_set_pixel(db, x0, y0, color, opa);
+                if (x0 == x1 && y0 == y1) break;
+                int e2 = 2 * err;
+                if (e2 >= dy) { err += dy; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+            }
+            return;
+        }
+    }
+
+    /* Fallback: use LVGL's line draw for thicker/AA lines. */
     lv_draw_line_dsc_t dsc;
     lv_draw_line_dsc_init(&dsc);
     dsc.color       = color;
@@ -472,10 +550,11 @@ static void grid_line_cb(bool is_major, gc_pt2_t p1, gc_pt2_t p2, void *ctx) {
         lv_opa_t opa = is_major ? LV_OPA_COVER : LV_OPA_60;
         draw_line(gc->layer, p1, p2, col, opa, 1);
     } else {
-        lv_color_t col = is_major ? lv_color_hex(GCVIEW_COL_GRID_MAJOR)
-                                  : lv_color_hex(GCVIEW_COL_GRID);
+        /* Use darker green constants for grid lines so g-code colors differ. */
+        lv_color_t col = is_major ? lv_color_hex(0x335533) : lv_color_hex(0x224422);
         lv_opa_t opa = is_major ? (lv_opa_t)(GCVIEW_OPA_GRID + 40) : GCVIEW_OPA_GRID;
-        draw_line(gc->layer, p1, p2, col, opa, GCVIEW_GRID_LINE_WIDTH);
+        /* Use 1px for grid lines too (major distinguished by brightness). */
+        draw_line(gc->layer, p1, p2, col, opa, 1);
     }
 }
 
@@ -692,9 +771,10 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
     bool do_labels = false;
 #endif
 
-    lv_color_t col_minor = lv_color_hex(0x336633);
-    lv_color_t col_major = lv_color_hex(0x66BB66);
-    lv_color_t col_label = lv_color_hex(0x99DD99);
+    /* Slightly darker green grid so g-code (non-green) stands out. */
+    lv_color_t col_minor = lv_color_hex(0x224422);
+    lv_color_t col_major = lv_color_hex(0x335533);
+    lv_color_t col_label = lv_color_hex(0x88CC88);
 
     /* ── Helpers ── */
 #define IS_MAJOR(v)  (fabsf(fmodf(fabsf(v), major_step)) < minor_step * 0.1f \
@@ -844,8 +924,9 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
                 /* Render tick arms axis-aligned for cheaper rasterisation:
                  * Y-axis ticks are horizontal (arm along X screen axis).
                  * Keep the original perpendicular (ypx_n/ypy_n) for label offset. */
-                gc_pt2_t p1 = { (int16_t)(sx - tlen), (int16_t)(sy) };
-                gc_pt2_t p2 = { (int16_t)(sx + tlen), (int16_t)(sy) };
+                /* Always draw Y-axis ticks vertically */
+                gc_pt2_t p1 = { (int16_t)(sx), (int16_t)(sy - tlen) };
+                gc_pt2_t p2 = { (int16_t)(sx), (int16_t)(sy + tlen) };
                 draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
                 if (maj) {
                     float lo = tlen + 2.0f;
@@ -954,12 +1035,13 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
             if (sy < (float)vp_y || sy > (float)(vp_y + vp_h - 1)) continue;
             int isy = (int)sy;
 
-            gc_pt2_t la = { (int16_t)vp_x,        (int16_t)isy };
-            gc_pt2_t lb = { (int16_t)(vp_x + tlen),(int16_t)isy };
+            /* Draw V-ticks vertically (uniform) */
+            gc_pt2_t la = { (int16_t)vp_x, (int16_t)(isy - tlen) };
+            gc_pt2_t lb = { (int16_t)vp_x, (int16_t)(isy + tlen) };
             draw_line(layer, la, lb, TICK_COL(maj), TICK_OPA(maj), 1);
 
-            gc_pt2_t ra = { (int16_t)(vp_x + vp_w - 1 - tlen), (int16_t)isy };
-            gc_pt2_t rb = { (int16_t)(vp_x + vp_w - 1),        (int16_t)isy };
+            gc_pt2_t ra = { (int16_t)(vp_x + vp_w - 1), (int16_t)(isy - tlen) };
+            gc_pt2_t rb = { (int16_t)(vp_x + vp_w - 1), (int16_t)(isy + tlen) };
             draw_line(layer, ra, rb, TICK_COL(maj), TICK_OPA(maj), 1);
 
             if (maj) {

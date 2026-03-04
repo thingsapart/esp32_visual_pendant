@@ -7196,7 +7196,7 @@ void create_ui(lv_obj_t* parent) {
 
     lv_obj_add_style(obj_74, container_8, 0);
     lv_obj_add_style(obj_74, flex_x_12, 0);
-    lv_obj_add_style(obj_74, tablet_row_64, 0);
+    lv_obj_set_style_size(obj_74, lv_pct(100), 280, 0);
     // unnamed: obj_75 (obj)
     lv_obj_t* obj_75 = lv_obj_create(obj_74);
 
@@ -8462,7 +8462,8 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_t* obj_199 = lv_obj_create(obj_65);
 
     lv_obj_add_style(obj_199, container_8, 0);
-    lv_obj_set_style_size(obj_199, lv_pct(100), 400, 0);
+    lv_obj_set_style_width(obj_199, lv_pct(100), 0);
+    lv_obj_set_style_flex_grow(obj_199, 3, 0);
     lv_obj_set_style_pad_all(obj_199, 8, 0);
     // unnamed: obj_200 (obj)
     lv_obj_t* obj_200 = lv_obj_create(obj_199);
@@ -8482,7 +8483,8 @@ void create_ui(lv_obj_t* parent) {
     lv_obj_t* obj_202 = lv_obj_create(obj_65);
 
     lv_obj_add_style(obj_202, container_8, 0);
-    lv_obj_add_style(obj_202, tablet_row_64, 0);
+    lv_obj_set_style_width(obj_202, lv_pct(100), 0);
+    lv_obj_set_style_flex_grow(obj_202, 3, 0);
     // unnamed: tabview_203 (tabview)
     lv_obj_t* tabview_203 = lv_tabview_create(obj_202);
 
