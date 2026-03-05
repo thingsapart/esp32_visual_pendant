@@ -1002,6 +1002,8 @@ static void c6_sdio_rx_task(void *arg)
 
 // ---- Public API -------------------------------------------------------------
 
+#include "driver/task_registry.h"
+
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                           remote_wrapper_send_cb_t send_cb, void *user_data)
 {
@@ -1033,6 +1035,8 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
     task_registry_register_handle(g_rx_task, "c6_sdio_rx");
 
     LOGI(TAG, "C6 SDIO ESP-NOW bridge ready");
+    LOGI(TAG, "C6 SDIO bridge state: %s",
+         c6_sdio_bridge_is_ready() ? "connected" : "disconnected");
     return true;
 }
 

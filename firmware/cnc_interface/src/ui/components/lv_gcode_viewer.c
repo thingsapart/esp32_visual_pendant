@@ -83,6 +83,31 @@ static inline void local_ortho_project(gc_view_mode_t mode,
 #define M_PI 3.14159265358979323846f
 #endif
 
+/* Localisable colour defines (easy to tweak). If you prefer to use the
+ * project's global GCVIEW_COL_* macros, override these at build time. */
+#ifndef LGV_COL_GRID_MINOR
+#define LGV_COL_GRID_MINOR   0x224422
+#endif
+#ifndef LGV_COL_GRID_MAJOR
+#define LGV_COL_GRID_MAJOR   0x335533
+#endif
+#ifndef LGV_COL_GRID_LABEL
+#define LGV_COL_GRID_LABEL   0x88CC88
+#endif
+#ifndef LGV_COL_SEG_RAPID
+#define LGV_COL_SEG_RAPID    0xFFAA33
+#endif
+#ifndef LGV_COL_SEG_FEED
+#define LGV_COL_SEG_FEED     0x2196F3
+#endif
+#ifndef LGV_COL_SEG_ARC_CW
+#define LGV_COL_SEG_ARC_CW   0x9C27B0
+#endif
+#ifndef LGV_COL_SEG_ARC_CCW
+#define LGV_COL_SEG_ARC_CCW  0x00BCD4
+#endif
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Private data
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -123,19 +148,19 @@ static inline lv_gcview_priv_t *get_priv(lv_obj_t *obj) {
 /* Forward-declare view-mode helper to allow calling it from API functions
  * defined earlier in the file. */
 static gc_view_mode_t lv_to_gc_view_mode(lv_gcode_viewer_view_t v);
+static float nice_135_step(float ppm, float min_px);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Internal: colour helpers
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static inline lv_color_t seg_color(gc_move_type_t type) {
-    /* Use a non-green palette so g-code stands out from the grid. */
     switch (type) {
-    case GCMOVE_RAPID:   return lv_color_hex(0xFFAA33); /* orange */
-    case GCMOVE_LINEAR:  return lv_color_hex(0x2196F3); /* blue */
-    case GCMOVE_ARC_CW:  return lv_color_hex(0x9C27B0); /* purple */
-    case GCMOVE_ARC_CCW: return lv_color_hex(0x00BCD4); /* cyan */
-    default:             return lv_color_hex(0x2196F3);
+    case GCMOVE_RAPID:   return lv_color_hex(LGV_COL_SEG_RAPID);
+    case GCMOVE_LINEAR:  return lv_color_hex(LGV_COL_SEG_FEED);
+    case GCMOVE_ARC_CW:  return lv_color_hex(LGV_COL_SEG_ARC_CW);
+    case GCMOVE_ARC_CCW: return lv_color_hex(LGV_COL_SEG_ARC_CCW);
+    default:             return lv_color_hex(LGV_COL_SEG_FEED);
     }
 }
 
@@ -221,6 +246,7 @@ static void draw_line(lv_layer_t *layer,
     if (layer->draw_buf) {
         lv_draw_buf_t *db = layer->draw_buf;
         int x0 = cx0, y0 = cy0, x1 = cx1, y1 = cy1;
+
         lv_area_t clip = layer->_clip_area;
 
         /* Width==2 fast path for pure vertical or horizontal segments. */
@@ -252,7 +278,60 @@ static void draw_line(lv_layer_t *layer,
                 }
                 return;
             }
-            /* Non-axis-aligned 2px: fall through to LVGL rasteriser. */
+            /* Non-axis-aligned 2px: attempt fast-path by drawing two
+             * parallel Bresenham lines offset by one pixel in the
+             * perpendicular direction. This keeps most diagonal segments
+             * fast while producing a visually thicker stroke. */
+            {
+                int dx = abs(x1 - x0);
+                int dy = abs(y1 - y0);
+                int ox = 0, oy = 0;
+
+                if (dx > dy) {
+                    /* More horizontal: offset vertically */
+                    ox = 0; oy = (y1 >= y0) ? 1 : -1;
+                } else if (dy > dx) {
+                    /* More vertical: offset horizontally */
+                    oy = 0; ox = (x1 >= x0) ? 1 : -1;
+                } else {
+                    /* ~45deg: use a perpendicular integer offset */
+                    ox = (y1 >= y0) ? -1 : 1;
+                    oy = (x1 >= x0) ? 1 : -1;
+                }
+
+                /* Primary Bresenham */
+                int tx0 = x0, ty0 = y0, tx1 = x1, ty1 = y1;
+                int ddx = abs(tx1 - tx0);
+                int sx = tx0 < tx1 ? 1 : -1;
+                int ddy = -abs(ty1 - ty0);
+                int sy = ty0 < ty1 ? 1 : -1;
+                int err = ddx + ddy;
+                while (1) {
+                    if (tx0 >= clip.x1 && tx0 <= clip.x2 && ty0 >= clip.y1 && ty0 <= clip.y2)
+                        fast_set_pixel(db, tx0, ty0, color, opa);
+                    if (tx0 == tx1 && ty0 == ty1) break;
+                    int e2 = 2 * err;
+                    if (e2 >= ddy) { err += ddy; tx0 += sx; }
+                    if (e2 <= ddx) { err += ddx; ty0 += sy; }
+                }
+
+                /* Offset Bresenham */
+                tx0 = x0 + ox; ty0 = y0 + oy; tx1 = x1 + ox; ty1 = y1 + oy;
+                ddx = abs(tx1 - tx0);
+                sx = tx0 < tx1 ? 1 : -1;
+                ddy = -abs(ty1 - ty0);
+                sy = ty0 < ty1 ? 1 : -1;
+                err = ddx + ddy;
+                while (1) {
+                    if (tx0 >= clip.x1 && tx0 <= clip.x2 && ty0 >= clip.y1 && ty0 <= clip.y2)
+                        fast_set_pixel(db, tx0, ty0, color, opa);
+                    if (tx0 == tx1 && ty0 == ty1) break;
+                    int e2 = 2 * err;
+                    if (e2 >= ddy) { err += ddy; tx0 += sx; }
+                    if (e2 <= ddx) { err += ddx; ty0 += sy; }
+                }
+                return;
+            }
         }
 
         /* Width==1 Bresenham integer line draw with per-pixel clip check. */
@@ -488,7 +567,9 @@ static void draw_arc_segment(lv_layer_t *layer, const gc_view_t *view,
         gc_view_project(view, wp, &cur);
 
         if (i > 0)
-            draw_line(layer, prev, cur, color, opa, GCVIEW_LINE_WIDTH);
+            /* Draw arc tessellation slightly thicker than grid (2px) so
+             * toolpath stands out. draw_line handles width==2 fast path. */
+            draw_line(layer, prev, cur, color, opa, 2);
 
         prev = cur;
     }
@@ -546,12 +627,12 @@ static void grid_line_cb(bool is_major, gc_pt2_t p1, gc_pt2_t p2, void *ctx) {
         /* Iso: ALL lines width=1 to avoid LVGL's expensive AA thick-line
          * rasteriser on 30° diagonals.  Major lines are distinguished by
          * brightness only (no width difference). */
-        lv_color_t col = is_major ? lv_color_hex(0x00BB00) : lv_color_hex(0x005500);
+        lv_color_t col = is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR);
         lv_opa_t opa = is_major ? LV_OPA_COVER : LV_OPA_60;
         draw_line(gc->layer, p1, p2, col, opa, 1);
     } else {
         /* Use darker green constants for grid lines so g-code colors differ. */
-        lv_color_t col = is_major ? lv_color_hex(0x335533) : lv_color_hex(0x224422);
+        lv_color_t col = is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR);
         lv_opa_t opa = is_major ? (lv_opa_t)(GCVIEW_OPA_GRID + 40) : GCVIEW_OPA_GRID;
         /* Use 1px for grid lines too (major distinguished by brightness). */
         draw_line(gc->layer, p1, p2, col, opa, 1);
@@ -613,57 +694,86 @@ static void draw_settings_grid(lv_layer_t *layer, const gc_view_t *view,
         if (v0 > v1) { float t = v0; v0 = v1; v1 = t; }
     }
 
-    /* Choose step sizes for h and v axes. Map gdx->h and gdy->v for TOP view,
-     * for other views we keep the mapping generic: h->gdx, v->gdy. */
-    float step_h = gdx;
-    float step_v = gdy;
+    /* Choose step sizes for h and v axes. Use adaptive 1/5/10 step
+     * selection (same algorithm as draw_grid_ticks) so top/side views do
+     * not produce too many sub-grid lines when zoomed out. */
+    float ppm = view->ppm;
+    const float MIN_PX = 40.0f; /* min px between minor ticks (matches ticks) */
+
+    /* Compute adaptive minor/major per-axis using the same algorithm as
+     * draw_grid_ticks: pick a 'nice' minor step based on ppm, compute a
+     * major as 5× or 10× and allow app-provided gdx/gdy to override the
+     * major step (they represent the major spacing). */
+    float minor_h = nice_135_step(ppm, MIN_PX);
+    float minor_v = nice_135_step(ppm, MIN_PX);
+
+    float major_h = minor_h * ((minor_h * 5.0f * ppm >= 40.0f) ? 5.0f : 10.0f);
+    float major_v = minor_v * ((minor_v * 5.0f * ppm >= 40.0f) ? 5.0f : 10.0f);
+
+    /* If the app provided a fallback spacing, treat it as the major step. */
+    //if (gdx > 0.0f) major_h = gdx;
+    //if (gdy > 0.0f) major_v = gdy;
+
+    /* Use major step as the base grid step; subdivisions derived from it. */
+    float step_h = major_h;
+    float step_v = major_v;
 
     lv_draw_line_dsc_t dsc;
     lv_draw_line_dsc_init(&dsc);
-    dsc.color = lv_color_hex(0x003300); /* dark green */
+    dsc.color = lv_color_hex(LGV_COL_GRID_MINOR);
     dsc.width = 1;
     dsc.opa = LV_OPA_60;
 
-    /* Draw subdivision lines + main grid lines. */
+    /* Draw subdivision lines + main grid lines. Adaptively skip subdivs
+     * when their screen spacing is too small to avoid cluttering. */
     int subdiv = GCVIEW_GRID_SUBDIVISIONS > 1 ? GCVIEW_GRID_SUBDIVISIONS : 1;
     float sub_step_h = step_h / (float)subdiv;
     float sub_step_v = step_v / (float)subdiv;
+    float sub_px_h = sub_step_h * view->ppm;
+    float sub_px_v = sub_step_v * view->ppm;
+    const float SUBDIV_MIN_PX = 6.0f; /* don't draw sub-grid if below this */
+    bool draw_sub_h = (sub_px_h >= SUBDIV_MIN_PX);
+    bool draw_sub_v = (sub_px_v >= SUBDIV_MIN_PX);
 
     if (view->mode == GCVIEW_ISOMETRIC) {
         /* For iso: draw lines of constant X and constant Y on the Z=0 plane. */
         int subdiv = GCVIEW_GRID_SUBDIVISIONS > 1 ? GCVIEW_GRID_SUBDIVISIONS : 1;
-        float subx = step_h / (float)subdiv;
-        float suby = step_v / (float)subdiv;
+        float subx = sub_step_h;
+        float suby = sub_step_v;
 
         float x_first = floorf(h0 / subx) * subx; /* Start from the nearest lower multiple */
         for (float x = x_first; x <= h1 + 1e-6f; x += subx) {
-            bool is_major = (fabsf(fmodf(x, step_h)) < (subx * 0.5f)) || (fabsf(x) < 1e-6f);
+            bool is_major = (fabsf(fmodf(x, major_h)) < (subx * 0.1f)) || (fabsf(x) < 1e-6f);
+            if (!is_major && !draw_sub_h) continue; /* skip dense subdivs */
             gc_vec3_t w1 = gc_vec3(x, v0, 0);
             gc_vec3_t w2 = gc_vec3(x, v1, 0);
             gc_pt2_t p1, p2;
             gc_view_project(view, w1, &p1);
             gc_view_project(view, w2, &p2);
-            draw_line(layer, p1, p2, is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
-                      is_major ? LV_OPA_COVER : LV_OPA_70, is_major ? 2 : 1);
+            draw_line(layer, p1, p2,
+                      is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, 1);
         }
 
         float y_first = floorf(v0 / suby) * suby; /* Start from the nearest lower multiple */
         for (float y = y_first; y <= v1 + 1e-6f; y += suby) {
-            bool is_major = (fabsf(fmodf(y, step_v)) < (suby * 0.5f)) || (fabsf(y) < 1e-6f);
+            bool is_major = (fabsf(fmodf(y, major_v)) < (suby * 0.1f)) || (fabsf(y) < 1e-6f);
+            if (!is_major && !draw_sub_v) continue;
             gc_vec3_t w1 = gc_vec3(h0, y, 0);
             gc_vec3_t w2 = gc_vec3(h1, y, 0);
             gc_pt2_t p1, p2;
             gc_view_project(view, w1, &p1);
             gc_view_project(view, w2, &p2);
-            draw_line(layer, p1, p2, is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
-                      is_major ? LV_OPA_COVER : LV_OPA_70, is_major ? 2 : 1);
+            draw_line(layer, p1, p2,
+                      is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, 1);
         }
     } else {
         /* Existing non-iso logic (unchanged) */
         float h_sub_first = ceilf(h0 / sub_step_h) * sub_step_h;
         float tol_h = sub_step_h * 0.25f;
         for (float hh = h_sub_first; hh <= h1 + 1e-6f; hh += sub_step_h) {
-            bool is_major = (fabsf(fmodf(fabsf(hh), step_h)) < tol_h) || (fabsf(hh) < tol_h);
+            bool is_major = (fabsf(fmodf(fabsf(hh), major_h)) < (sub_step_h * 0.1f)) || (fabsf(hh) < 1e-6f);
             gc_vec3_t w1, w2;
             switch (view->mode) {
             case GCVIEW_TOP:    w1 = gc_vec3(hh, -v0, 0); w2 = gc_vec3(hh, -v1, 0); break;
@@ -676,16 +786,16 @@ static void draw_settings_grid(lv_layer_t *layer, const gc_view_t *view,
             gc_pt2_t p1, p2;
             gc_view_project(view, w1, &p1);
             gc_view_project(view, w2, &p2);
+            if (!is_major && !draw_sub_h) continue;
             draw_line(layer, p1, p2,
-                      is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
-                      is_major ? LV_OPA_COVER : LV_OPA_70,
-                      is_major ? 2 : 1);
+                      is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, 1);
         }
 
         float v_sub_first = ceilf(v0 / sub_step_v) * sub_step_v;
         float tol_v = sub_step_v * 0.25f;
         for (float vv = v_sub_first; vv <= v1 + 1e-6f; vv += sub_step_v) {
-            bool is_major = (fabsf(fmodf(fabsf(vv), step_v)) < tol_v) || (fabsf(vv) < tol_v);
+            bool is_major = (fabsf(fmodf(fabsf(vv), major_v)) < (sub_step_v * 0.1f)) || (fabsf(vv) < 1e-6f);
             gc_vec3_t w1, w2;
             switch (view->mode) {
             case GCVIEW_TOP:    w1 = gc_vec3(h0, -vv, 0); w2 = gc_vec3(h1, -vv, 0); break;
@@ -698,10 +808,10 @@ static void draw_settings_grid(lv_layer_t *layer, const gc_view_t *view,
             gc_pt2_t p1, p2;
             gc_view_project(view, w1, &p1);
             gc_view_project(view, w2, &p2);
+            if (!is_major && !draw_sub_v) continue;
             draw_line(layer, p1, p2,
-                      is_major ? lv_color_hex(0x00AA00) : lv_color_hex(0x006600),
-                      is_major ? LV_OPA_COVER : LV_OPA_70,
-                      is_major ? 2 : 1);
+                      is_major ? lv_color_hex(LGV_COL_GRID_MAJOR) : lv_color_hex(LGV_COL_GRID_MINOR),
+                      is_major ? LV_OPA_COVER : LV_OPA_70, 1);
         }
     }
 }
@@ -771,10 +881,11 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
     bool do_labels = false;
 #endif
 
-    /* Slightly darker green grid so g-code (non-green) stands out. */
-    lv_color_t col_minor = lv_color_hex(0x224422);
-    lv_color_t col_major = lv_color_hex(0x335533);
-    lv_color_t col_label = lv_color_hex(0x88CC88);
+    /* Use shared colour defines so both tick renderer and settings grid
+     * use identical colours and can be tuned at the top of the file. */
+    lv_color_t col_minor = lv_color_hex(LGV_COL_GRID_MINOR);
+    lv_color_t col_major = lv_color_hex(LGV_COL_GRID_MAJOR);
+    lv_color_t col_label = lv_color_hex(LGV_COL_GRID_LABEL);
 
     /* ── Helpers ── */
 #define IS_MAJOR(v)  (fabsf(fmodf(fabsf(v), major_step)) < minor_step * 0.1f \
@@ -1147,9 +1258,11 @@ static void draw_cb(lv_event_t *e) {
                 gc_view_project(view, seg->to, &p2);
 
                 if (seg->type == GCMOVE_RAPID) {
-                    draw_dashed_line(layer, p1, p2, col, opa, GCVIEW_LINE_WIDTH);
+                    /* dashed segments: make slightly thicker than grid */
+                    draw_dashed_line(layer, p1, p2, col, opa, 2);
                 } else {
-                    draw_line(layer, p1, p2, col, opa, GCVIEW_LINE_WIDTH);
+                    /* Draw linear moves thicker than grid lines so they stand out */
+                    draw_line(layer, p1, p2, col, opa, 2);
                 }
             }
         }

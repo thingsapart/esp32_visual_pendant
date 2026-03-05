@@ -19,7 +19,7 @@
  *      symptom: only the initial full-screen flush (y=0, RAMWR) rendered
  *      correctly; all subsequent partial redraws overwrote row 0.
  */
-#ifdef JC3248W535C
+#if defined(JC3248W535C) || defined(HW_AXS15231B)
 
 #include <stdlib.h>
 #include <sys/cdefs.h>

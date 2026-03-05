@@ -35,21 +35,36 @@ static const char *TAG = "arduino_serial_wrapper";
 #define RRF_SIM_UART_NUM 99  // Logical UART number for the RRF simulator
 
 // --- Ring Buffer Implementation ---
+// This is a single-producer / single-consumer (SPSC) lock-free ring buffer.
+// Producer: onReceiveGeneric() running in the UART event task (Core 0 typically)
+// Consumer: process_received_data() running in the machine task (Core 1)
+//
+// Rules for correctness on dual-core Xtensa LX7:
+//  - Only the producer writes `head`; only the consumer writes `tail`.
+//  - `count` is updated by both sides using __atomic builtins so the
+//    read-modify-write is visible across cores without a mutex.
+//  - `head` and `tail` themselves are only written by one side each, but
+//    the other side READS them, so we use release/acquire semantics.
 typedef struct {
   uint8_t *buffer;
-  size_t head;
-  size_t tail;
   size_t size;
-  size_t count;
+  // head is written by the producer, read by consumer/isfull checks.
+  // tail is written by the consumer, read by producer/isempty checks.
+  // Use volatile so the compiler never caches these in a register across a
+  // call boundary that can be preempted.
+  volatile size_t head;
+  volatile size_t tail;
+  // count is written by both sides; use __atomic operations.
+  volatile size_t count;
 } ring_buffer_t;
 
 static bool rb_init(ring_buffer_t *rb, size_t size) {
   rb->buffer = (uint8_t *)malloc(size);
   if (!rb->buffer) return false;
   rb->size = size;
-  rb->head = 0;
-  rb->tail = 0;
-  rb->count = 0;
+  __atomic_store_n(&rb->head,  0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&rb->tail,  0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&rb->count, 0u, __ATOMIC_RELAXED);
   return true;
 }
 
@@ -66,24 +81,34 @@ static void rb_free(ring_buffer_t *rb) {
 // (e.g. WiFi/ESP-NOW RF-calibration NVS writes during boot) will crash the CPU
 // when it tries to fetch these small functions from flash.
 static IRAM_ATTR bool rb_is_full(const ring_buffer_t *rb) {
-  return rb->count == rb->size;
+  return __atomic_load_n(&rb->count, __ATOMIC_ACQUIRE) == rb->size;
 }
 
-static IRAM_ATTR bool rb_is_empty(const ring_buffer_t *rb) { return rb->count == 0; }
+static IRAM_ATTR bool rb_is_empty(const ring_buffer_t *rb) {
+  return __atomic_load_n(&rb->count, __ATOMIC_ACQUIRE) == 0;
+}
 
+// Producer-side push.  Called only from onReceiveGeneric (UART event task).
 static IRAM_ATTR bool rb_push(ring_buffer_t *rb, uint8_t data) {
-  if (rb_is_full(rb)) return false;  // Buffer full
-  rb->buffer[rb->head] = data;
-  rb->head = (rb->head + 1) % rb->size;
-  rb->count++;
+  if (rb_is_full(rb)) return false;
+  size_t h = __atomic_load_n(&rb->head, __ATOMIC_RELAXED);
+  rb->buffer[h] = data;
+  // Store the updated head with RELEASE so the consumer sees the data write
+  // before it sees the new count.
+  __atomic_store_n(&rb->head, (h + 1) % rb->size, __ATOMIC_RELEASE);
+  __atomic_fetch_add(&rb->count, 1u, __ATOMIC_RELEASE);
   return true;
 }
 
+// Consumer-side pop.  Called only from process_received_data (machine task).
 static bool rb_pop(ring_buffer_t *rb, uint8_t *data) {
-  if (rb_is_empty(rb)) return false;  // Buffer empty
-  *data = rb->buffer[rb->tail];
-  rb->tail = (rb->tail + 1) % rb->size;
-  rb->count--;
+  if (rb_is_empty(rb)) return false;
+  size_t t = __atomic_load_n(&rb->tail, __ATOMIC_RELAXED);
+  // ACQUIRE ensures we read the buffer byte that the producer wrote before
+  // it incremented count.
+  *data = rb->buffer[t];
+  __atomic_store_n(&rb->tail, (t + 1) % rb->size, __ATOMIC_RELEASE);
+  __atomic_fetch_sub(&rb->count, 1u, __ATOMIC_RELEASE);
   return true;
 }
 
@@ -145,7 +170,8 @@ static void process_received_data(serial_port_data_t *port_data) {
   if (rb_is_empty(&port_data->rx_buffer)) return;
 
   uint8_t byte;
-  LOGD(TAG, "Processing %d bytes from serial ring buffer for UART %d.", port_data->rx_buffer.count, port_data->uart_num);
+  LOGD(TAG, "Processing %zu bytes from serial ring buffer for UART %d.",
+       __atomic_load_n(&port_data->rx_buffer.count, __ATOMIC_RELAXED), port_data->uart_num);
   while (rb_pop(&port_data->rx_buffer, &byte)) {
     // Check for line buffer overflow before adding the character
     if (port_data->line_pos >= MAX_LINE_LENGTH - 1) {
@@ -284,6 +310,10 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
         } else {
             // LOGI(TAG, "Standard Serial already initialized or connected.");
         }
+      // Ensure writes do not block when the TX ring is full: drop-on-full mode.
+    #if defined(ESP32_HW)
+      Serial.setTxTimeoutMs(0);
+    #endif
     } else {  // HardwareSerial UART 1 or 2 etc.
         HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
         if (!hw_serial) {
@@ -627,6 +657,11 @@ void add_standard_serial() {
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
+  // Make standard Serial non-blocking on TX (drop when full)
+#if defined(ESP32_HW)
+  Serial.setTxTimeoutMs(0);
+#endif
+
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
@@ -678,11 +713,15 @@ serial_handle_t get_serial_handle(int uart_num) {
   return NULL;
 }
 
+// ---------------------------------------------------------------------------
+
 void default_serial_write(const uint8_t *buf, size_t len) {
 #ifdef ESP32_HW
-  // Skip write entirely when no USB-CDC host is connected.  Without this,
-  // every LOGI/LOGE call stalls the calling task waiting for TinyUSB to flush
-  // a full TX buffer into the void.
+  // Fast lock-free check: isCDC_Connected() / isPlugged() — no lock needed.
+  // With setTxTimeoutMs(0) called at boot, write() is already non-blocking
+  // (drops data when the TX ring buffer is full rather than waiting).  This
+  // guard is still useful as a cheap early exit when USB is physically
+  // unplugged so we don't take the serial write_mutex unnecessarily.
   if (!Serial) return;
 #endif
   serial_handle_t handle = get_serial_handle(-1);
@@ -719,33 +758,35 @@ void serial_process_input(serial_handle_t handle) {
     return;
   }
 
-#ifdef PROCESS_HW_SERIAL_IN_ISR
-  // For HardwareSerial on ESP32, data is processed in onReceive.
-  // Only process manually if it's not a HW serial port using onReceive.
-  if (port_data->is_hw_serial) {
-    // Optional: Could add a check here if onReceive failed or buffer got full,
-    // and try processing again, but generally not needed if onReceive works.
-    return;
-  }
-#endif
-
-  // Manually read from stream into ring buffer for non-HW/non-onReceive ports
-  if (port_data->stream) {
-    while (port_data->stream->available()) {
-      int byte_int = port_data->stream->read();
-      if (byte_int != -1) {
-        if (!rb_push(&port_data->rx_buffer, (uint8_t)byte_int)) {
-          LOGE(TAG, "serial_process_input: Ring buffer full for UART %d",
-               port_data->uart_num);
-          break;  // Stop reading if buffer is full
+  // For HardwareSerial ports that have an onReceive callback registered,
+  // onReceiveGeneric() (running in the UART event task) is already the sole
+  // producer that drains the HW FIFO into rx_buffer.  DO NOT also read from
+  // the HW serial stream here: that creates two concurrent producers calling
+  // rb_push() without synchronisation, causing non-atomic count++ races on
+  // the dual-core ESP32-S3 that silently drop bytes or corrupt the ring
+  // buffer state.  serial_process_input() is still needed to call
+  // process_received_data() so the bytes that onReceiveGeneric enqueued get
+  // assembled into lines and dispatched to callbacks.
+  if (!port_data->is_hw_serial) {
+    // Non-HW (RRF sim, plain Stream): manually drain into ring buffer.
+    if (port_data->stream) {
+      while (port_data->stream->available()) {
+        int byte_int = port_data->stream->read();
+        if (byte_int != -1) {
+          if (!rb_push(&port_data->rx_buffer, (uint8_t)byte_int)) {
+            LOGE(TAG, "serial_process_input: Ring buffer full for UART %d",
+                 port_data->uart_num);
+            break;
+          }
+        } else {
+          break;
         }
-      } else {
-        break;  // No more data or error
       }
     }
   }
 
-  // Process whatever is in the ring buffer now
+  // Process whatever is in the ring buffer now (bytes pushed by onReceiveGeneric
+  // for HW serial, or by the loop above for non-HW serial).
   process_received_data(port_data);
 }
 

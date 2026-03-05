@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#undef LOG_LOCAL_LEVEL
 #define LOG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
@@ -26,6 +27,7 @@
 #include "machine/machine_rrf.h"
 #include "tasks/machine_response_proc_task.h"
 #include "tasks/machine_send_task.h"
+#include "driver/task_registry.h"
 
 static const char *TAG = "hub_main";
 
@@ -123,8 +125,6 @@ void on_machine_state_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_STATUS;
   msg.status = machine->machine_status;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  /* Minimal console pulse to avoid log flooding */
-  putchar('.');
 }
 
 void on_position_change(machine_interface_t *machine, void *user_data) {
@@ -137,8 +137,6 @@ void on_position_change(machine_interface_t *machine, void *user_data) {
   msg.wcs_x = machine->wcs_position[0];
   msg.wcs_y = machine->wcs_position[1];
   msg.wcs_z = machine->wcs_position[2];
-  /* Minimal pulse instead of verbose log */
-  putchar('.');
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
 }
 
@@ -150,7 +148,6 @@ void on_home_change(machine_interface_t *machine, void *user_data) {
   msg.x_homed = machine->axes_homed[0];
   msg.y_homed = machine->axes_homed[1];
   msg.z_homed = machine->axes_homed[2];
-  putchar('.');
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
 }
 
@@ -161,7 +158,6 @@ void on_wcs_change(machine_interface_t *machine, void *user_data) {
   msg.type = MSG_TYPE_WCS;
   msg.wcs = machine->wcs;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  putchar('.');
 }
 
 void on_feed_change(machine_interface_t *machine, void *user_data) {
@@ -172,7 +168,6 @@ void on_feed_change(machine_interface_t *machine, void *user_data) {
   msg.feed_req = machine->feed_req;
   msg.feed_multiplier = machine->feed_multiplier;
   remote_wrapper_send(display_mac_address, (uint8_t *)&msg, sizeof(msg));
-  putchar('.');
 }
 
 void on_sensors_change(machine_interface_t *machine, void *user_data) {
@@ -301,7 +296,6 @@ void on_spindles_tools_change(machine_interface_t *machine, void *user_data) {
 
   remote_wrapper_send(display_mac_address, buf, total_len);
   free(buf);
-  putchar('.');
 }
 
 void on_files_changed(machine_interface_t *mach, void *user_data,
@@ -1121,7 +1115,6 @@ void machine_poll_send_task_iter() {
       smsg.status = MACHINE_STATUS_WAITING_FOR_MACHINE;
       led_status_sending();
       remote_wrapper_send(display_mac_address, (uint8_t *)&smsg, sizeof(smsg));
-      putchar('.');
     }
     if (iter == 2) {
       // Also send a keep-alive so the client knows the hub itself is running.

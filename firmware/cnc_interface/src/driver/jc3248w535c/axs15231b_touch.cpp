@@ -1,5 +1,7 @@
 // https://github.com/byte-me404/JC3248W535_lvgl_test/
 
+#if defined(JC3248W535C) || defined(HW_AXS15231B)
+
 #include "axs15231b_touch.h"
 
 
@@ -134,3 +136,5 @@ bool AXS15231B_Touch::update() {
 
     return true;
 }
+
+#endif

@@ -23,10 +23,10 @@
 #define C6_BRIDGE_UART_NUM   0
 #endif
 #ifndef C6_BRIDGE_UART_TX
-#define C6_BRIDGE_UART_TX    16
+#define C6_BRIDGE_UART_TX    31
 #endif
 #ifndef C6_BRIDGE_UART_RX
-#define C6_BRIDGE_UART_RX    17
+#define C6_BRIDGE_UART_RX    30
 #endif
 #ifndef C6_BRIDGE_UART_BAUD
 #define C6_BRIDGE_UART_BAUD  921600

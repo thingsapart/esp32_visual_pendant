@@ -32,6 +32,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "driver/sdio_slave.h"
 
 #include "bridge_transport.h"
@@ -110,13 +111,26 @@ void bridge_transport_init(void)
              SDIO_PKT_SIZE);
 
     // 1. Configure and initialise the SDIO slave peripheral.
+    // NOTE: calling sdio_slave_deinit() here on some ESP32-C6 toolchain
+    // versions can dereference uninitialised internals and crash during
+    // early boot (observed in practice). Skip the unconditional deinit
+    // and initialise directly; if a previous run left the peripheral in a
+    // bad state a reset will be performed by the watchdog/restart logic.
+
     sdio_slave_config_t cfg = {
         .sending_mode       = SDIO_SLAVE_SEND_PACKET,
         .send_queue_size    = C6_BRIDGE_SDIO_TX_BUF_COUNT,
         .recv_buffer_size   = SDIO_PKT_SIZE,
         .event_cb           = NULL,    // no interrupt callback needed
     };
-    ESP_ERROR_CHECK(sdio_slave_initialize(&cfg));
+    esp_err_t err = sdio_slave_initialize(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sdio_slave_initialize failed: %d — will retry in 3 s", err);
+        // Delay before restart so the log is visible and we don't spin-reboot.
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        esp_restart();
+        return;
+    }
 
     // 2. Allocate and register host→slave DMA receive buffers.
     // sdio_slave_recv_register_buf() returns the handle directly (not via an
@@ -126,14 +140,21 @@ void bridge_transport_init(void)
                                                     MALLOC_CAP_DMA);
         if (!s_rx_bufs[i]) {
             ESP_LOGE(TAG, "OOM: failed to allocate RX buffer %d", i);
+            sdio_slave_deinit();
             return;
         }
         s_rx_handles[i] = sdio_slave_recv_register_buf(s_rx_bufs[i]);
         if (!s_rx_handles[i]) {
             ESP_LOGE(TAG, "sdio_slave_recv_register_buf failed for buf %d", i);
+            sdio_slave_deinit();
             return;
         }
-        ESP_ERROR_CHECK(sdio_slave_recv_load_buf(s_rx_handles[i]));
+        esp_err_t lerr = sdio_slave_recv_load_buf(s_rx_handles[i]);
+        if (lerr != ESP_OK) {
+            ESP_LOGE(TAG, "sdio_slave_recv_load_buf[%d] failed: %d", i, lerr);
+            sdio_slave_deinit();
+            return;
+        }
     }
 
     // 3. Initialise the TX pool semaphore.
@@ -142,7 +163,13 @@ void bridge_transport_init(void)
     configASSERT(s_tx_sem);
 
     // 4. Start the slave (begins responding to host enumeration/SDIO traffic).
-    ESP_ERROR_CHECK(sdio_slave_start());
+    err = sdio_slave_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sdio_slave_start failed: %d — will retry in 3 s", err);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        esp_restart();
+        return;
+    }
 
     ESP_LOGI(TAG, "SDIO slave started, waiting for host to enumerate...");
 }
@@ -165,8 +192,10 @@ int bridge_transport_write(const uint8_t *buf, size_t len)
 
     // Queue the buffer for the host to read.  The 'arg' (last parameter) is
     // the slot pointer so we can release it in sdio_slave_send_get_finished().
+    // Use a bounded timeout (200 ms) instead of portMAX_DELAY so a stalled
+    // host cannot deadlock the main task and trigger the task watchdog.
     esp_err_t err = sdio_slave_send_queue(slot->data, len,
-                                          (void *)slot, portMAX_DELAY);
+                                          (void *)slot, pdMS_TO_TICKS(200));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "write: send_queue err %d", err);
         tx_pool_release(slot);

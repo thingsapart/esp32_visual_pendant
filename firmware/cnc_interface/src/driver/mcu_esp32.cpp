@@ -202,7 +202,36 @@ void mcu_setup() {
   init_standard_serial(115200, CFG_SERIAL_8N1, USB_UART_PIN_RX,
                        USB_UART_PIN_TX);
 #endif
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT)
+  // On HWCDC (ARDUINO_USB_MODE=1) the TX ring buffer is only 256 bytes and
+  // tx_timeout_ms defaults to 100 ms.  On macOS the USB host enumerates the
+  // device and sends periodic IN tokens, so isCDC_Connected() returns true
+  // even when no terminal app has the port open.  write() then takes the
+  // "connected" blocking path and stalls for up to 100 ms each call when the
+  // 256-byte ring buffer is full.  With 20-40 LOGD/LOGV calls per poll cycle
+  // (machine_rrf.c is compiled at D_VERBOSE), hub_task accumulates seconds of
+  // stall time per 120-ms poll, never draining the 4096-byte UART ring buffer.
+  // The buffer fills (~40 unprocessed JSON messages), rb_push silently drops
+  // bytes including '\n' terminators, line_pos never resets, and the next
+  // message is concatenated onto the partial previous line — producing the
+  // observed {"ke{" / {"ke}" corruption at the start of JSON responses.
+  //
+  // Fix: setTxTimeoutMs(0) makes write() non-blocking — it immediately drops
+  // data rather than waiting when the ring buffer is full.  No task ever stalls
+  // inside default_serial_write() again.
+  Serial.setTxTimeoutMs(0);
+#endif
+  // Do NOT call Serial.setDebugOutput(true) on USB-CDC builds.
+  // setDebugOutput routes ESP-IDF framework logs (WiFi, ESP-NOW, etc.)
+  // directly through the Serial (HWCDC) write path, bypassing the !Serial
+  // guard and the setTxTimeoutMs(0) timeout we set above.  Those IDF log
+  // calls can still block if they race with a connected state transition.
+  // Application-level logging already uses default_serial_write() which has
+  // the correct guards; setDebugOutput is not needed.
+#if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
+  // Only safe on builds where Serial is a plain hardware UART (always "connected").
   Serial.setDebugOutput(true);
+#endif
   LOGI(TAG, "PRE-INIT");
   delay(200);
 
@@ -216,10 +245,14 @@ void mcu_startup() {
 #endif
 
   LOGI(TAG, "POST-INIT");
+  // P4 has the potential to run custon ESP32-C6 firmware which only acts as ESP-NOW
+  // bridge. That firmware will make these lines crash.
+  #ifndef ESP32P4_HW
   WiFi.mode(WIFI_STA);
   WiFi.STA.begin();
   print_mac_address();
   WiFi.STA.end();
+  #endif
   LOGI(TAG, "POST-INIT DONE");
 }
 

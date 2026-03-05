@@ -1,6 +1,6 @@
-#include "dwc_http_client_wrapper.h"
+#ifdef DWC_MACHINE_MODE
 
-#include "debug.h"
+#include "dwc_http_client_wrapper.h"
 
 #ifdef ESP32_HW
 #define UI_DEBUG_LOCAL_LEVEL D_WARN
@@ -181,3 +181,5 @@ int dwc_http_get(dwc_http_handle_t handle, const char* path,
 }  // extern "C"
 
 #endif  // ESP32_HW
+
+#endif // DWC_MACHINE_MODE

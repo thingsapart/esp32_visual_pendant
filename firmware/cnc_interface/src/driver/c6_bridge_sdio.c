@@ -246,8 +246,10 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
     xSemaphoreTake(s_rx_mutex, portMAX_DELAY);
 
     size_t    rx_size = 0;
+    /* essl_get_packet expects a timeout in milliseconds.  Do not convert
+     * to ticks here (the implementation converts ms->ticks internally). */
     esp_err_t err = essl_get_packet(s_essl, s_rx_dma_buf, C6_SDIO_PKT_SIZE,
-                                     &rx_size, pdMS_TO_TICKS(timeout_ms));
+                                     &rx_size, timeout_ms);
 
     xSemaphoreGive(s_rx_mutex);
 
@@ -256,6 +258,12 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "essl_get_packet: %s", esp_err_to_name(err));
+        /* Avoid busy-looping if the underlying ESSL layer reports invalid
+         * arguments (which can happen early during bring-up). Pause briefly
+         * to yield CPU and allow other init tasks to make progress. */
+        if (err == ESP_ERR_INVALID_ARG) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
         return false;
     }
     if (rx_size == 0 || rx_size > C6_SDIO_PKT_SIZE) {
@@ -292,6 +300,11 @@ void c6_sdio_bridge_deinit(void)
         heap_caps_free(s_card);
         s_card = NULL;
     }
+}
+
+bool c6_sdio_bridge_is_ready(void)
+{
+    return (s_essl != NULL) && (s_card != NULL);
 }
 
 #endif /* ESP32P4_HW && REMOTE_COMMS_C6_SDIO_BRIDGE */

@@ -106,6 +106,13 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
  */
 void c6_sdio_bridge_deinit(void);
 
+/**
+ * @brief Query whether the SDIO bridge appears initialized and ready.
+ *
+ * Returns true if the ESSL device and card structures are present.
+ */
+bool c6_sdio_bridge_is_ready(void);
+
 #ifdef __cplusplus
 }
 #endif
