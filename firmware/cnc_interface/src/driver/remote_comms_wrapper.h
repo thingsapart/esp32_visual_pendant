@@ -362,6 +362,8 @@ typedef void (*remote_wrapper_send_cb_t)(const uint8_t *mac_addr, int status,
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data);
 
+void remote_wrapper_print_stats(void);
+
 // Maximum number of concurrent recv callbacks (machine_remote +
 // cam_transport + spares).
 #define REMOTE_WRAPPER_MAX_RECV_CBS 4

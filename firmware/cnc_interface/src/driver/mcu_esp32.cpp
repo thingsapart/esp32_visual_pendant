@@ -7,6 +7,7 @@
 #include "WiFi.h"
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
+#include "driver/remote_comms_wrapper.h"
 #include "sdkconfig.h"
 
 #if (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF)
@@ -67,6 +68,9 @@ void ram_usage() {
     // Single atomic write through the shared serial mutex – no separate flush
     // needed; the TinyUSB CDC stack drains the TX FIFO every USB SOF (~1 ms).
     default_serial_write((const uint8_t *)buf, (size_t)n);
+
+    // Also dump bridge stats if applicable:
+    remote_wrapper_print_stats();
 }
 
 #ifdef HAS_CORE_DUMP

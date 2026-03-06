@@ -163,6 +163,14 @@ static size_t encode_frame(uint8_t *out_buf, uint8_t dir,
 
 // ---- Hello / debug helpers --------------------------------------------------
 
+static struct {
+    uint32_t espnow_rx;
+    uint32_t espnow_tx_ok;
+    uint32_t espnow_tx_err;
+    uint32_t p4_rx_frames;
+    uint32_t p4_rx_err;
+} s_stats = {0};
+
 static size_t build_hello_text(char *buf, size_t buf_size)
 {
     char transport_desc[120];
@@ -176,11 +184,17 @@ static size_t build_hello_text(char *buf, size_t buf_size)
         "%s\r\n"
         "Channel  : %d\r\n"
         "MAC      : %s\r\n"
-        "Status   : ready\r\n",
+        "Status   : ready\r\n"
+        "Stats    : EN_RX=%u EN_TX_OK=%u EN_TX_ERR=%u P4_RX=%u P4_ERR=%u\r\n",
         BRIDGE_PROTOCOL_VERSION,
         transport_desc,
         C6_BRIDGE_WIFI_CHANNEL,
-        WiFi.macAddress().c_str());
+        WiFi.macAddress().c_str(),
+        (unsigned)s_stats.espnow_rx,
+        (unsigned)s_stats.espnow_tx_ok,
+        (unsigned)s_stats.espnow_tx_err,
+        (unsigned)s_stats.p4_rx_frames,
+        (unsigned)s_stats.p4_rx_err);
 }
 
 /**
@@ -222,6 +236,7 @@ static void send_hello_probe_response(void)
 static void on_espnow_recv(const esp_now_recv_info_t *info,
                             const uint8_t *data, int len)
 {
+    s_stats.espnow_rx++;
     if (len <= 0 || len > (int)BRIDGE_MAX_PAYLOAD) {
         C6_LOG("[BRIDGE] RX: invalid len %d, dropping\n", len);
         return;
@@ -263,7 +278,10 @@ static void dispatch_to_espnow(uint8_t *mac, uint8_t *data, uint16_t len)
     peer_add(mac);
     esp_err_t err = esp_now_send(mac, data, len);
     if (err != ESP_OK) {
+        s_stats.espnow_tx_err++;
         C6_LOG("[BRIDGE] esp_now_send err=%d\n", err);
+    } else {
+        s_stats.espnow_tx_ok++;
     }
 }
 
@@ -318,6 +336,7 @@ static void process_byte(uint8_t b)
         case ST_CRC: {
             uint8_t expected = bridge_crc8(s_rx_mac, s_rx_len, s_rx_data);
             if (b == expected) {
+                s_stats.p4_rx_frames++;
                 if (s_rx_dir == BRIDGE_DIR_OUTGOING) {
                     dispatch_to_espnow(s_rx_mac, s_rx_data, s_rx_len);
                 } else if (s_rx_dir == BRIDGE_DIR_DEBUG) {
@@ -333,6 +352,7 @@ static void process_byte(uint8_t b)
                                   s_rx_dir);
                 }
             } else {
+                s_stats.p4_rx_err++;
                 C6_LOG("[BRIDGE] CRC mismatch: got 0x%02X exp 0x%02X\n",
                               b, expected);
             }

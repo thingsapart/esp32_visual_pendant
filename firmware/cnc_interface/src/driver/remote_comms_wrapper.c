@@ -1,6 +1,27 @@
 // remote_comms_wrapper.c
 
 #include "remote_comms_wrapper.h"
+#include "esp_log.h"
+#include "debug.h"
+
+// ---- Shared Stats ----
+struct remote_wrapper_stats_t {
+    uint32_t rx_total;
+    uint32_t rx_bridge_crc_err;
+    uint32_t tx_total;
+    uint32_t tx_failed;
+    uint32_t bridge_timeouts;
+};
+static struct remote_wrapper_stats_t s_remote_stats = {0};
+
+void remote_wrapper_print_stats(void) {
+    LOGI("ESP-NOW", "Stats - RX: %u, TX: %u, TX Err: %u, CRC Err: %u, TO: %u",
+           (unsigned)s_remote_stats.rx_total, 
+           (unsigned)s_remote_stats.tx_total, 
+           (unsigned)s_remote_stats.tx_failed,
+           (unsigned)s_remote_stats.rx_bridge_crc_err,
+           (unsigned)s_remote_stats.bridge_timeouts);
+}
 
 #if defined(ESP32_HW) && !defined(ESP32P4_HW)
 
@@ -983,6 +1004,7 @@ static void c6_sdio_rx_task(void *arg)
                     uint8_t expected = bridge_crc8(mac, payload_len, data_buf);
                     if (b == expected) {
                         if (dir == BRIDGE_DIR_INCOMING) {
+                            s_remote_stats.rx_total++;
                             dispatch_recv(mac, data_buf, (int)payload_len);
                         } else if (dir == BRIDGE_DIR_DEBUG) {
                             uint16_t safe = payload_len < BRIDGE_MAX_PAYLOAD
@@ -992,6 +1014,7 @@ static void c6_sdio_rx_task(void *arg)
                             LOGI(TAG, "Debug from C6: %s", (char *)data_buf);
                         }
                     } else {
+                        s_remote_stats.rx_bridge_crc_err++;
                         LOGW(TAG, "SDIO RX: CRC mismatch (got 0x%02X exp 0x%02X)",
                              b, expected);
                     }
@@ -1013,6 +1036,11 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
     g_send_cb        = send_cb;
     g_send_user_data = user_data;
     remote_wrapper_add_recv_cb(recv_cb, user_data);
+
+    /* Already running / initialized? */
+    if (g_rx_task != NULL) {
+        return true;
+    }
 
     if (!c6_sdio_bridge_init()) {
         LOGE(TAG, "c6_sdio_bridge_init() failed");
@@ -1079,6 +1107,7 @@ bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
 {
     if (len > BRIDGE_MAX_PAYLOAD) {
         LOGE(TAG, "send_now: payload %zu > max %d", len, BRIDGE_MAX_PAYLOAD);
+        s_remote_stats.tx_failed++;
         return false;
     }
     uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
@@ -1086,8 +1115,10 @@ bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
                                              mac_addr, data, (uint16_t)len);
     if (!c6_sdio_bridge_write(frame, frame_len)) {
         LOGE(TAG, "send_now: c6_sdio_bridge_write failed");
+        s_remote_stats.tx_failed++;
         return false;
     }
+    s_remote_stats.tx_total++;
     LOGV(TAG, "send_now: %zu payload bytes → %zu frame bytes", len, frame_len);
     return true;
 }
