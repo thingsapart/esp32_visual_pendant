@@ -8,6 +8,7 @@
 struct remote_wrapper_stats_t {
     uint32_t rx_total;
     uint32_t rx_bridge_crc_err;
+    uint32_t rx_err;
     uint32_t tx_total;
     uint32_t tx_failed;
     uint32_t bridge_timeouts;
@@ -15,11 +16,12 @@ struct remote_wrapper_stats_t {
 static struct remote_wrapper_stats_t s_remote_stats = {0};
 
 void remote_wrapper_print_stats(void) {
-    LOGI("ESP-NOW", "Stats - RX: %u, TX: %u, TX Err: %u, CRC Err: %u, TO: %u",
-           (unsigned)s_remote_stats.rx_total, 
-           (unsigned)s_remote_stats.tx_total, 
+    LOGI("ESP-NOW", "Stats - RX: %u, TX: %u, TX Err: %u, CRC Err: %u, RX Err: %u, TO: %u",
+           (unsigned)s_remote_stats.rx_total,
+           (unsigned)s_remote_stats.tx_total,
            (unsigned)s_remote_stats.tx_failed,
            (unsigned)s_remote_stats.rx_bridge_crc_err,
+           (unsigned)s_remote_stats.rx_err,
            (unsigned)s_remote_stats.bridge_timeouts);
 }
 
@@ -591,17 +593,18 @@ static void c6_bridge_rx_task(void *arg)
                 payload_len = b;
                 state       = RX_LEN_HI;
                 break;
-            case RX_LEN_HI:
-                payload_len |= ((uint16_t)b << 8);
-                if (payload_len == 0 || payload_len > BRIDGE_MAX_PAYLOAD) {
-                    LOGW(TAG, "Bridge RX: bad length %u — resyncing",
-                         payload_len);
-                    state = RX_SOF0;
-                } else {
-                    data_pos = 0;
-                    state    = RX_DATA;
-                }
-                break;
+                case RX_LEN_HI:
+                    payload_len |= ((uint16_t)b << 8);
+                    if (payload_len == 0 || payload_len > BRIDGE_MAX_PAYLOAD) {
+                        s_remote_stats.rx_err++;
+                        LOGW(TAG, "Bridge RX: bad length %u — resyncing",
+                             payload_len);
+                        state = RX_SOF0;
+                    } else {
+                        data_pos = 0;
+                        state    = RX_DATA;
+                    }
+                    break;
             case RX_DATA:
                 data_buf[data_pos++] = b;
                 if (data_pos == payload_len) state = RX_CRC;
@@ -838,6 +841,13 @@ void remote_wrapper_deinit()
 
 static const char *TAG = "remote_comms_wrapper (SDIO)";
 
+// Verbose logging macro: enabled only when C6_BRIDGE_LOG_EXT is defined.
+#ifdef C6_BRIDGE_LOG_EXT
+#define REMOTE_BRIDGE_VLOG(fmt, ...) LOGV(TAG, fmt, ##__VA_ARGS__)
+#else
+#define REMOTE_BRIDGE_VLOG(fmt, ...) do { (void)0; } while (0)
+#endif
+
 // ---- Bridge protocol constants (mirror bridge_protocol.h) ------------------
 #define BRIDGE_SOF0           0xAB
 #define BRIDGE_SOF1           0xCD
@@ -959,6 +969,8 @@ static void c6_sdio_rx_task(void *arg)
             continue;
         }
 
+        REMOTE_BRIDGE_VLOG("SDIO RX pkt_len=%zu", pkt_len);
+
         /* Feed the received bytes through the same state machine used by the
          * UART bridge so that framing errors and CRC mismatches are caught. */
         for (size_t bi = 0; bi < pkt_len; bi++) {
@@ -988,6 +1000,7 @@ static void c6_sdio_rx_task(void *arg)
                 case RX_LEN_HI:
                     payload_len |= ((uint16_t)b << 8);
                     if (payload_len == 0 || payload_len > BRIDGE_MAX_PAYLOAD) {
+                        s_remote_stats.rx_err++;
                         LOGW(TAG, "SDIO RX: bad length %u — resyncing",
                              payload_len);
                         state = RX_SOF0;

@@ -54,7 +54,7 @@
 #define BRIDGE_DEBUG_MAC        { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
 
 #define BRIDGE_MAC_LEN          6
-#define BRIDGE_MAX_PAYLOAD      244   /**< ESP-NOW max data len */
+#define BRIDGE_MAX_PAYLOAD      250   /**< ESP-NOW max data len */
 
 /** Number of bytes before the variable-length payload (SOF+DIR+MAC+LEN). */
 #define BRIDGE_HEADER_SIZE      (1 + 1 + 1 + BRIDGE_MAC_LEN + 2)

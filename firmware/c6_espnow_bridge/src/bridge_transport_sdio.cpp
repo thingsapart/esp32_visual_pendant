@@ -40,6 +40,13 @@
 
 static const char *TAG = "sdio_transport";
 
+// Verbose logging macro: enabled only when C6_BRIDGE_LOG_EXT is defined.
+#ifdef C6_BRIDGE_LOG_EXT
+#define BRIDGE_VLOG(fmt, ...) ESP_LOGV(TAG, fmt, ##__VA_ARGS__)
+#else
+#define BRIDGE_VLOG(fmt, ...) do { (void)0; } while (0)
+#endif
+
 // ---- Build-time configuration -----------------------------------------------
 
 #ifndef C6_BRIDGE_SDIO_BUS_WIDTH
@@ -51,7 +58,7 @@ static const char *TAG = "sdio_transport";
 #endif
 
 #ifndef C6_BRIDGE_SDIO_TX_BUF_COUNT
-#define C6_BRIDGE_SDIO_TX_BUF_COUNT   4
+#define C6_BRIDGE_SDIO_TX_BUF_COUNT   8
 #endif
 
 /** Each SDIO packet holds exactly one bridge frame (max size 262 bytes). */
@@ -72,6 +79,7 @@ static sdio_slave_buf_handle_t s_rx_handles[C6_BRIDGE_SDIO_RX_BUF_COUNT];
 typedef struct {
     uint8_t   data[SDIO_PKT_SIZE];
     bool      in_use;
+    TickType_t ts;
 } tx_slot_t;
 
 static tx_slot_t    s_tx_pool[C6_BRIDGE_SDIO_TX_BUF_COUNT];
@@ -85,6 +93,7 @@ static tx_slot_t *tx_pool_acquire(TickType_t ticks_to_wait)
     for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT; i++) {
         if (!s_tx_pool[i].in_use) {
             s_tx_pool[i].in_use = true;
+            s_tx_pool[i].ts = xTaskGetTickCount();
             return &s_tx_pool[i];
         }
     }
@@ -96,7 +105,31 @@ static tx_slot_t *tx_pool_acquire(TickType_t ticks_to_wait)
 static void tx_pool_release(tx_slot_t *slot)
 {
     slot->in_use = false;
+    slot->ts = 0;
     xSemaphoreGive(s_tx_sem);
+}
+
+// Reclaim any slots that appear to have been stuck in-use for longer than
+// 'age_ticks'. Returns number of reclaimed slots (and gives the semaphore
+// for each reclaimed slot). This is a best-effort rescue path for cases
+// where the host DMA completion was missed and a slot was leaked.
+static int tx_pool_reclaim_old_slots(TickType_t age_ticks, int max_reclaim)
+{
+    int reclaimed = 0;
+    TickType_t now = xTaskGetTickCount();
+    for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT && reclaimed < max_reclaim; i++) {
+        if (s_tx_pool[i].in_use && s_tx_pool[i].ts != 0) {
+            TickType_t age = now - s_tx_pool[i].ts;
+            if (age >= age_ticks) {
+                BRIDGE_VLOG("Reclaiming stuck TX slot %d (age=%u ticks)", i, (unsigned)age);
+                s_tx_pool[i].in_use = false;
+                s_tx_pool[i].ts = 0;
+                xSemaphoreGive(s_tx_sem);
+                reclaimed++;
+            }
+        }
+    }
+    return reclaimed;
 }
 
 // ---- Public API -------------------------------------------------------------
@@ -182,8 +215,8 @@ int bridge_transport_write(const uint8_t *buf, size_t len)
     }
 
     // Acquire a DMA-accessible TX slot from the pool.
-    // Wait up to 100 ms before giving up (host stall is unusual).
-    tx_slot_t *slot = tx_pool_acquire(pdMS_TO_TICKS(100));
+    // Wait a bit longer before giving up — host stalls have been observed.
+    tx_slot_t *slot = tx_pool_acquire(pdMS_TO_TICKS(500));
     if (!slot) {
         ESP_LOGW(TAG, "write: TX pool empty, dropping %zu bytes", len);
         return -1;
@@ -195,9 +228,17 @@ int bridge_transport_write(const uint8_t *buf, size_t len)
     // Use a bounded timeout (200 ms) instead of portMAX_DELAY so a stalled
     // host cannot deadlock the main task and trigger the task watchdog.
     esp_err_t err = sdio_slave_send_queue(slot->data, len,
-                                          (void *)slot, pdMS_TO_TICKS(200));
+                                          (void *)slot, pdMS_TO_TICKS(2000));
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "write: send_queue err %d", err);
+        ESP_LOGE(TAG, "write: send_queue err %d (%s)", err, esp_err_to_name(err));
+        // Diagnostic: count in-use slots
+        int in_use = 0;
+        for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT; i++) if (s_tx_pool[i].in_use) in_use++;
+        UBaseType_t sem_count = uxSemaphoreGetCount(s_tx_sem);
+        BRIDGE_VLOG("write: send_queue failed, in_use=%d sem_count=%u", in_use, (unsigned)sem_count);
+        // Attempt conservative reclaim of one old slot to recover from leaks.
+        int reclaimed = tx_pool_reclaim_old_slots(pdMS_TO_TICKS(3000), 1);
+        if (reclaimed) BRIDGE_VLOG("write: reclaimed %d old slot(s)", reclaimed);
         tx_pool_release(slot);
         return -1;
     }
@@ -205,15 +246,30 @@ int bridge_transport_write(const uint8_t *buf, size_t len)
     // Wait for the host DMA transfer to complete and reclaim the slot.
     void *finished_arg = NULL;
     err = sdio_slave_send_get_finished(&finished_arg,
-                                       pdMS_TO_TICKS(500));
+                                       pdMS_TO_TICKS(2000));
     if (err == ESP_OK && finished_arg) {
         tx_pool_release((tx_slot_t *)finished_arg);
     } else {
-        // Timeout or error — the slot is leaked but the system stays alive.
-        ESP_LOGW(TAG, "write: send_get_finished err %d", err);
+        // Timeout or error — the slot is likely leaked. Log diagnostics and
+        // attempt to reclaim stuck slots older than a threshold.
+        int in_use = 0;
+        for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT; i++) if (s_tx_pool[i].in_use) in_use++;
+        UBaseType_t sem_count = uxSemaphoreGetCount(s_tx_sem);
+        ESP_LOGW(TAG, "write: send_get_finished err %d (%s)", err, esp_err_to_name(err));
+        BRIDGE_VLOG("write: detailed state: in_use=%d sem_count=%u",
+                    in_use, (unsigned)sem_count);
+
+        int reclaimed = tx_pool_reclaim_old_slots(pdMS_TO_TICKS(3000), C6_BRIDGE_SDIO_TX_BUF_COUNT);
+        if (reclaimed) {
+            BRIDGE_VLOG("write: reclaimed %d stuck TX slot(s)", reclaimed);
+        } else {
+            BRIDGE_VLOG("write: no stuck slots eligible for reclaim");
+        }
         return -1;
     }
 
+    // Successful completion of the host DMA transfer.
+    BRIDGE_VLOG("write: completed %zu bytes", len);
     return (int)len;
 }
 

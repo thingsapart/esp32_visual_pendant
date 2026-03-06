@@ -103,6 +103,13 @@ static void c6_serial_vprintf(const char *fmt, ...)
 #define C6_LOG(...) c6_serial_vprintf(__VA_ARGS__)
 #define C6_PRINT(s)   c6_serial_print(s)
 
+// Verbose logging macro: enabled only when C6_BRIDGE_LOG_EXT is defined.
+#ifdef C6_BRIDGE_LOG_EXT
+#define C6_VLOG(fmt, ...) ESP_LOGV(TAG, fmt, ##__VA_ARGS__)
+#else
+#define C6_VLOG(fmt, ...) do { (void)0; } while (0)
+#endif
+
 #ifdef C6_BRIDGE_TRANSPORT_SDIO
 static int c6_esp_log_vprintf(const char *fmt, va_list ap)
 {
@@ -123,6 +130,11 @@ static bool peer_is_known(const uint8_t *mac)
     return esp_now_is_peer_exist(mac);
 }
 
+/* Forward declarations -------------------------------------------------------*/
+static size_t encode_frame(uint8_t *out_buf, uint8_t dir,
+                           const uint8_t *mac, const uint8_t *payload,
+                           uint16_t len);
+
 static bool peer_add(const uint8_t *mac)
 {
     if (peer_is_known(mac)) return true;
@@ -138,6 +150,17 @@ static bool peer_add(const uint8_t *mac)
     }
     C6_LOG("[BRIDGE] Added peer %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    // Notify the P4 immediately that we have learned a peer by sending a
+    // synthetic incoming frame containing a keep-alive message type. This
+    // lets the P4 mark the hub as reachable even before the hub sends real
+    // ESP-NOW payloads.
+    {
+        uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
+        uint8_t payload[1] = { 0x00 }; // MSG_TYPE_KEEP_ALIVE == 0
+        size_t frame_len = encode_frame(frame, BRIDGE_DIR_INCOMING, mac,
+                                        payload, (uint16_t)1);
+        bridge_transport_write(frame, frame_len);
+    }
     return true;
 }
 
@@ -242,12 +265,23 @@ static void on_espnow_recv(const esp_now_recv_info_t *info,
         return;
     }
 
+    // Log brief summary of the packet received from the hub
+    C6_VLOG("[BRIDGE] ESP-NOW RX from %02X:%02X:%02X:%02X:%02X:%02X len=%d\n",
+           info->src_addr[0], info->src_addr[1], info->src_addr[2],
+           info->src_addr[3], info->src_addr[4], info->src_addr[5], len);
+
     peer_add(info->src_addr);   // remember sender so we can reply
 
     uint8_t frame[BRIDGE_MAX_FRAME_SIZE];
     size_t frame_len = encode_frame(frame, BRIDGE_DIR_INCOMING,
                                     info->src_addr, data, (uint16_t)len);
-    bridge_transport_write(frame, frame_len);
+    C6_VLOG("[BRIDGE] Encoded frame len=%u, sending via transport\n", (unsigned)frame_len);
+    int w = bridge_transport_write(frame, frame_len);
+    if (w < 0) {
+        C6_LOG("[BRIDGE] transport_write failed: %d\n", w);
+    } else {
+        C6_VLOG("[BRIDGE] transport_write wrote %d bytes\n", w);
+    }
 }
 
 // ---- Frame parser (transport → ESP-NOW) ------------------------------------
@@ -338,6 +372,19 @@ static void process_byte(uint8_t b)
             if (b == expected) {
                 s_stats.p4_rx_frames++;
                 if (s_rx_dir == BRIDGE_DIR_OUTGOING) {
+                    // Log command coming from P4 that will be forwarded via ESP-NOW
+                    C6_LOG("[BRIDGE] From P4 -> OUTGOING to %02X:%02X:%02X:%02X:%02X:%02X len=%u\n",
+                           s_rx_mac[0], s_rx_mac[1], s_rx_mac[2], s_rx_mac[3],
+                           s_rx_mac[4], s_rx_mac[5], (unsigned)s_rx_len);
+                    // Optionally log a short hex preview of the payload
+                    {
+                        int preview = s_rx_len < 16 ? s_rx_len : 16;
+                        char hb[48]; int pos = 0;
+                        for (int i = 0; i < preview; ++i)
+                            pos += snprintf(&hb[pos], sizeof(hb) - pos, "%02X%s",
+                                            s_rx_data[i], (i+1<preview) ? " " : "");
+                        if (pos > 0) C6_LOG("[BRIDGE] P4 payload preview: %s\n", hb);
+                    }
                     dispatch_to_espnow(s_rx_mac, s_rx_data, s_rx_len);
                 } else if (s_rx_dir == BRIDGE_DIR_DEBUG) {
                     // Human-readable frame from P4 — log it, don't relay.
