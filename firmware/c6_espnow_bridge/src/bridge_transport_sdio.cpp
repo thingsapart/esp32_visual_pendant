@@ -243,8 +243,7 @@ int bridge_transport_read(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 size_t bridge_transport_describe(char *buf, size_t buf_size)
 {
     return (size_t)snprintf(buf, buf_size,
-        "Transport: SDIO slave, bus_width=%d, C6 CLK=GPIO19 CMD=GPIO18 "
-        "D0=GPIO20 D1=GPIO21 D2=GPIO22 D3=GPIO23",
+        "SDIO slave: CLK 19 CMD 18 D0-3 20-23",
         C6_BRIDGE_SDIO_BUS_WIDTH);
 }
 

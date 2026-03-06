@@ -146,6 +146,63 @@ static std::map<int, serial_handle_t> g_uart_num_to_handle;
 #define MAX_HW_UARTS 5 // ESP32-S3 has 3, but this provides a safe upper bound
 static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
 
+// --- Log TX async writer (default Serial only) ---
+// Use a FreeRTOS StreamBuffer for thread-safe, non-blocking enqueue from
+// multiple producers. A low-priority writer task drains the buffer and
+// writes to the Serial under the normal write mutex.
+#if defined(ESP32_HW)
+static StreamBufferHandle_t g_log_tx_sb = NULL;
+static TaskHandle_t g_log_writer_task = NULL;
+static const size_t LOG_TX_BUFFER_SIZE = 1024;   // bytes; tune as needed
+static const size_t LOG_TX_COPY_CHUNK = 256;    // writer local buffer
+static const uint32_t LOG_WRITER_STACK = 2048;  // bytes
+static const UBaseType_t LOG_WRITER_PRIO = tskIDLE_PRIORITY + 1;
+static size_t g_log_dropped_count = 0;
+
+static void log_writer_task(void *arg) {
+  (void)arg;
+  uint8_t tmp[LOG_TX_COPY_CHUNK];
+  for (;;) {
+    // Block until at least 1 byte is available
+    size_t received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), portMAX_DELAY);
+    if (received == 0) continue;
+
+    // Write out what we received; keep draining until empty
+    for (;;) {
+      serial_handle_t handle = get_serial_handle(-1);
+      if (!handle) break;  // no standard serial registered
+
+      // Use atomic write helper to safely acquire port mutex and write
+      size_t written = serial_write_atomic(handle, tmp, received, false);
+      if (written < received) {
+        // If partial write occurred, we drop the remainder.
+        // Nothing sensible to do here for logs.
+      }
+
+      // Try to pull more without blocking
+      received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), 0);
+      if (received == 0) break;
+    }
+  }
+}
+
+static void ensure_log_tx_initialized() {
+  if (g_log_tx_sb) return;
+  g_log_tx_sb = xStreamBufferCreate(LOG_TX_BUFFER_SIZE, 1);
+  if (!g_log_tx_sb) {
+    LOGE(TAG, "Failed to create log TX stream buffer");
+    return;
+  }
+  BaseType_t r = xTaskCreate(log_writer_task, "log_writer", LOG_WRITER_STACK / sizeof(StackType_t), NULL, LOG_WRITER_PRIO, &g_log_writer_task);
+  if (r != pdPASS) {
+    LOGE(TAG, "Failed to create log writer task");
+    vStreamBufferDelete(g_log_tx_sb);
+    g_log_tx_sb = NULL;
+    g_log_writer_task = NULL;
+  }
+}
+#endif
+
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t *port_data);
 #if defined(ESP32_HW)
@@ -311,9 +368,8 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
             // LOGI(TAG, "Standard Serial already initialized or connected.");
         }
       // Ensure writes do not block when the TX ring is full: drop-on-full mode.
-    #if defined(ESP32_HW)
-      Serial.setTxTimeoutMs(0);
-    #endif
+      // Note: some HardwareSerial variants may not implement setTxTimeoutMs(),
+      // so initialization for non-blocking TX is handled elsewhere.
     } else {  // HardwareSerial UART 1 or 2 etc.
         HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
         if (!hw_serial) {
@@ -657,11 +713,12 @@ void add_standard_serial() {
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
-  // Make standard Serial non-blocking on TX (drop when full)
+  // Non-blocking TX configuration for standard Serial is handled elsewhere
+  // (e.g., platform init). Avoid calling setTxTimeoutMs() here.
+  // Initialize async log TX for default Serial
 #if defined(ESP32_HW)
-  Serial.setTxTimeoutMs(0);
+  ensure_log_tx_initialized();
 #endif
-
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
@@ -726,6 +783,19 @@ void default_serial_write(const uint8_t *buf, size_t len) {
 #endif
   serial_handle_t handle = get_serial_handle(-1);
   if (handle) {
+    // Try to enqueue into the async log stream buffer if available.
+#if defined(ESP32_HW)
+    if (g_log_tx_sb) {
+      size_t sent = xStreamBufferSend(g_log_tx_sb, buf, len, 0);
+      if (sent == len) return; // fully enqueued
+      if (sent > 0) {
+        // Partial enqueue: count dropped bytes and return the enqueued amount
+        __atomic_fetch_add(&g_log_dropped_count, (size_t)(len - sent), __ATOMIC_RELAXED);
+        return;
+      }
+      // If nothing enqueued (buffer full), fall back to best-effort direct write
+    }
+#endif
     serial_write(handle, buf, len);
     // NOTE: Do NOT call serial_flush() here.  Flushing after every single log
     // line acquires the write_mutex a second time and blocks waiting for the

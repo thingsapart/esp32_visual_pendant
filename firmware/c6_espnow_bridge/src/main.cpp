@@ -57,7 +57,7 @@ static const uint8_t k_broadcast_mac[BRIDGE_MAC_LEN] =
 static bool g_c6_serial_verbose = true;
 static unsigned long g_c6_serial_disable_deadline = 0;
 #ifndef C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS
-#define C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS 5000
+#define C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS 30000 // Increased timeout for debugging
 #endif
 
 /* In SDIO builds we still want to write short debug output to UART0 (pins
@@ -165,20 +165,18 @@ static size_t encode_frame(uint8_t *out_buf, uint8_t dir,
 
 static size_t build_hello_text(char *buf, size_t buf_size)
 {
-    char transport_desc[80];
+    char transport_desc[120];
     bridge_transport_describe(transport_desc, sizeof(transport_desc));
 
     return (size_t)snprintf(buf, buf_size,
         "\r\n"
-        "=== C6 ESP-NOW Bridge ===\r\n"
-        "Protocol version : %d\r\n"
-        "Build            : " __DATE__ " " __TIME__ "\r\n"
+        "=== C6 Bridge ===\r\n"
+        "Version  : %d\r\n"
+        "Build    : " __DATE__ "\r\n"
         "%s\r\n"
-        "WiFi channel     : %d\r\n"
-        "C6 MAC           : %s\r\n"
-        "Status           : ready\r\n"
-        "Send '?' for this info again\r\n"
-        "=========================\r\n",
+        "Channel  : %d\r\n"
+        "MAC      : %s\r\n"
+        "Status   : ready\r\n",
         BRIDGE_PROTOCOL_VERSION,
         transport_desc,
         C6_BRIDGE_WIFI_CHANNEL,

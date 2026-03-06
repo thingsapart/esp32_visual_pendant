@@ -65,7 +65,7 @@ static const char *TAG = "c6_bridge_sdio";
 #endif
 /** Initial SDIO clock frequency in kHz.  SDMMC_FREQ_HIGHSPEED = 40 MHz.   */
 #ifndef C6_SDIO_FREQ_KHZ
-#  define C6_SDIO_FREQ_KHZ    20000   /* 20 MHz — safe for most boards */
+#  define C6_SDIO_FREQ_KHZ    5000   /* Lowered to 5 MHz for debugging / jumper stability */
 #endif
 /** Each SDIO packet is one bridge frame (max 262 bytes). */
 #ifndef C6_SDIO_PKT_SIZE
@@ -107,10 +107,11 @@ bool c6_sdio_bridge_init(void)
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.slot         = C6_SDIO_HOST_SLOT;
     host.max_freq_khz = C6_SDIO_FREQ_KHZ;
-    host.flags        = SDMMC_HOST_FLAG_4BIT;   /* also supports 1-bit fallback */
+    host.flags        = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;   /* also supports 1-bit fallback */
 
     /* 3. Configure slot (GPIO assignments). */
     sdmmc_slot_config_t slot_cfg = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_cfg.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
     slot_cfg.clk   = C6_SDIO_CLK_PIN;
     slot_cfg.cmd   = C6_SDIO_CMD_PIN;
     slot_cfg.d0    = C6_SDIO_D0_PIN;
@@ -119,10 +120,10 @@ bool c6_sdio_bridge_init(void)
     slot_cfg.d2    = C6_SDIO_D2_PIN;
     slot_cfg.d3    = C6_SDIO_D3_PIN;
     slot_cfg.width = 4;
-    host.flags     = SDMMC_HOST_FLAG_4BIT;
+    host.flags     = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
 #else
     slot_cfg.width = 1;
-    host.flags     = SDMMC_HOST_FLAG_1BIT;
+    host.flags     = SDMMC_HOST_FLAG_1BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
 #endif
     slot_cfg.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
@@ -138,6 +139,9 @@ bool c6_sdio_bridge_init(void)
         ESP_LOGE(TAG, "sdmmc_host_init_slot: %s", esp_err_to_name(err));
         goto fail;
     }
+
+    ESP_LOGI(TAG, "Waiting 1.5s for C6 SDIO slave bridge to boot...");
+    vTaskDelay(pdMS_TO_TICKS(1500));
 
     /* 5. Enumerate the slave card (this also activates SDIO function 0). */
     err = sdmmc_card_init(&host, s_card);

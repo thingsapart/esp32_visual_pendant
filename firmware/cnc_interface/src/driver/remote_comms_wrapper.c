@@ -931,7 +931,10 @@ static void c6_sdio_rx_task(void *arg)
 
         if (!c6_sdio_bridge_read(pkt, sizeof(pkt), &pkt_len,
                                   /*timeout_ms=*/ 20)) {
-            /* Timeout — no frame ready, loop back. */
+            /* Timeout — no frame ready, loop back.
+             * Explicitly yield CPU so we don't starve lower priority tasks 
+             * (like LVGL or setup()) if the underlying driver doesn't block! */
+            vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
