@@ -139,7 +139,10 @@ extern "C" {
 
 /** Core to pin the task to.  -1 = unpin (runs on either core). */
 #ifndef JOG_ACCUM_TASK_CORE
-#define JOG_ACCUM_TASK_CORE       0
+/* Core 1 (TASK_MACHINE_CORE): jog_accum produces to machine_send_queue
+ * consumed by MachineSendTask on Core 1.  Running on Core 1 keeps the jog
+ * batching work away from the LVGL/display pipeline on Core 0. */
+#define JOG_ACCUM_TASK_CORE       1
 #endif
 
 /* -----------------------------------------------------------------------

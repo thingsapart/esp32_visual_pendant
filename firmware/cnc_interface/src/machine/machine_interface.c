@@ -451,11 +451,15 @@ void machine_interface_send_gcode(machine_interface_t *self, const char *gcode,
   buf[len] = '\0';
 
 #ifdef ESP32_HW
-  // Use xQueueSendToFront when gcode_queue_priority is set so user-initiated
-  // gcodes (jog, home, probe, …) pre-empt any pending poll M409 commands.
+  // User-initiated commands (jog, home, probe) go to the front of the queue
+  // so they pre-empt pending M409 poll commands (0-tick timeout is fine —
+  // there must always be room for urgent commands).
+  // Poll commands use a short timeout so transient queue pressure does not
+  // silently drop state updates — 5 ms is negligible at a 50 ms poll cadence.
+  TickType_t timeout = self->gcode_queue_priority ? 0 : pdMS_TO_TICKS(5);
   BaseType_t result = self->gcode_queue_priority
-      ? xQueueSendToFront(self->gcode_queue, buf, 0)
-      : xQueueSend(self->gcode_queue, buf, 0);
+      ? xQueueSendToFront(self->gcode_queue, buf, timeout)
+      : xQueueSend(self->gcode_queue, buf, timeout);
   if (result != pdTRUE) {
     LOGW(TAG, "Failed to add gcode to the queue: %s", gcode);
   }

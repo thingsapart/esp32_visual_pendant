@@ -94,11 +94,12 @@ static void dispatch_recv(const uint8_t *mac, const uint8_t *data, int len)
 
 #ifdef USE_SEND_QUEUE
 #define QUEUE_LENGTH 16
-// Must be above tskIDLE_PRIORITY+1 or higher-priority tasks (machine_send
-// at +5, lvgl, etc.) will starve this task and fill the queue with unsent
-// commands. Priority 4 lets the task preempt most background work while
-// staying below machine_send (5) so urgent G-code still wins.
-#define TASK_PRIORITY (tskIDLE_PRIORITY + 4)
+// Priority +3: below MachineRemoteProc (+4) so a fresh state response is
+// always parsed before the next outgoing packet is dispatched; above lvgl_task
+// (+2) so display rendering never delays an ESP-NOW transmission.
+// Order: MachineSendTask(+5) > MachineRemoteProc(+4) > remote_send_task(+3)
+//        > lvgl_task(+2) > bridged_sdio_rx(+2) > Machine/etc(+1)
+#define TASK_PRIORITY (tskIDLE_PRIORITY + 3)
 
 typedef struct {
   uint8_t mac[6];

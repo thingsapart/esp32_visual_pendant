@@ -81,8 +81,13 @@ static const char *TAG = "c6_bridge_sdio";
 
 static sdmmc_card_t     *s_card      = NULL;
 static essl_handle_t     s_essl      = NULL;
-static SemaphoreHandle_t s_tx_mutex  = NULL;   /* serialise concurrent sends */
-static SemaphoreHandle_t s_rx_mutex  = NULL;   /* serialise concurrent reads */
+/* Single mutex that serialises ALL ESSL operations (TX and RX).
+ * The ESSL handle s_essl is NOT thread-safe for concurrent access from
+ * different tasks/cores — a simultaneous essl_get_packet (bridged_sdio_rx)
+ * and essl_send_packet (remote_send_task) corrupts the internal buffer-space
+ * accounting and causes writes/reads to hang indefinitely.  One bus mutex
+ * that both paths must hold eliminates this race entirely. */
+static SemaphoreHandle_t s_bus_mutex = NULL;
 
 /** One static DMA-capable receive buffer reused on every read call. */
 static uint8_t          *s_rx_dma_buf = NULL;
@@ -257,16 +262,10 @@ bool c6_sdio_bridge_init(void)
         if (rx_tmp) heap_caps_free(rx_tmp);
     }
 
-    /* 8. Create the TX and RX mutexes. */
-    s_tx_mutex = xSemaphoreCreateMutex();
-    if (!s_tx_mutex) {
-        ESP_LOGE(TAG, "OOM: TX mutex");
-        goto fail;
-    }
-
-    s_rx_mutex = xSemaphoreCreateMutex();
-    if (!s_rx_mutex) {
-        ESP_LOGE(TAG, "OOM: RX mutex");
+    /* 8. Create the single bus mutex that serialises all ESSL operations. */
+    s_bus_mutex = xSemaphoreCreateMutex();
+    if (!s_bus_mutex) {
+        ESP_LOGE(TAG, "OOM: bus mutex");
         goto fail;
     }
 
@@ -308,11 +307,13 @@ bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
     memset(tx_buf, 0, C6_SDIO_PKT_SIZE);
     memcpy(tx_buf, buf, len);
 
-    /* Serialise concurrent sends.
-     * Use a bounded wait so that a task blocked inside a slow essl_wait_for_ready
-     * call cannot starve higher-priority tasks (e.g. lvgl_task WDT reset). */
-    if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
-        ESP_LOGW(TAG, "write: TX mutex timeout \xe2\x80\x94 dropping frame");
+    /* Acquire the bus mutex.  Both c6_sdio_bridge_write and c6_sdio_bridge_read
+     * must hold this mutex before any essl_* call; ESSL state is not re-entrant
+     * across simultaneous TX+RX from different tasks/cores.
+     * Timeout 100 ms: generous enough for one full frame (262 B at 5 MHz
+     * SDIO = ~0.4 ms wire time, but essl_wait_for_ready can take up to 50 ms). */
+    if (xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "write: bus mutex timeout — dropping frame");
         heap_caps_free(tx_buf);
         return false;
     }
@@ -321,7 +322,7 @@ bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
     esp_err_t err = essl_wait_for_ready(s_essl, pdMS_TO_TICKS(50));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "essl_wait_for_ready: %s", esp_err_to_name(err));
-        xSemaphoreGive(s_tx_mutex);
+        xSemaphoreGive(s_bus_mutex);
         heap_caps_free(tx_buf);
         return false;
     }
@@ -334,7 +335,7 @@ bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
         ESP_LOGD(TAG, "write: essl_send_packet OK len=%zu (sent %d)", len, C6_SDIO_PKT_SIZE);
     }
 
-    xSemaphoreGive(s_tx_mutex);
+    xSemaphoreGive(s_bus_mutex);
     heap_caps_free(tx_buf);
 
     if (err != ESP_OK) {
@@ -349,8 +350,13 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
 {
     if (!s_essl || !s_rx_dma_buf || !buf || !out_len) return false;
 
-    /* Only one reader at a time (the remote_comms_wrapper RX task). */
-    xSemaphoreTake(s_rx_mutex, portMAX_DELAY);
+    /* Acquire the shared bus mutex before any essl_* operation.
+     * timeout_ms is the SDIO transaction timeout; add a margin for the mutex
+     * wait itself.  If a write is in progress we wait up to timeout_ms+100 ms
+     * total before giving up and returning "no data" to the caller. */
+    if (xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
+        return false;  /* write side held the bus too long — caller retries */
+    }
 
     size_t    rx_size = 0;
     /* essl_get_packet expects a timeout in milliseconds.  Do not convert
@@ -358,7 +364,7 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
     esp_err_t err = essl_get_packet(s_essl, s_rx_dma_buf, C6_SDIO_PKT_SIZE,
                                      &rx_size, timeout_ms);
 
-    xSemaphoreGive(s_rx_mutex);
+    xSemaphoreGive(s_bus_mutex);
 
     if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT) {
         return false;   /* nothing available within timeout */
@@ -387,13 +393,9 @@ void c6_sdio_bridge_deinit(void)
         heap_caps_free(s_rx_dma_buf);
         s_rx_dma_buf = NULL;
     }
-    if (s_rx_mutex) {
-        vSemaphoreDelete(s_rx_mutex);
-        s_rx_mutex = NULL;
-    }
-    if (s_tx_mutex) {
-        vSemaphoreDelete(s_tx_mutex);
-        s_tx_mutex = NULL;
+    if (s_bus_mutex) {
+        vSemaphoreDelete(s_bus_mutex);
+        s_bus_mutex = NULL;
     }
     if (s_essl) {
         essl_sdio_deinit_dev(s_essl);

@@ -592,22 +592,14 @@ void setup() {
 #else  // RRF Mode
 
 #ifndef MACHINE_REMOTE_ONLY
-  // Run a single machine task for the multi-machine wrapper. Child
-  // implementations (RRF/Remote/DWC) are polled through the multi-machine
-  // interface which decides which child is active. Running per-child
-  // machine tasks causes duplicate polling and undesired probes (e.g.
-  // machine_rrf sending probe queries while machine_remote is active).
-  LOGI(TAG, "Creating Machine Task (multi-machine)... ");
-  if (!abort && machine_task_run("Machine", &machine.base,
-                                 &machine_rrf_task, TASK_MACHINE_CORE)) {
-    LOGI(TAG, "DONE\n");
-    task_registry_register_handle(machine_rrf_task, "Machine");
-  } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
-    abort = true;
-  }
-
-  ram_usage();
+  // NOTE: machine_task is NOT started here when ASYNC_GCODE_SENDING is active.
+  // MachineSendTask (priority +5) already drives the poll loop via
+  // machine_interface_task_loop_iter() on its own timer — starting machine_task
+  // as well causes two tasks to call _update_machine_state concurrently with no
+  // synchronization.  That race (a) doubles the state-request rate into
+  // remote_send_queue and (b) causes a data race on self->polli / poll_state.
+  // machine_task is kept for the DWC path and for MACHINE_REMOTE_ONLY builds
+  // that have no MachineSendTask.
 
 #ifdef MACH_UART_PIN_TX
   // MachineRRFProc is only meaningful when an RRF serial transport was
