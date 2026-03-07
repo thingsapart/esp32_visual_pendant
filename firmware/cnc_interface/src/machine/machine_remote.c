@@ -14,7 +14,9 @@
 #include "tasks/machine_response_proc_task.h"
 #endif
 
-#define UI_DEBUG_LOG D_WARN
+// Cap this file at WARN so that LOGI (e.g. "Sending '%s'") is compiled out.
+// debug.h keys off UI_DEBUG_LOCAL_LEVEL, not UI_DEBUG_LOG.
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 static const char *TAG = "machine_remote";
@@ -23,10 +25,11 @@ static const char *TAG = "machine_remote";
 // separate messages and thus reassembled here.
 
 #ifndef MAX_CONCURRENT_FRAGMENTED_MSGS
-// Max fragmented binary messages being reassembled at once. Increase default
-// from 2 to 4 to reduce the probability of overwriting in-progress
-// reassemblies when multiple large messages are in flight.
-#define MAX_CONCURRENT_FRAGMENTED_MSGS 4
+// Max fragmented binary messages being reassembled at once. Increased to 8
+// because the hub can send several IO_CHANNELS or FILE_LIST sequences in quick
+// succession; with only 4 slots, subsequent fragment-0's require evictions
+// before fragment-1's arrive, silently discarding ~50% of binary updates.
+#define MAX_CONCURRENT_FRAGMENTED_MSGS 8
 #endif
 
 // Structure to hold state for one in-progress fragmentede msg reassembly.
@@ -111,9 +114,7 @@ static bool _send_command(machine_interface_remote_t *self, const uint8_t *data,
                           size_t len) {
   bool ok = remote_wrapper_send(self->hub_mac_address, data, len);
   if (!ok) {
-    // Demoted to LOGD: this fires from machine_send_task (prio=5) and causes
-    // serial-mutex contention that can starve the lvgl_task (prio=2).
-    LOGD(TAG, "Failed to send command via ESP-NOW");
+    LOGW(TAG, "Failed to send command via ESP-NOW (queue full or not initialised)");
   }
   return ok;
 }
@@ -121,14 +122,19 @@ static bool _send_command(machine_interface_remote_t *self, const uint8_t *data,
 static void _machine_interface_remote_send_gcode(machine_interface_t *self,
                                                  const char *gcode,
                                                  uint32_t poll_state) {
-  // Use stack buffer to avoid malloc overhead
+  // Allocate send buffer on the heap to avoid consuming large task stack
   #ifndef MAX_GCODE_STR_LEN
   #define MAX_GCODE_STR_LEN 256
   #endif
-  
-  uint8_t buf[sizeof(send_gcode_cmd_t) + MAX_GCODE_STR_LEN];
+
+  size_t buf_capacity = sizeof(send_gcode_cmd_t) + MAX_GCODE_STR_LEN;
+  uint8_t *buf = (uint8_t *)malloc(buf_capacity);
+  if (!buf) {
+    LOGE(TAG, "OOM allocating send_gcode buffer (%u bytes)", (unsigned)buf_capacity);
+    return;
+  }
   send_gcode_cmd_t *cmd = (send_gcode_cmd_t *)buf;
-  
+
   size_t gcode_len = strlen(gcode);
   if (gcode_len >= MAX_GCODE_STR_LEN) {
       LOGW(TAG, "GCode too long, truncating");
@@ -144,6 +150,7 @@ static void _machine_interface_remote_send_gcode(machine_interface_t *self,
   
   LOGI(TAG, "Sending '%s'", cmd->gcode);
   _send_command((machine_interface_remote_t *)self, (uint8_t *)cmd, len);
+  free(buf);
 }
 
 static bool _machine_interface_remote_is_connected(machine_interface_t *self) {
@@ -800,8 +807,18 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
 
 #ifdef ASYNC_RESPONSE_PROCESSING
       // Message done - post to task for actual processing.
-      machine_response_proc_task_data_ready(self->proc_task_event_queue, msg,
-                                            sizeof(msg), true);
+      // from_isr=false: called from bridged_sdio_rx_task (regular task context).
+      if (machine_response_proc_task_data_ready(self->proc_task_event_queue, msg,
+                                                sizeof(msg), false) != 0) {
+        // Queue full: process inline so the slot is never left dangling.
+        // Without this, the is_valid flag stays set and new reassemblies are
+        // forced to evict this slot rather than using a free one.
+        LOGW(TAG, "Proc queue full for binary seq %u slot %u — processing inline.",
+             target_buffer->seq_id, (unsigned)target_slot);
+        process_binary_payload(&self->base, target_buffer->sub_type,
+                               target_buffer->buffer, target_buffer->total_size);
+        binary_payload_slot_cleanup(target_slot);
+      }
 #else
       // TODO:
 #endif
@@ -814,7 +831,7 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
 
 void machine_interface_remote_process_message(machine_interface_remote_t *self,
                                               const uint8_t *data, size_t len) {
-  LOGD(TAG, "RECV: len %d t=%d d=%d:%d", len, data[0], data[1], data[2]);
+  LOGD(TAG, "RECV: len %d type=%d", len, data[0]);
 
   if (len == 0) {
     return;
@@ -991,9 +1008,11 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       }
       log_msg_t *msg = (log_msg_t *)data;
       // Split batched messages by newline and dispatch each line separately.
+      // Use len-based end pointer to avoid reading past the received buffer.
       const char *p = msg->message;
+      const char *end = (const char *)data + len;  // one past last valid byte
       const char *line_start = p;
-      while (*p) {
+      while (p < end && *p) {
         if (*p == '\n') {
           size_t line_len = p - line_start;
           if (line_len > 0) {
@@ -1011,10 +1030,17 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
           p++;
         }
       }
-      // Final trailing line
+      // Final trailing line (no trailing newline)
       if (p != line_start) {
-        machine_interface_log_message_updated(&self->base, line_start);
-        LOGI(TAG, "Received log message: %s", line_start);
+        size_t line_len = p - line_start;
+        char *tmp = (char *)malloc(line_len + 1);
+        if (tmp) {
+          memcpy(tmp, line_start, line_len);
+          tmp[line_len] = '\0';
+          machine_interface_log_message_updated(&self->base, tmp);
+          LOGI(TAG, "Received log message: %s", tmp);
+          free(tmp);
+        }
       }
       break;
     }
@@ -1134,8 +1160,10 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr,
   }
 
   if (self->proc_task_event_queue != NULL) {
+    LOGD(TAG, "[DIAG] Queuing non-binary type=%d len=%d to proc_task", data[0], data_len);
+    // from_isr=false: this callback runs in bridged_sdio_rx_task (regular task context).
     machine_response_proc_task_data_ready(self->proc_task_event_queue, data,
-                                          data_len, true);
+                                          data_len, false);
   } else {
     LOGW(TAG, "Cannot machine_response_process_for_task => queue NULL");
   }

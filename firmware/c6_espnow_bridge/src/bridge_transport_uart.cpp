@@ -75,6 +75,10 @@ size_t bridge_transport_describe(char *buf, size_t buf_size)
         C6_BRIDGE_UART_RX, C6_BRIDGE_UART_BAUD);
 }
 
+// UART transport is always "ready" — no ESSL handshake needed.
+void bridge_transport_set_host_ready(void) {}
+bool bridge_transport_is_host_ready(void) { return true; }
+
 // ---- Allow callers to access BridgeSerial for '?' probe responses ----
 
 /**

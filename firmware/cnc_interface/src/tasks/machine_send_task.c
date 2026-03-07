@@ -26,7 +26,7 @@ extern "C" {
 
 #include "machine/machine_interface.h"
 
-#define DEFAULT_TASK_STACK_SIZE (1024 * 2)
+#define DEFAULT_TASK_STACK_SIZE (1024 * 4)
 #define DEFAULT_TASK_PRIORITY \
   (tskIDLE_PRIORITY + 1)  // Priority of the processing task
 
@@ -77,6 +77,8 @@ void machine_send_task(void *pvParameters) {
   uint32_t procrate_ms = machine->procrate_ms > 0 ? machine->procrate_ms : 100;
   TickType_t poll_interval_ticks = pdMS_TO_TICKS(procrate_ms);
   size_t poll_counter = 0;
+  size_t loop_counter = 0;
+  size_t last_logged_stack_high = (size_t)-1;
 
   // Defaults if not defined elsewhere
   #ifndef MACHINE_POLL_EVERY_NTH_INTERVAL
@@ -135,6 +137,16 @@ void machine_send_task(void *pvParameters) {
         } else {
             last_poll_time += poll_interval_ticks;
         }
+    }
+    // Periodically log stack high-water mark to detect shrinking stack
+    if ((loop_counter++ & 0x3FF) == 0) { // every 1024 iterations
+#ifdef ESP32_HW
+      UBaseType_t high = uxTaskGetStackHighWaterMark(NULL);
+      if (last_logged_stack_high == (size_t)-1 || high < last_logged_stack_high) {
+        LOGI(TAG, "MachineSendTask stack high-water: %u bytes free", (unsigned)high);
+        last_logged_stack_high = high;
+      }
+#endif
     }
   }
   LOGI(TAG, "<< Machine Task Loop Ended?");

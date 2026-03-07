@@ -39,12 +39,17 @@
 
 #include "driver/arduino_serial_wrapper.h"
 // The core logging function for ESP32 hardware.
-#define LOG_BACKEND(format, ...)                                          \
-  do {                                                                    \
-    size_t __len = snprintf(NULL, 0, format __VA_OPT__(, )##__VA_ARGS__); \
-    char __temp[__len + 2]; /* +1 for null, +1 for newline */             \
-    snprintf(__temp, __len + 2, format "\n" __VA_OPT__(, )##__VA_ARGS__); \
-    default_serial_write((const uint8_t *)__temp, strlen(__temp));        \
+// Single snprintf call into a heap buffer — avoids the double _svfprintf_r
+// invocation (the old size-probe pass used as much stack as the real call).
+// Falls back silently on OOM rather than spilling a large stack buffer.
+#define LOG_BACKEND(format, ...)                                              \
+  do {                                                                        \
+    char *__temp = (char *)malloc(256);                                       \
+    if (__temp) {                                                             \
+      snprintf(__temp, 256, format "\n" __VA_OPT__(, )##__VA_ARGS__);        \
+      default_serial_write((const uint8_t *)__temp, strlen(__temp));          \
+      free(__temp);                                                           \
+    }                                                                         \
   } while (0)
 #else  // POSIX / Native simulation
 #include <stdio.h>

@@ -27,6 +27,11 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 
+#define LOG_LOCAL_LEVEL D_VERBOSE
+/* debug.h redefines ESP_LOGI/W/E to use the app's LOG_BACKEND so logs from
+ * this file are visible even though CONFIG_LOG_DEFAULT_LEVEL=1 (ERROR). */
+#include "debug.h"
+
 /* BRIDGE_MAX_FRAME_SIZE mirrors the definition in the companion firmware's
  * bridge_protocol.h: BRIDGE_HEADER_SIZE(12) + BRIDGE_MAX_PAYLOAD(250) = 262.
  * It is reproduced here to avoid a fragile cross-project include path.
@@ -163,13 +168,94 @@ bool c6_sdio_bridge_init(void)
         goto fail;
     }
 
-    /* 7. Perform the ESSL handshake with the slave. */
-    err = essl_init(s_essl, portMAX_DELAY);
+    /* 7. Perform the ESSL handshake with the slave.
+     * Use a bounded timeout — portMAX_DELAY would stall forever if the C6
+     * WiFi / SDIO slave init is slow, blocking app_main with no log output. */
+    err = essl_init(s_essl, 10000 /* ms */);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "essl_init: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "essl_init failed after 10 s: %s — C6 slave not ready?",
+                 esp_err_to_name(err));
         goto fail;
     }
     ESP_LOGI(TAG, "ESSL handshake with C6 slave succeeded");
+
+    /* 7b. Send a "host-ready ping" to the C6 and wait for its DEBUG reply.
+     *
+     * The C6 TX gate (bridge_transport_set_host_ready) only opens after
+     * bridge_transport_read() returns its first packet.  A single ping can
+     * be missed if the C6's loop() is not yet polling when the packet
+     * arrives.  We therefore retry the ping up to C6_PING_RETRIES times,
+     * each time waiting up to C6_PING_REPLY_TIMEOUT_MS for ANY packet back
+     * from the C6 (which the '?' trigger causes it to send).  Once a reply
+     * arrives we know the C6 has opened its TX gate.
+     *
+     * Allocate a single DMA-capable ping buffer and the RX DMA path needs
+     * the RX mutex / RX DMA buffer, but those are not initialised yet.
+     * We read the reply directly into a temporary stack buffer here. */
+/* Ping-pong handshake knobs.  Worst case = RETRIES × (REPLY_TIMEOUT + RETRY_INTERVAL).
+ * Defaults give  3 × (200 + 100) = ~0.9 s worst case; was 10 × 900 = 9 s. */
+#ifndef C6_PING_RETRIES
+#  define C6_PING_RETRIES            3
+#endif
+#ifndef C6_PING_RETRY_INTERVAL_MS
+#  define C6_PING_RETRY_INTERVAL_MS  100
+#endif
+#ifndef C6_PING_REPLY_TIMEOUT_MS
+#  define C6_PING_REPLY_TIMEOUT_MS   200
+#endif
+    {
+        uint8_t *ping = (uint8_t *)heap_caps_calloc(C6_SDIO_PKT_SIZE, 1,
+                                                     MALLOC_CAP_DMA |
+                                                     MALLOC_CAP_INTERNAL);
+        uint8_t *rx_tmp = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
+                                                      MALLOC_CAP_DMA |
+                                                      MALLOC_CAP_INTERNAL);
+        bool c6_acked = false;
+
+        if (!ping || !rx_tmp) {
+            ESP_LOGW(TAG, "OOM: host-ready ping skipped");
+        } else {
+            ping[0] = 0x3F;  /* '?' = BRIDGE_DEBUG_TRIGGER */
+            for (int attempt = 0; attempt < C6_PING_RETRIES && !c6_acked; attempt++) {
+                esp_err_t perr = essl_send_packet(s_essl, ping,
+                                                  C6_SDIO_PKT_SIZE,
+                                                  pdMS_TO_TICKS(500));
+                if (perr != ESP_OK) {
+                    ESP_LOGW(TAG, "Ping attempt %d/%d: send failed: %s",
+                             attempt + 1, C6_PING_RETRIES,
+                             esp_err_to_name(perr));
+                    vTaskDelay(pdMS_TO_TICKS(C6_PING_RETRY_INTERVAL_MS));
+                    continue;
+                }
+                ESP_LOGI(TAG, "Ping attempt %d/%d sent — waiting for C6 reply...",
+                         attempt + 1, C6_PING_RETRIES);
+                /* Wait for any packet back from the C6. The '?' trigger causes
+                 * the C6 to enqueue a DEBUG hello frame immediately. */
+                size_t rx_sz = 0;
+                esp_err_t rerr = essl_get_packet(s_essl, rx_tmp,
+                                                 C6_SDIO_PKT_SIZE,
+                                                 &rx_sz,
+                                                 C6_PING_REPLY_TIMEOUT_MS);
+                if (rerr == ESP_OK && rx_sz > 0) {
+                    ESP_LOGI(TAG, "C6 replied (%zu bytes) on attempt %d — "
+                                  "TX gate open", rx_sz, attempt + 1);
+                    c6_acked = true;
+                } else {
+                    ESP_LOGW(TAG, "Ping attempt %d/%d: no reply (%s), retrying...",
+                             attempt + 1, C6_PING_RETRIES,
+                             esp_err_to_name(rerr));
+                    vTaskDelay(pdMS_TO_TICKS(C6_PING_RETRY_INTERVAL_MS));
+                }
+            }
+            if (!c6_acked) {
+                ESP_LOGW(TAG, "C6 did not reply after %d ping attempts — "
+                              "TX gate may stay blocked until first app command",
+                         C6_PING_RETRIES);
+            }
+        }
+        if (ping)   heap_caps_free(ping);
+        if (rx_tmp) heap_caps_free(rx_tmp);
+    }
 
     /* 8. Create the TX and RX mutexes. */
     s_tx_mutex = xSemaphoreCreateMutex();
@@ -208,20 +294,31 @@ bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
         return false;
     }
 
-    /* Allocate a DMA-accessible copy (essl_send_packet may DMA directly). */
-    uint8_t *tx_buf = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_DMA |
-                                                         MALLOC_CAP_INTERNAL);
+    /* Allocate a DMA-accessible copy (essl_send_packet may DMA directly).
+     * IMPORTANT: essl_send_packet rounds the length up to recv_buffer_size
+     * (C6_SDIO_PKT_SIZE = 262) for DMA transfer.  The buffer MUST be that
+     * large or the DMA engine will read beyond the allocation → crash. */
+    uint8_t *tx_buf = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
+                                                   MALLOC_CAP_DMA |
+                                                   MALLOC_CAP_INTERNAL);
     if (!tx_buf) {
         ESP_LOGE(TAG, "write: OOM for TX buffer");
         return false;
     }
+    memset(tx_buf, 0, C6_SDIO_PKT_SIZE);
     memcpy(tx_buf, buf, len);
 
-    /* Serialise concurrent sends. */
-    xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    /* Serialise concurrent sends.
+     * Use a bounded wait so that a task blocked inside a slow essl_wait_for_ready
+     * call cannot starve higher-priority tasks (e.g. lvgl_task WDT reset). */
+    if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGW(TAG, "write: TX mutex timeout \xe2\x80\x94 dropping frame");
+        heap_caps_free(tx_buf);
+        return false;
+    }
 
     /* Wait until the slave has a receive buffer available. */
-    esp_err_t err = essl_wait_for_ready(s_essl, pdMS_TO_TICKS(500));
+    esp_err_t err = essl_wait_for_ready(s_essl, pdMS_TO_TICKS(50));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "essl_wait_for_ready: %s", esp_err_to_name(err));
         xSemaphoreGive(s_tx_mutex);
@@ -229,7 +326,13 @@ bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
         return false;
     }
 
-    err = essl_send_packet(s_essl, tx_buf, len, portMAX_DELAY);
+    ESP_LOGD(TAG, "write: essl_wait_for_ready OK, sending %zu bytes (padded to %d)", len, C6_SDIO_PKT_SIZE);
+
+    err = essl_send_packet(s_essl, tx_buf, C6_SDIO_PKT_SIZE, pdMS_TO_TICKS(50));
+
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG, "write: essl_send_packet OK len=%zu (sent %d)", len, C6_SDIO_PKT_SIZE);
+    }
 
     xSemaphoreGive(s_tx_mutex);
     heap_caps_free(tx_buf);
@@ -262,12 +365,9 @@ bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "essl_get_packet: %s", esp_err_to_name(err));
-        /* Avoid busy-looping if the underlying ESSL layer reports invalid
-         * arguments (which can happen early during bring-up). Pause briefly
-         * to yield CPU and allow other init tasks to make progress. */
-        if (err == ESP_ERR_INVALID_ARG) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-        }
+        /* Avoid busy-looping if the underlying ESSL layer reports a failure
+         * such as NOT_FINISHED or INVALID_ARG to yield CPU. */
+        vTaskDelay(pdMS_TO_TICKS(50));
         return false;
     }
     if (rx_size == 0 || rx_size > C6_SDIO_PKT_SIZE) {

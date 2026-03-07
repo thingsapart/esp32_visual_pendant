@@ -66,6 +66,27 @@ int  bridge_transport_read(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
  */
 size_t bridge_transport_describe(char *buf, size_t buf_size);
 
+/**
+ * @brief Signal that the P4 host ESSL layer is confirmed ready.
+ *
+ * For the SDIO transport: must be called the first time bridge_transport_read()
+ * returns a positive byte count.  Until this is called,
+ * bridge_transport_write() returns -1 immediately (no-op) to prevent queueing
+ * frames into the SDIO slave send-queue before the host has completed
+ * essl_init().  If the slave queues data before essl_init, those DMA
+ * descriptors become invisible to the host after the ESSL counter reset and
+ * the send-queue semaphore stalls at 0 permanently.
+ *
+ * For the UART transport this is a no-op (UART is always ready).
+ */
+void bridge_transport_set_host_ready(void);
+
+/**
+ * @brief Returns true once bridge_transport_set_host_ready() has been called.
+ * Always returns true for the UART transport.
+ */
+bool bridge_transport_is_host_ready(void);
+
 #ifdef __cplusplus
 }
 #endif

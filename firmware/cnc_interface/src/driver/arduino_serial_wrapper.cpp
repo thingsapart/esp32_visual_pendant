@@ -793,7 +793,12 @@ void default_serial_write(const uint8_t *buf, size_t len) {
         __atomic_fetch_add(&g_log_dropped_count, (size_t)(len - sent), __ATOMIC_RELAXED);
         return;
       }
-      // If nothing enqueued (buffer full), fall back to best-effort direct write
+      // If nothing enqueued (buffer full), drop rather than blocking on the
+      // serial write mutex with portMAX_DELAY.  High-priority tasks (e.g. the
+      // proc task at prio=4) must never be stalled here — doing so causes
+      // priority inversion that lets the queue fill up while the task waits.
+      __atomic_fetch_add(&g_log_dropped_count, (size_t)len, __ATOMIC_RELAXED);
+      return;
     }
 #endif
     serial_write(handle, buf, len);

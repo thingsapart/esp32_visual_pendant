@@ -611,7 +611,7 @@ void machine_interface_maybe_execute_continuous_move(
 
 void machine_interface_position_updated(machine_interface_t *self) {
   machine_interface_maybe_execute_continuous_move(self);
-  LOGI(TAG, "Pos updated: callbacks %p, %p, %p", self->pos_changed_cb[0],
+  LOGD(TAG, "Pos updated: callbacks %p, %p, %p", self->pos_changed_cb[0],
        self->pos_changed_cb[1], self->pos_changed_cb[2]);
   call_callbacks(pos_changed_cb);
 }

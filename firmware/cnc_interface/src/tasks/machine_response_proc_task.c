@@ -1,4 +1,4 @@
-#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #include "machine_response_proc_task.h"
@@ -39,45 +39,50 @@ extern "C" {
   (tskIDLE_PRIORITY + 4)  // Higher priority to ensure it can preempt UI task
 
 // --- Configuration Constants ---
-// RAM Use: ~ 8KB.
-#define MAX_BUFFER_SLOTS 20  // Max number of lines (slots) to buffer
-#define SHARED_BUFFER_SIZE \
-  4096  // Total size of the underlying character buffer (adjust as needed)
-#define MAX_LINE_LENGTH \
-  4096  // Max length of a single line (including null terminator), must be <
-        // SHARED_BUFFER_SIZE
-#define QUEUE_LENGTH 10  // Length of the notification queue (can be small)
+// On ESP32_HW the FreeRTOS queue IS the message buffer: each slot holds a
+// complete message payload (up to PROC_MSG_MAX_DATA bytes + a 2-byte length).
+// This avoids the eviction-race that the old ring_buffer design had when
+// ring_buffer_add_line called ring_buffer_free_oldest (erasing data the
+// proc_task had not yet consumed).
+#define PROC_MSG_MAX_DATA 252  // >= REMOTE_COMMS_DATA_MAX (251) + 1 for safety
+#define QUEUE_LENGTH 40        // Direct message queue depth — must be large enough
+
+// Non-ESP32_HW still uses the ring-buffer path (gcode_queue).
+#ifndef ESP32_HW
+#define MAX_BUFFER_SLOTS 20
+#define SHARED_BUFFER_SIZE 4096
+#define MAX_LINE_LENGTH    4096
+#endif
 
 #define MAX_PROCESSING_TASKS 2
 
 static const char *TAG = "MACHINE_RESP_PROC_TASK";
 
+#ifdef ESP32_HW
+// Direct message item stored in the FreeRTOS queue.
 typedef struct {
-  char *ptr;      // Pointer to the start of the string in the shared buffer
-  size_t len;     // Length of the string (excluding null terminator)
-  size_t offset;  // Offset within the shared buffer where the string starts
+  uint16_t len;
+  uint8_t  data[PROC_MSG_MAX_DATA];
+} proc_msg_t;
+
+#else  // non-ESP32_HW: keep ring-buffer path
+typedef struct {
+  char *ptr;
+  size_t len;
+  size_t offset;
 } line_slot_t;
 
 typedef struct {
-  char buffer[SHARED_BUFFER_SIZE];      // Underlying shared character buffer
-  line_slot_t slots[MAX_BUFFER_SLOTS];  // Metadata for each stored line
-  size_t start_slot;                    // Index of the oldest slot occupied
-  size_t end_slot;  // Index *after* the last slot occupied (next free slot)
-  size_t buffer_write_offset;  // Next potential write position in the shared
-                               // buffer
-#ifdef ESP32_HW
-  SemaphoreHandle_t mutex;  // Mutex to protect access to the buffer
-#else
+  char buffer[SHARED_BUFFER_SIZE];
+  line_slot_t slots[MAX_BUFFER_SLOTS];
+  size_t start_slot;
+  size_t end_slot;
+  size_t buffer_write_offset;
   mtx_t mutex;
-#endif
 } ring_buffer_t;
 
 static struct {
-#ifdef ESP32_HW
-  QueueHandle_t queue;
-#else
   gcode_queue_t *queue;
-#endif
   ring_buffer_t *ring_buffer;
 } queue_buffers[MAX_PROCESSING_TASKS] = {NULL};
 
@@ -89,19 +94,11 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer,
 static void ring_buffer_free_oldest(ring_buffer_t *rb);
 static bool acquire_mutex(ring_buffer_t *rb, long unsigned int msTimeout);
 static void release_mutex(ring_buffer_t *rb);
+#endif  // ESP32_HW
 
-// --- Ring Buffer Implementation ---
+// --- Ring Buffer Implementation (non-ESP32_HW only) ---
+#ifndef ESP32_HW
 static bool acquire_mutex(ring_buffer_t *rb, long unsigned int msTimeout) {
-#ifdef ESP32_HW
-  // Acquire mutex - wait a short time, essential for shared access
-  TickType_t timeout;
-  if (msTimeout == ULONG_MAX) {
-    timeout = portMAX_DELAY;
-  } else {
-    timeout = pdMS_TO_TICKS(msTimeout);
-  }
-  if (xSemaphoreTake(rb->mutex, timeout) != pdTRUE)
-#else
   struct timespec timeout;
   if (clock_gettime(CLOCK_REALTIME, &timeout) == -1) {
     LOGE(TAG, "Failed to get time to timeout mutex");
@@ -112,21 +109,14 @@ static bool acquire_mutex(ring_buffer_t *rb, long unsigned int msTimeout) {
   } else {
     timeout.tv_nsec += 1000000 * msTimeout;  // 100ms
   }
-  if (mtx_timedlock(&rb->mutex, &timeout) != thrd_success)
-#endif
-  {
+  if (mtx_timedlock(&rb->mutex, &timeout) != thrd_success) {
     return false;
   }
-
   return true;
 }
 
 static void release_mutex(ring_buffer_t *rb) {
-#ifdef ESP32_HW
-  xSemaphoreGive(rb->mutex);
-#else
   mtx_unlock(&rb->mutex);
-#endif
 }
 
 /**
@@ -141,13 +131,7 @@ static bool ring_buffer_init(ring_buffer_t *rb) {
   rb->end_slot = 0;
   rb->buffer_write_offset = 0;
 
-#ifdef ESP32_HW
-  rb->mutex = xSemaphoreCreateMutex();
-  if (rb->mutex == NULL)
-#else
-  if (mtx_init(&rb->mutex, mtx_timed) != thrd_success)
-#endif
-  {
+  if (mtx_init(&rb->mutex, mtx_timed) != thrd_success) {
     LOGE(TAG, "Failed to create ring buffer mutex!");
     return false;
   }
@@ -221,14 +205,14 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
     write_ptr = NULL;
 
     // Try space from current write offset to end
-    if (rb->buffer_write_offset + required_len < SHARED_BUFFER_SIZE) {
+    if (rb->buffer_write_offset + required_len <= SHARED_BUFFER_SIZE) {
       write_offset = rb->buffer_write_offset;
       write_ptr = rb->buffer + write_offset;
     }
 
     // Try space from beginning if it didn't fit at the end
     if (write_ptr == NULL &&
-        required_len <
+        required_len <=
             rb->buffer_write_offset) {  // Check if there's space *before* the
                                         // current write offset
       size_t oldest_data_start =
@@ -258,15 +242,21 @@ static bool ring_buffer_add_line(ring_buffer_t *rb, const uint8_t *line,
     }
 
     // 4. If no space/slot, free the oldest slot
-    if (rb->start_slot == rb->end_slot && rb->buffer_write_offset != 0) {
-      // Should not happen if required_len <= SHARED_BUFFER_SIZE, but safety
-      // check
+    if (rb->start_slot == rb->end_slot && rb->buffer_write_offset == 0) {
       LOGE(
           TAG,
           "Ring buffer full and cannot free space for line (len %d). Dropping.",
-          required_len);
+          (int)required_len);
       release_mutex(rb);
       return false;
+    }
+    if (rb->start_slot == rb->end_slot && rb->buffer_write_offset != 0) {
+      LOGE(
+          TAG,
+          "Ring buffer empty but offset %u? Resetting to 0.",
+          (unsigned)rb->buffer_write_offset);
+      rb->buffer_write_offset = 0;
+      continue;
     }
 
     LOGW(TAG,
@@ -417,13 +407,18 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer,
   release_mutex(rb);
   return true;
 }
+#endif  // !ESP32_HW — end of ring-buffer implementation
 
 /**
  * Notify task of data being ready.
  *
- * task_event_queue: queue to post notification to.
- * data: data that's ready.
- * len: data length.
+ * On ESP32_HW the message is copied directly into the FreeRTOS data queue
+ * (proc_msg_t).  The old ring-buffer indirection is gone; this avoids the
+ * race where ring_buffer_add_line's free_oldest evicted data before the
+ * proc_task could process it, leaving the task perpetually finding an empty
+ * buffer despite a full notification queue.
+ *
+ * On non-ESP32_HW the gcode_queue path is unchanged.
  */
 int machine_response_proc_task_data_ready(
 #ifdef ESP32_HW
@@ -432,64 +427,50 @@ int machine_response_proc_task_data_ready(
     gcode_queue_t *task_event_queue,
 #endif
     const uint8_t *data, size_t len, bool from_isr) {
-  ring_buffer_t *response_buffer = NULL;
-  for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
-    if (queue_buffers[i].queue == task_event_queue) {
-      response_buffer = queue_buffers[i].ring_buffer;
-    }
+#ifdef ESP32_HW
+  if (task_event_queue == NULL) {
+    LOGE(TAG, "data_ready: queue is NULL");
+    return 1;
   }
-  if (response_buffer == NULL) {
-    LOGE(TAG, "Cannot find response buffer for queue %p", task_event_queue);
+  if (len == 0 || len > PROC_MSG_MAX_DATA) {
+    LOGW(TAG, "data_ready: invalid len %u, dropping", (unsigned)len);
     return 1;
   }
 
-  LOGI(TAG, "Received %d data\n", len);
+  proc_msg_t msg;
+  msg.len = (uint16_t)len;
+  memcpy(msg.data, data, len);
 
-  // 1. Add the received line to the ring buffer
-  if (ring_buffer_add_line(response_buffer, data, len)) {
-    // 2. Notify the processing task queue that new data is available
-    if (task_event_queue != NULL) {
-      uint8_t dummy_notification = 1;  // Content doesn't matter, just the event
-      // Use xQueueSend with a zero timeout - non-blocking. If queue is full,
-      // notification is lost, but data is still in the ring buffer.
-      // The task will eventually process it when it gets CPU time.
-#ifdef ESP32_HW
-      BaseType_t result = pdFAIL;
-      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-      if (!from_isr) {
-        result = xQueueSend(task_event_queue, &dummy_notification, 0);
-      } else {
-        result = xQueueSendFromISR(task_event_queue, &dummy_notification,
-                                   &xHigherPriorityTaskWoken);
-      }
-      if (result != pdTRUE)
-#else
-      bool result = gcode_queue_push(task_event_queue, &dummy_notification);
-      if (!result)
-#endif
-      {
-        // This might happen if the processing task falls behind significantly.
-        // Data is still buffered, so it's not critical, but indicates potential
-        // bottleneck.
-        LOGW(TAG, "Machine processing task queue full.");
-      } else {
-        LOGV(TAG, "Queue sent!");
-#ifdef ESP32_HW
-        if (xHigherPriorityTaskWoken) {
-          portYIELD_FROM_ISR();
-        }
-#endif
-      }
-    } else {
-      LOGE(TAG, "Serial received queue is NULL in callback!");
-    }
+  BaseType_t result = pdFAIL;
+  if (!from_isr) {
+    result = xQueueSend(task_event_queue, &msg, 0);
   } else {
-    // ring_buffer_add_line already logs errors/warnings
-    LOGW(TAG, "Failed to add line to ring buffer. Line dropped.");
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    result = xQueueSendFromISR(task_event_queue, &msg,
+                               &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken) {
+      portYIELD_FROM_ISR();
+    }
   }
-
-  // IMPORTANT: Keep this callback short and fast.
+  if (result != pdTRUE) {
+    LOGW(TAG, "Proc queue full — message type=%d len=%u dropped.",
+         len > 0 ? (int)data[0] : -1, (unsigned)len);
+    return 1;
+  }
   return 0;
+
+#else  // non-ESP32_HW: gcode_queue path unchanged
+  (void)from_isr;
+  if (task_event_queue == NULL) return 1;
+  // Non-ESP32_HW still uses gcode_queue which stores string pointers;
+  // this path is only exercised in desktop unit-test builds.
+  bool result = gcode_queue_push(task_event_queue, (const char *)data);
+  if (!result) {
+    LOGW(TAG, "gcode_queue full — message dropped.");
+    return 1;
+  }
+  return 0;
+#endif
 }
 
 typedef struct {
@@ -538,109 +519,51 @@ void machine_response_proc_task(void *vpargs) {
 
   free(args);
 
-  ring_buffer_t *response_buffer = (ring_buffer_t *)malloc(sizeof(ring_buffer_t));
   bool abort = false;
-
-  if (!response_buffer) {
-    LOGE(TAG, "Failed to allocate response ring buffer.");
-    abort = true;
-  } else if (!ring_buffer_init(response_buffer)) {
-    LOGE(TAG, "Failed to initialize response ring buffer.");
-    free(response_buffer);
-    response_buffer = NULL;
-    abort = true;
-  }
-
-  for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
-    if (queue_buffers[i].ring_buffer == NULL) {
-      queue_buffers[i].queue = queue;
-      queue_buffers[i].ring_buffer = response_buffer;
-      break;
-    }
-
-    if (i == MAX_PROCESSING_TASKS - 1) {
-      LOGE(
-          TAG,
-          "Number of response processing tasks exceeded MAX_PROCESSING_TASKS!");
-      abort = true;
-    }
-  }
-
   LOGI(TAG, ">> Starting machine response processing task...");
-
-#if 0
-    char line_buffer[MAX_LINE_LENGTH]; // Buffer to hold line retrieved from ring buffer
-#else
-  char *line_buffer;
-#endif
-
-  uint8_t notification_item;  // Dummy item received from queue
-
-  // LOGI(TAG, "%s task stack size high: %d\n", task_name,
-  //     uxTaskGetStackHighWaterMark(NULL));
 
   while (!abort) {
 #ifdef ESP32_HW
-    // Block indefinitely waiting for a notification from the queue
-    if (xQueueReceive(queue, &notification_item, portMAX_DELAY) == pdTRUE)
-#else
-    if (gcode_queue_pop(queue, &notification_item))
-#endif
-    {
-      LOGI(TAG, "Response proc queue item received");
-
-      // Notification received, try to get data from the ring buffer
-      size_t line_len;
-
-#if 0
-            // Loop to process all available lines in the buffer before blocking again
-            while (ring_buffer_get_line(&response_buffer, line_buffer, MAX_LINE_LENGTH, &line_len)) {
-                LOGI(TAG, "Processing line (len %d): %s", line_len, line_buffer);
-                if (line_len > 0) {
-                    // Call the machine interface function to process the response
-                    // Pass the line_buffer containing the null-terminated string
-                    machine_interface_process_machine_state_response(machine, line_buffer);
-                }
-            }
-#else
-      // Loop to process available lines in the buffer before blocking again.
-      // To avoid starving lower-priority tasks (e.g., the LVGL UI task),
-      // process a limited batch per wake and then yield briefly.
-      const int MAX_PROCESS_PER_WAKE = 8;
-      int processed = 0;
-      while ((line_buffer = ring_buffer_line_data(response_buffer, &line_len))) {
-        LOGI(TAG, "[%s] Processing line (len %d): %p, machine %p, queue %p",
-             task_name, line_len, line_buffer, machine, queue);
-        if (line_len > 0) {
-          // Call the machine interface function to process the response
-          // Pass the line_buffer containing the null-terminated string
-          machine_interface_process_machine_state_response(machine, line_buffer,
-                                                           line_len);
-        }
-        ring_buffer_purge_line(response_buffer);
-        processed++;
-        if (processed >= MAX_PROCESS_PER_WAKE) {
-          // Give other tasks a chance to run before continuing to process
-          vTaskDelay(pdMS_TO_TICKS(1));
-          processed = 0;
-        }
+    // Each queue item IS the message: receive directly into a proc_msg_t.
+    proc_msg_t msg;
+    if (xQueueReceive(queue, &msg, portMAX_DELAY) == pdTRUE) {
+      LOGD(TAG, "[PROC] type=%d len=%d",
+           msg.len > 0 ? (int)msg.data[0] : -1, (int)msg.len);
+      if (msg.len > 0) {
+        machine_interface_process_machine_state_response(machine, msg.data,
+                                                         msg.len);
       }
-
-#endif
-      // No more lines currently in the buffer, loop back to wait for next
-      // notification
     }
-    // If xQueueReceive fails unexpectedly (shouldn't with portMAX_DELAY), loop
-    // continues
+    // If xQueueReceive returns pdFALSE unexpectedly, loop and retry.
+
+#else  // non-ESP32_HW: gcode_queue (desktop / unit-test builds)
+    // The non-ESP32 path keeps the old ring-buffer approach via gcode_queue.
+    // This branch is only exercised in desktop unit tests.
+    char *line_buffer;
+    size_t line_len;
+    ring_buffer_t *response_buffer = NULL;
+    for (size_t i = 0; i < MAX_PROCESSING_TASKS; ++i) {
+      if (queue_buffers[i].queue == queue) {
+        response_buffer = queue_buffers[i].ring_buffer;
+        break;
+      }
+    }
+    uint8_t notification_item;
+    if (!gcode_queue_pop(queue, &notification_item)) continue;
+    if (response_buffer == NULL) continue;
+    while ((line_buffer = ring_buffer_line_data(response_buffer, &line_len))) {
+      if (line_len > 0) {
+        machine_interface_process_machine_state_response(machine, line_buffer,
+                                                         line_len);
+      }
+      ring_buffer_purge_line(response_buffer);
+    }
+#endif  // ESP32_HW
   }
 
-  // Should never reach here, but good practice to include
+  // Should never reach here
   LOGW(TAG, "Machine Response Processing Task terminating unexpectedly...");
 #ifdef ESP32_HW
-  if (response_buffer) {
-    vSemaphoreDelete(response_buffer->mutex);  // Clean up mutex
-    free(response_buffer);
-  }
   vTaskDelete(NULL);
 #endif
   return;
@@ -672,14 +595,14 @@ bool machine_response_proc_task_run(const char *task_name,
 
   LOGI(TAG, "Initializing machine response processing...");
 #ifdef ESP32_HW
-  // TODO: should consider moving this to class that calls if intent was to pass
-  // between threads. This makes it clearer that this code doesn't own the queue
-  // actually but the higher level processing does.
-  *queue = xQueueCreate(QUEUE_LENGTH, sizeof(uint8_t));
+  // Queue holds complete proc_msg_t items (data + length). Each item is at
+  // most PROC_MSG_MAX_DATA+2 bytes.  20 slots ≈ 5 KB — avoids the old
+  // ring-buffer / notification-queue split that suffered an eviction race.
+  *queue = xQueueCreate(QUEUE_LENGTH, sizeof(proc_msg_t));
 #else
   gcode_queue_init(queue);
 #endif
-  if (queue == NULL) {
+  if (*queue == NULL) {
     LOGE(TAG, "Failed to create serial received notification queue!");
     return false;
   }

@@ -705,5 +705,26 @@ bool multi_machine_add_impl(multi_machine_interface_t *self,
   machine_interface_add_log_message_cb(machine, self, _mach_cb_log_message);
 
   LOGI(TAG, "Added machine interface, total: %u", self->num_machines);
+
+  /* If the machine is already connected when added (e.g. remote learned
+   * its hub MAC before the interface was registered), make it the active
+   * machine so the UI and commands operate immediately. */
+  if (machine->is_connected && machine->is_connected(machine)) {
+    if (self->active_machine_idx == -1) {
+      int idx = self->num_machines - 1;
+      LOGI(TAG, "Machine %d was already connected; selecting as ACTIVE", idx);
+      self->active_machine_idx = idx;
+      _mach_copy_state(self, machine);
+      machine_interface_state_updated(&self->base);
+      machine_interface_position_updated(&self->base);
+      machine_interface_home_updated(&self->base);
+      machine_interface_wcs_updated(&self->base);
+      machine_interface_feed_updated(&self->base);
+      machine_interface_sensors_updated(&self->base);
+      machine_interface_dialogs_updated(&self->base);
+      machine_interface_spindles_tools_updated(&self->base);
+      machine_interface_connected_updated(&self->base);
+    }
+  }
   return true;
 }

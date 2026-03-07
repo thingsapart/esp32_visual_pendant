@@ -47,6 +47,25 @@ static const char *TAG = "sdio_transport";
 #define BRIDGE_VLOG(fmt, ...) do { (void)0; } while (0)
 #endif
 
+// ---- Host-ready gate --------------------------------------------------------
+// The P4 host resets the SDIO slave's TX_BUFFER_NUM register during essl_init.
+// Any frames queued in sdio_slave_send_queue() *before* that reset become
+// permanently invisible to essl_get_packet() — the host sees zero buffers
+// available and never issues a DMA read, so the slot semaphore stalls at 0.
+// We defer all TX until we have received at least one frame from the P4
+// (confirming essl_init is complete and the ESSL layer is operational).
+static volatile bool s_host_ready = false;
+
+void bridge_transport_set_host_ready(void)
+{
+    if (!s_host_ready) {
+        s_host_ready = true;
+        ESP_LOGI(TAG, "P4 ESSL confirmed ready — C6\xe2\x86\x92P4 TX forwarding enabled");
+    }
+}
+
+bool bridge_transport_is_host_ready(void) { return s_host_ready; }
+
 // ---- Build-time configuration -----------------------------------------------
 
 #ifndef C6_BRIDGE_SDIO_BUS_WIDTH
@@ -209,67 +228,80 @@ void bridge_transport_init(void)
 
 int bridge_transport_write(const uint8_t *buf, size_t len)
 {
+    // Don't touch the SDIO send queue until the host has completed essl_init.
+    // See comment on s_host_ready / bridge_transport_set_host_ready().
+    if (!s_host_ready) return -1;
+
     if (len == 0 || len > SDIO_PKT_SIZE) {
         ESP_LOGE(TAG, "write: invalid len %zu", len);
         return -1;
     }
 
+    // Non-blocking: drain any TX slots that have already been read by the host
+    // before we try to acquire a new one.  This keeps the pool healthy without
+    // blocking on the host.
+    {
+        void *finished_arg = NULL;
+        while (sdio_slave_send_get_finished(&finished_arg, 0) == ESP_OK) {
+            if (finished_arg) tx_pool_release((tx_slot_t *)finished_arg);
+            finished_arg = NULL;
+        }
+    }
+
     // Acquire a DMA-accessible TX slot from the pool.
-    // Wait a bit longer before giving up — host stalls have been observed.
-    tx_slot_t *slot = tx_pool_acquire(pdMS_TO_TICKS(500));
+    // Use a short timeout: the C6 loop() is single-threaded; long waits here
+    // block bridge_transport_read() and cause P4→C6 command loss.
+    tx_slot_t *slot = tx_pool_acquire(pdMS_TO_TICKS(20));
     if (!slot) {
-        ESP_LOGW(TAG, "write: TX pool empty, dropping %zu bytes", len);
-        return -1;
+        // One more attempt: do a short blocking reclaim of completed sends.
+        void *finished_arg = NULL;
+        if (sdio_slave_send_get_finished(&finished_arg, pdMS_TO_TICKS(20)) == ESP_OK && finished_arg) {
+            tx_pool_release((tx_slot_t *)finished_arg);
+            slot = tx_pool_acquire(0);
+        }
+        if (!slot) {
+            // Last resort: force-reclaim slots that have been in-flight for
+            // more than 3 s.  This handles P4 crash/reboot: after essl_init
+            // the host resets TX_BUFFER_NUM so those queued items can never
+            // be acknowledged.  Reclaiming them also clears s_host_ready so
+            // the gate re-opens cleanly when the P4 sends its next ping.
+            int reclaimed = tx_pool_reclaim_old_slots(pdMS_TO_TICKS(3000),
+                                                      C6_BRIDGE_SDIO_TX_BUF_COUNT);
+            if (reclaimed > 0) {
+                // Slots have been force-reclaimed due to prolonged P4 absence.
+                // Do NOT restart — that would lose all queued hub state.
+                // Instead, clear the host-ready gate; the P4 heartbeat task
+                // sends a '?' ping every 5 s which will re-open it.
+                ESP_LOGW(TAG, "write: force-reclaimed %d stale TX slot(s) — "
+                              "clearing host-ready, awaiting P4 heartbeat",
+                         reclaimed);
+                s_host_ready = false;
+                return -1;
+            }
+        }
+        if (!slot) {
+            ESP_LOGW(TAG, "write: TX pool empty, dropping %zu bytes", len);
+            return -1;
+        }
     }
     memcpy(slot->data, buf, len);
 
-    // Queue the buffer for the host to read.  The 'arg' (last parameter) is
-    // the slot pointer so we can release it in sdio_slave_send_get_finished().
-    // Use a bounded timeout (200 ms) instead of portMAX_DELAY so a stalled
-    // host cannot deadlock the main task and trigger the task watchdog.
+    // Short timeout: the loop() calling this is single-threaded.  A long
+    // wait here starves bridge_transport_read() and silently drops P4 TX.
     esp_err_t err = sdio_slave_send_queue(slot->data, len,
-                                          (void *)slot, pdMS_TO_TICKS(2000));
+                                          (void *)slot, pdMS_TO_TICKS(20));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "write: send_queue err %d (%s)", err, esp_err_to_name(err));
-        // Diagnostic: count in-use slots
-        int in_use = 0;
-        for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT; i++) if (s_tx_pool[i].in_use) in_use++;
-        UBaseType_t sem_count = uxSemaphoreGetCount(s_tx_sem);
-        BRIDGE_VLOG("write: send_queue failed, in_use=%d sem_count=%u", in_use, (unsigned)sem_count);
-        // Attempt conservative reclaim of one old slot to recover from leaks.
-        int reclaimed = tx_pool_reclaim_old_slots(pdMS_TO_TICKS(3000), 1);
-        if (reclaimed) BRIDGE_VLOG("write: reclaimed %d old slot(s)", reclaimed);
         tx_pool_release(slot);
         return -1;
     }
 
-    // Wait for the host DMA transfer to complete and reclaim the slot.
-    void *finished_arg = NULL;
-    err = sdio_slave_send_get_finished(&finished_arg,
-                                       pdMS_TO_TICKS(2000));
-    if (err == ESP_OK && finished_arg) {
-        tx_pool_release((tx_slot_t *)finished_arg);
-    } else {
-        // Timeout or error — the slot is likely leaked. Log diagnostics and
-        // attempt to reclaim stuck slots older than a threshold.
-        int in_use = 0;
-        for (int i = 0; i < C6_BRIDGE_SDIO_TX_BUF_COUNT; i++) if (s_tx_pool[i].in_use) in_use++;
-        UBaseType_t sem_count = uxSemaphoreGetCount(s_tx_sem);
-        ESP_LOGW(TAG, "write: send_get_finished err %d (%s)", err, esp_err_to_name(err));
-        BRIDGE_VLOG("write: detailed state: in_use=%d sem_count=%u",
-                    in_use, (unsigned)sem_count);
-
-        int reclaimed = tx_pool_reclaim_old_slots(pdMS_TO_TICKS(3000), C6_BRIDGE_SDIO_TX_BUF_COUNT);
-        if (reclaimed) {
-            BRIDGE_VLOG("write: reclaimed %d stuck TX slot(s)", reclaimed);
-        } else {
-            BRIDGE_VLOG("write: no stuck slots eligible for reclaim");
-        }
-        return -1;
-    }
-
-    // Successful completion of the host DMA transfer.
-    BRIDGE_VLOG("write: completed %zu bytes", len);
+    // Do NOT wait here for send_get_finished — the host reads it asynchronously.
+    // We will reclaim the slot at the top of the next bridge_transport_write()
+    // call (the non-blocking drain above), keeping total blocking time short.
+    // The slot and its memory remain valid until reclaimed because we hold it
+    // in the in_use pool.
+    BRIDGE_VLOG("write: queued %zu bytes (slot %td)", len, slot - s_tx_pool);
     return (int)len;
 }
 
@@ -283,7 +315,7 @@ int bridge_transport_read(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
                                     pdMS_TO_TICKS(timeout_ms));
     if (err == ESP_ERR_TIMEOUT) return 0;
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "recv err %d", err);
+        ESP_LOGE(TAG, "recv err %d (%s)", err, esp_err_to_name(err));
         return -1;
     }
 
@@ -293,6 +325,7 @@ int bridge_transport_read(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
     // Recycle the buffer immediately so the host sees it as available again.
     sdio_slave_recv_load_buf(handle);
 
+    BRIDGE_VLOG("read: %zu bytes from host", copy_len);
     return (int)copy_len;
 }
 
@@ -302,5 +335,12 @@ size_t bridge_transport_describe(char *buf, size_t buf_size)
         "SDIO slave: CLK 19 CMD 18 D0-3 20-23",
         C6_BRIDGE_SDIO_BUS_WIDTH);
 }
+
+// UART transport stubs — compiled when SDIO is NOT selected, providing the
+// same host_ready symbols so the linker is satisfied regardless of transport.
+// (The #ifdef guard prevents double-definition when both files are compiled
+//  with different transport defines — normally only one .cpp is active.)
+// Actually these stubs are NOT needed here — they live in bridge_transport_uart.cpp
+// or are provided by the inline fallbacks in bridge_transport.h.  No stubs here.
 
 #endif  // C6_BRIDGE_TRANSPORT_SDIO

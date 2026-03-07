@@ -655,7 +655,7 @@ void setup() {
                     "MachineRemoteProc", &machine_remote.base,
                     &machine_remote_proc_task_handle,
                     &machine_remote_proc_queue, TASK_MACHINE_CORE,
-                    4 * 1024)) {  // ESP-NOW binary dispatch only — no cJSON
+                    8 * 1024)) {  // 8 KB: process_binary_payload does calloc/strdup loops
     if (!machine_remote_setup_response_processing_task(
             &machine_remote, machine_remote_proc_queue)) {
       LOGE(TAG, "Failed to set up response processing queue for Remote task");
@@ -674,7 +674,7 @@ void setup() {
   if (!abort && machine_send_task_run(
                     "MachineSendTask", &machine.base,  // Send to multi-machine
                     &machine_send_task_handle, &machine_send_queue,
-                    TASK_MACHINE_CORE, 2 * 1024, tskIDLE_PRIORITY + 5)) {
+                    TASK_MACHINE_CORE, 8 * 1024, tskIDLE_PRIORITY + 5)) {
     machine.base.gcode_queue = machine_send_queue;
     // Propagate the queue handle to all child machine interfaces
     for (size_t i = 0; i < machine.num_machines; ++i) {
