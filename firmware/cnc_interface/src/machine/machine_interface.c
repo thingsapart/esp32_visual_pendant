@@ -194,7 +194,7 @@ static char *_default_debug_print(machine_interface_t *self) {
   snprintf(debug_str, sizeof(debug_str),
            "{ status: %d, homed: [%d, %d, %d], pos: [%f, %f, %f], wcs_pos: "
            "[%f, %f, %f], wcs: %d, tool: %s, feedm: %f, zoffs: %f, "
-           "gcode_q_count: %zu, poll_state: %d }",
+           "gcode_q_count: %u, poll_state: %d }",
            self->machine_status, self->axes_homed[0], self->axes_homed[1],
            self->axes_homed[2], self->position[0], self->position[1],
            self->position[2], self->wcs_position[0], self->wcs_position[1],
@@ -202,7 +202,7 @@ static char *_default_debug_print(machine_interface_t *self) {
            self->tool ? self->tool : "None",  // Handle NULL tool
            self->feed_multiplier, self->z_offs,
 #if defined(ASYNC_GCODE_SENDING) && !defined(ESP32_HW)
-           gcode_queue_count(self->gcode_queue),
+           (unsigned)gcode_queue_count(self->gcode_queue),
 #else
            0,
 #endif
@@ -359,7 +359,7 @@ bool machine_interface_is_homed(machine_interface_t *self, const char *axes) {
           return false;
         }
       } else {
-        LOGI(TAG, , "Invalid axis: %c", *p);  // Log warning for invalid axis
+        LOGI(TAG, "Invalid axis: %c", *p);  // Log warning for invalid axis
         return false;  // Consider invalid axis as not homed
       }
     }
@@ -570,7 +570,16 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
   // _update_machine_state().
   // machine_interface_process_gcode_q(self);
 
-  self->_update_machine_state(self, self->poll_state);
+  if (!self) {
+    LOGE(TAG, "machine_interface_task_loop_iter called with NULL self");
+    return;
+  }
+
+  if (self->_update_machine_state) {
+    self->_update_machine_state(self, self->poll_state);
+  } else {
+    LOGW(TAG, "_update_machine_state is NULL for machine %p", self);
+  }
 
   call_callbacks(state_change_cb);
 

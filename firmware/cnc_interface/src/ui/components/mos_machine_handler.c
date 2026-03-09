@@ -541,7 +541,9 @@ static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) 
     bool connected = machine->is_connected ? machine->is_connected(machine) : false;
 
     LOGI(TAG, "MACHINE CONNECTED! %d", connected);
-    lv_probing_wizard_set_connected(handler_state.wizard_obj, connected);
+    if (handler_state.wizard_obj != NULL) {
+        lv_probing_wizard_set_connected(handler_state.wizard_obj, connected);
+    }
 }
 
 /**

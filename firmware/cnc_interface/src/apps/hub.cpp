@@ -1,5 +1,10 @@
 // hub_main.cpp
 
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL D_INFO
+#define UI_DEBUG_LOCAL_LEVEL D_INFO
+#include "debug.h"
+
 #include "config.h"
 
 #ifdef ESP_NOW_HUB
@@ -11,9 +16,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#undef LOG_LOCAL_LEVEL
-#define LOG_LOCAL_LEVEL D_WARN
-#include "debug.h"
 
 #include "driver/driver_interface.hpp"
 #include "driver/remote_comms_wrapper.h"
@@ -175,12 +177,25 @@ void on_sensors_change(machine_interface_t *machine, void *user_data) {
 
   // Serialize io_channels[] into an io_channels_payload_hdr_t + io_channel_wire_t[]
   // and broadcast to the pendant via MSG_SUB_TYPE_IO_CHANNELS.
+
+  // Take local snapshots of the two fields that _rrf_rebuild_io_channels can
+  // update from the async proc task concurrently.  Reading the pointer and the
+  // count separately (without a lock) can yield a torn view; the NULL guard
+  // below defends against the window where num_io_channels was already set to
+  // the new non-zero value but io_channels hasn't been assigned yet (or was
+  // just freed).
+  mc_io_channel_t *channels = machine->io_channels;
   size_t n = machine->num_io_channels;
+  if (n > 0 && !channels) {
+    // Transient race: count updated but pointer not yet; skip this tick.
+    return;
+  }
+
   size_t payload_size = sizeof(io_channels_payload_hdr_t) +
                         n * sizeof(io_channel_wire_t);
   uint8_t *buf = (uint8_t *)malloc(payload_size);
   if (!buf) {
-    LOGE(TAG, "on_sensors_change: OOM (%zu bytes)", payload_size);
+    LOGE(TAG, "on_sensors_change: OOM (%u bytes)", (unsigned)payload_size);
     return;
   }
   memset(buf, 0, payload_size);
@@ -192,7 +207,7 @@ void on_sensors_change(machine_interface_t *machine, void *user_data) {
       (io_channel_wire_t *)(buf + sizeof(io_channels_payload_hdr_t));
 
   for (size_t i = 0; i < n; i++) {
-    const mc_io_channel_t *ch = &machine->io_channels[i];
+    const mc_io_channel_t *ch = &channels[i];
     wire[i].source_index  = ch->source_index;
     wire[i].direction     = (uint8_t)ch->direction;
     wire[i].signal        = (uint8_t)ch->signal;
@@ -342,7 +357,7 @@ void on_files_changed(machine_interface_t *mach, void *user_data,
 
   uint8_t *buf = (uint8_t *)malloc(total_size);
   if (!buf) {
-    LOGE(TAG, "on_files_changed: OOM (%zu bytes)", total_size);
+    LOGE(TAG, "on_files_changed: OOM (%u bytes)", (unsigned)total_size);
     return;
   }
   memset(buf, 0, total_size);
@@ -1185,12 +1200,14 @@ void hub_task(void *pvParameters) {
 #endif
 
   // Initialize ESP-NOW
+  LOGI(TAG, "Initialize ESP-NOW...");
   if (!remote_wrapper_init(on_remote_data_recv, on_remote_data_sent, NULL)) {
     LOGI(TAG, "Failed to initialize ESP-NOW");
     led_status_error();  // Signal error with red LED
     vTaskDelete(NULL);
     return;
   }
+  LOGI(TAG, "Initialized ESP-NOW... DONE");
 
   // Add the display as a peer
   if (!remote_wrapper_add_peer(display_mac_address)) {
@@ -1217,9 +1234,13 @@ void setup_machine_interface() {
   led_status_init();
   led_status_connecting();  // Start in connecting state
   
-  // Initialize the machine interface
-  g_machine = machine_rrf_create_serial(0, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
-                                 MACH_UART_PIN_RX);  // Use UART 0
+  // Initialize the machine interface.
+  // Use UART1 (not UART0) to avoid conflicting with the IDF/Arduino framework's
+  // UART0 console, which is initialized at 115200 before app code runs.  On
+  // ESP32-S3 the GPIO matrix lets any UART use any pin, so MACH_UART_PIN_TX/RX
+  // still work on UART1.
+  g_machine = machine_rrf_create_serial(1, HUB_POLL_INTERVAL_MS, MACH_UART_PIN_TX,
+                                 MACH_UART_PIN_RX);  // Use UART 1
   if (!g_machine) {
     LOGI(TAG, "Failed to create machine interface");
     led_status_error();  // Signal error with red LED

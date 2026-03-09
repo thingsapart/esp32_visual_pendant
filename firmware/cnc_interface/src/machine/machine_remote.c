@@ -594,10 +594,10 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
   if (data[0] != MSG_TYPE_BINARY &&
       data_len > sizeof(remote_msg_t)) {  // sizeof(remote_msg_t) is max size
                                           // for simple types
-    LOGW(TAG,
-         "Non-binary remote message too large (%zu bytes) to buffer. "
-         "Discarding.",
-         data_len);
+        LOGW(TAG,
+          "Non-binary remote message too large (%u bytes) to buffer. "
+          "Discarding.",
+          (unsigned)data_len);
     return;
   }
 
@@ -622,16 +622,16 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
          "Remote message too large to buffer.");
   self->msg_buffer_msg_len[len_idx] = data_len;
   memcpy(&self->msg_buffer[len_idx], data, data_len);
-  LOGD(TAG, "Buffered non-binary message type %u (index %zu)", data[0],
-       len_idx);
+    LOGD(TAG, "Buffered non-binary message type %u (index %u)", data[0],
+      (unsigned)len_idx);
 }
 
 static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
                                               const uint8_t *data, size_t len) {
   if (len < BINARY_FRAGMENT_MSG_HEADER_SIZE) {
-    LOGW(TAG,
-         "Received truncated binary fragment message (len %zu < header %zu).",
-         len, BINARY_FRAGMENT_MSG_HEADER_SIZE);
+        LOGW(TAG,
+          "Received truncated binary fragment message (len %u < header %u).",
+          (unsigned)len, (unsigned)BINARY_FRAGMENT_MSG_HEADER_SIZE);
     return;
   }
 
@@ -639,8 +639,8 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
 
   // Validate data length reported in header matches received length
   if (len != BINARY_FRAGMENT_MSG_HEADER_SIZE + frag_msg->fragment_len) {
-    LOGW(TAG, "Binary fragment length mismatch: header says %u, received %zu.",
-         frag_msg->fragment_len, len - BINARY_FRAGMENT_MSG_HEADER_SIZE);
+        LOGW(TAG, "Binary fragment length mismatch: header says %u, received %u.",
+          frag_msg->fragment_len, (unsigned)(len - BINARY_FRAGMENT_MSG_HEADER_SIZE));
     return;
   }
 
@@ -662,10 +662,10 @@ static void binary_message_fragment_to_buffer(machine_interface_remote_t *self,
           g_binary_payload_buffers[i].total_fragments !=
               frag_msg->total_fragments ||
           g_binary_payload_buffers[i].sub_type != frag_msg->sub_type) {
-        LOGW(TAG,
-             "Fragment Seq %u mismatch with ongoing reassembly slot %zu. "
+           LOGW(TAG,
+             "Fragment Seq %u mismatch with ongoing reassembly slot %u. "
              "Discarding fragment.",
-             frag_msg->seq_id, i);
+             frag_msg->seq_id, (unsigned)i);
         return;  // Inconsistent fragment, ignore it
       }
       target_slot = i;
@@ -849,7 +849,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
 
     case MSG_TYPE_POSITION: {
       if (len != sizeof(position_msg_t)) {
-        LOGE(TAG, "Invalid position message length: %zu", len);
+        LOGE(TAG, "Invalid position message length: %u", (unsigned)len);
         return;
       }
       position_msg_t *msg = (position_msg_t *)data;
@@ -874,7 +874,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
     case MSG_TYPE_WCS: {
       if (len != sizeof(wcs_msg_t)) {
-        LOGE(TAG, "Invalid wcs message length: %zu", len);
+        LOGE(TAG, "Invalid wcs message length: %u", (unsigned)len);
         return;
       }
       wcs_msg_t *msg = (wcs_msg_t *)data;
@@ -887,7 +887,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
     case MSG_TYPE_STATUS: {
       if (len != sizeof(status_msg_t)) {
-        LOGE(TAG, "Invalid status message length: %zu", len);
+        LOGE(TAG, "Invalid status message length: %u", (unsigned)len);
         return;
       }
       status_msg_t *msg = (status_msg_t *)data;
@@ -916,7 +916,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
     case MSG_TYPE_FEED: {
       if (len != sizeof(feed_msg_t)) {
-        LOGE(TAG, "Invalid feed message length: %zu", len);
+        LOGE(TAG, "Invalid feed message length: %u", (unsigned)len);
         return;
       }
       feed_msg_t *msg = (feed_msg_t *)data;
@@ -939,7 +939,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       //   1 byte  tool_flute_count (uint8_t)
       //  [N bytes tool name, no NUL]
       if (len < SPINDLES_TOOLS_WIRE_HEADER_LEN) {
-        LOGE(TAG, "Invalid MSG_TYPE_SPINDLES_TOOLS message len: %zu", len);
+        LOGE(TAG, "Invalid MSG_TYPE_SPINDLES_TOOLS message len: %u", (unsigned)len);
         return;
       }
       const uint8_t *ptr = (const uint8_t *)data;
@@ -963,8 +963,8 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       // Safety: name bytes must fit within the received message.
       size_t name_offset = (size_t)(ptr - (const uint8_t *)data);
       if ((size_t)tool_name_len > len - name_offset) {
-        LOGE(TAG, "Invalid tool name length: claimed %u but only %zu bytes remain",
-             (unsigned)tool_name_len, len - name_offset);
+           LOGE(TAG, "Invalid tool name length: claimed %u but only %u bytes remain",
+             (unsigned)tool_name_len, (unsigned)(len - name_offset));
         return;
       }
 
@@ -1003,7 +1003,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
     case MSG_TYPE_LOG_MESSAGE: {
       if (len <= offsetof(log_msg_t, message)) {
-        LOGE(TAG, "Invalid log message length: %zu", len);
+        LOGE(TAG, "Invalid log message length: %u", (unsigned)len);
         return;
       }
       log_msg_t *msg = (log_msg_t *)data;
@@ -1046,7 +1046,7 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
     }
     case MSG_TYPE_DISMISS_MODAL: {
       if (len < sizeof(dismiss_modal_msg_t)) {
-        LOGE(TAG, "Invalid dismiss_modal message length: %zu", len);
+        LOGE(TAG, "Invalid dismiss_modal message length: %u", (unsigned)len);
         return;
       }
       dismiss_modal_msg_t *msg = (dismiss_modal_msg_t *)data;
@@ -1182,8 +1182,9 @@ bool machine_remote_setup_response_processing_task(
     machine_interface_remote_t *self, gcode_queue_t *task_event_queue)
 #endif
 {
-  LOGI(TAG, "Updating proc_task_event_queue for remote %p: %p");
-  self->proc_task_event_queue = task_event_queue;
+    LOGI(TAG, "Updating proc_task_event_queue for remote %p: %p", (void *)self,
+      (void *)task_event_queue);
+    self->proc_task_event_queue = task_event_queue;
 
   return true;
 }
@@ -1236,10 +1237,10 @@ void *message_box_t_to_payload(const message_box_t *msg_box, size_t *out_size) {
   }
   for (size_t i = 0; i < msg_box->num_choices; ++i) {
     if (!msg_box->choices[i]) {
-      LOGW(TAG,
-           "Error: Input message_box_t has NULL pointer in choices array at "
-           "index %zu.\n",
-           i);
+       LOGW(TAG,
+         "Error: Input message_box_t has NULL pointer in choices array at "
+         "index %u.\n",
+         (unsigned)i);
     }
   }
 
@@ -1391,7 +1392,7 @@ message_box_t *message_box_t_from_payload(const void *payload,
     for (size_t i = 0; i < msg_box->num_choices; ++i) {
       // Validate offset before using
       if (choice_offsets_ptr[i] >= header->total_size) {
-        LOGE(TAG, "Error: Invalid choice offset %zu in contiguous block.\n", i);
+        LOGE(TAG, "Error: Invalid choice offset %u in contiguous block.\n", (unsigned)i);
         // Cleanup already allocated choices and the array/struct
         for (size_t j = 0; j < i;
              ++j) {  // Free successfully duplicated strings so far
@@ -1539,7 +1540,7 @@ static void process_binary_payload(machine_interface_t *self, uint8_t sub_type,
       size_t expected = sizeof(io_channels_payload_hdr_t) +
                         hdr->count * sizeof(io_channel_wire_t);
       if (size < expected) {
-        LOGW(TAG, "MSG_SUB_TYPE_IO_CHANNELS payload too small (%zu < %zu)", size, expected);
+        LOGW(TAG, "MSG_SUB_TYPE_IO_CHANNELS payload too small (%u < %u)", (unsigned)size, (unsigned)expected);
         break;
       }
       // Free old channels
@@ -1642,8 +1643,8 @@ static void initialize_binary_payload_buffers() {
 static void binary_payload_slot_cleanup(size_t index) {
   if (index < MAX_CONCURRENT_FRAGMENTED_MSGS &&
       g_binary_payload_buffers[index].is_valid) {
-    LOGI(TAG, "Cleaning up reassembly slot %zu (Seq ID: %u)", index,
-         g_binary_payload_buffers[index].seq_id);
+        LOGI(TAG, "Cleaning up reassembly slot %u (Seq ID: %u)", (unsigned)index,
+          g_binary_payload_buffers[index].seq_id);
 
     free(g_binary_payload_buffers[index].buffer);
     free(g_binary_payload_buffers[index].fragments_received_mask);

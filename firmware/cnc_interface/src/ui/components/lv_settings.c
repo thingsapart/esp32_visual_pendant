@@ -17,7 +17,7 @@
 // The main-panel back-bar header is hidden; navigation is sidebar-only.
 // The root-back button is disabled (no "< Settings" label at top-left).
 
-#define UI_DEBUG_LOCAL_LEVEL D_INFO
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #include "lv_settings.h"

@@ -251,8 +251,8 @@
 #if defined(ESP32P4_HW)
     /* Enable ESP32-P4 PPA support in LVGL */
     #define LV_USE_GPU_ESP32_P4_PPA 1
-    #define CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE 64
-    #define CONFIG_LV_DRAW_BUF_ALIGN 64
+    #define CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE CONFIG_CACHE_L2_CACHE_LINE_SIZE
+    #define CONFIG_LV_DRAW_BUF_ALIGN CONFIG_CACHE_L2_CACHE_LINE_SIZE
     /* Optionally enable LVGL's PPA macros if needed by build system */
     #define LV_USE_PPA 1
     #define CONFIG_LV_USE_PPA 1

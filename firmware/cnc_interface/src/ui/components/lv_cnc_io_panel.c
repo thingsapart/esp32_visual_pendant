@@ -569,9 +569,9 @@ static void _build_category(lv_cnc_io_panel_priv_t *priv) {
   for (size_t i = 0; i < m->num_io_channels; i++) {
     const mc_io_channel_t *ch = &m->io_channels[i];
     bool match = _cat_matches(ch, priv->active_cat);
-    LOGI(TAG, "  ch[%zu] dir=%d sig=%d role=%d name='%s' -> match=%d",
-         i, (int)ch->direction, (int)ch->signal, (int)ch->role,
-         ch->name ? ch->name : "(null)", (int)match);
+        LOGI(TAG, "  ch[%u] dir=%d sig=%d role=%d name='%s' -> match=%d",
+          (unsigned)i, (int)ch->direction, (int)ch->signal, (int)ch->role,
+          ch->name ? ch->name : "(null)", (int)match);
     if (!match) continue;
     any = true;
     switch (priv->active_cat) {

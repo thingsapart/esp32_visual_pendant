@@ -6,9 +6,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 #include "driver/arduino_serial_wrapper.h"
+
+/* Allow overriding the serial baudrate for machine RRF via compile define.
+ * Default remains 115200 for backwards compatibility. */
+#ifndef MACHINE_RRF_BAUD
+#define MACHINE_RRF_BAUD 115200
+#endif
 
 #ifdef ASYNC_RESPONSE_PROCESSING
 #include "tasks/machine_response_proc_task.h"
@@ -1599,8 +1605,8 @@ machine_rrf_t *machine_rrf_init_serial(machine_rrf_t *self, int rrf_serial_num,
   _machine_rrf_init_common(self, sleep_ms);
 
   // Init transport state
-  self->transport_state.serial.uart =
-      serial_init(rrf_serial_num, 115200, CFG_SERIAL_8N1, rx_pin, tx_pin);
+    self->transport_state.serial.uart =
+      serial_init(rrf_serial_num, MACHINE_RRF_BAUD, CFG_SERIAL_8N1, rx_pin, tx_pin);
   if (!self->transport_state.serial.uart) {
     LOGE(TAG, "Failed to initialize serial port");
     // No need to free `self` here as caller owns it

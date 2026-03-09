@@ -51,13 +51,36 @@ void task_registry_print_summary(void) {
             default:         state_str = "???"; break;
         }
         const char *name = snap[i].pcTaskName ? snap[i].pcTaskName : "<unnamed>";
-        LOGI("TASKS", "%s prio=%u hwm=%u state=%s handle=%p",
+        unsigned core = (unsigned)xTaskGetCoreID(snap[i].xHandle);
+        LOGI("TASKS", "%s prio=%u core=%u hwm=%u state=%s handle=%p",
              name,
              (unsigned)snap[i].uxCurrentPriority,
+             core,
              (unsigned)snap[i].usStackHighWaterMark,
              state_str,
              (void *)snap[i].xHandle);
+        /* Record running task per core when available */
+        (void)core; /* silence unused when not used below */
     }
+
+    /* Print active task per CPU (best-effort) */
+#if defined(configNUM_CORES) && configNUM_CORES > 0
+    {
+        const char *active[configNUM_CORES];
+        for (int c = 0; c < configNUM_CORES; ++c) active[c] = "<idle>";
+        for (UBaseType_t i = 0; i < n; ++i) {
+            if (snap[i].eCurrentState == eRunning) {
+                unsigned c = (unsigned)xTaskGetCoreID(snap[i].xHandle);
+                if (c < (unsigned)configNUM_CORES) active[c] = snap[i].pcTaskName ? snap[i].pcTaskName : "<unnamed>";
+            }
+        }
+        for (int c = 0; c < configNUM_CORES; ++c) {
+            LOGI("TASKS", "CPU%u active=%s", (unsigned)c, active[c]);
+        }
+    }
+#else
+    LOGI("TASKS", "CPU0 active=%s", snap[0].pcTaskName ? snap[0].pcTaskName : "<unnamed>");
+#endif
 
     vPortFree(snap);
 }
@@ -169,13 +192,34 @@ void task_registry_print_summary(void) {
             default:         state_str = "???"; break;
         }
         const char *name = snap[i].pcTaskName ? snap[i].pcTaskName : "<unnamed>";
-        LOGI("TASKS", "%s prio=%u hwm=%u state=%s handle=%p",
+        unsigned core = (unsigned)xTaskGetCoreID(snap[i].xHandle);
+        LOGI("TASKS", "%s prio=%u core=%u hwm=%u state=%s handle=%p",
                  name,
                  (unsigned)snap[i].uxCurrentPriority,
+                 core,
                  (unsigned)snap[i].usStackHighWaterMark,
                  state_str,
                  (void *)snap[i].xHandle);
+        (void)core;
     }
+    /* Print active task per CPU (best-effort) */
+#if defined(configNUM_CORES) && configNUM_CORES > 0
+    {
+        const char *active[configNUM_CORES];
+        for (int c = 0; c < configNUM_CORES; ++c) active[c] = "<idle>";
+        for (UBaseType_t i = 0; i < n; ++i) {
+            if (snap[i].eCurrentState == eRunning) {
+                unsigned c = (unsigned)xTaskGetCoreID(snap[i].xHandle);
+                if (c < (unsigned)configNUM_CORES) active[c] = snap[i].pcTaskName ? snap[i].pcTaskName : "<unnamed>";
+            }
+        }
+        for (int c = 0; c < configNUM_CORES; ++c) {
+            LOGI("TASKS", "CPU%u active=%s", (unsigned)c, active[c]);
+        }
+    }
+#else
+    LOGI("TASKS", "CPU0 active=%s", snap[0].pcTaskName ? snap[0].pcTaskName : "<unnamed>");
+#endif
 }
 
 #endif

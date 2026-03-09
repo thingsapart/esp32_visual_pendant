@@ -1815,10 +1815,11 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(tabview_260, 0, 0);
     lv_tabview_set_tab_bar_size(tabview_260, 40);
     #ifdef UI_LARGE
-    lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_BOTTOM);
-    lv_tabview_set_tab_bar_size(tabview_260, 30);
+    lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_260, 25);
     #else
     lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_260, 25);
     #endif
 
     // unnamed: obj_261 (obj)
@@ -1831,6 +1832,7 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     // unnamed: obj_262 (obj)
     lv_obj_t* obj_262 = lv_tabview_get_content(tabview_260);
 
+    lv_obj_add_style(obj_262, container_8, 0);
     lv_obj_remove_flag(obj_262, LV_OBJ_FLAG_SCROLLABLE);
 
     // unnamed: obj_263 (obj)
@@ -1846,6 +1848,12 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     lv_obj_set_style_width(mdi_keyboard_264, lv_pct(100), 0);
     lv_obj_set_style_height(mdi_keyboard_264, lv_pct(100), 0);
     lv_keyboard_set_textarea(mdi_keyboard_264, mdi_input_field_257);
+    lv_keyboard_set_popovers(mdi_keyboard_264, true);
+    lv_keyboard_set_mode(mdi_keyboard_264, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_obj_set_style_radius(mdi_keyboard_264, 3, LV_PART_ITEMS);
+    lv_obj_set_style_pad_column(mdi_keyboard_264, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(mdi_keyboard_264, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(mdi_keyboard_264, 2, LV_PART_MAIN);
     data_binding_add_observer("MDI.is_busy", mdi_keyboard_264, 4, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
 
 
@@ -2728,10 +2736,11 @@ static void create_ui_obj_209(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(tabview_216, 0, 0);
     lv_tabview_set_tab_bar_size(tabview_216, 40);
     #ifdef UI_LARGE
-    lv_tabview_set_tab_bar_position(tabview_216, LV_DIR_BOTTOM);
-    lv_tabview_set_tab_bar_size(tabview_216, 30);
+    lv_tabview_set_tab_bar_position(tabview_216, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_216, 25);
     #else
     lv_tabview_set_tab_bar_position(tabview_216, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_216, 25);
     #endif
 
     // unnamed: obj_217 (obj)
@@ -2744,6 +2753,7 @@ static void create_ui_obj_209(lv_obj_t* parent) {
     // unnamed: obj_218 (obj)
     lv_obj_t* obj_218 = lv_tabview_get_content(tabview_216);
 
+    lv_obj_add_style(obj_218, container_8, 0);
     lv_obj_remove_flag(obj_218, LV_OBJ_FLAG_SCROLLABLE);
 
     // unnamed: obj_219 (obj)
@@ -2759,6 +2769,12 @@ static void create_ui_obj_209(lv_obj_t* parent) {
     lv_obj_set_style_width(mdi_keyboard_220, lv_pct(100), 0);
     lv_obj_set_style_height(mdi_keyboard_220, lv_pct(100), 0);
     lv_keyboard_set_textarea(mdi_keyboard_220, mdi_input_field_257);
+    lv_keyboard_set_popovers(mdi_keyboard_220, true);
+    lv_keyboard_set_mode(mdi_keyboard_220, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_obj_set_style_radius(mdi_keyboard_220, 3, LV_PART_ITEMS);
+    lv_obj_set_style_pad_column(mdi_keyboard_220, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(mdi_keyboard_220, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(mdi_keyboard_220, 2, LV_PART_MAIN);
     data_binding_add_observer("MDI.is_busy", mdi_keyboard_220, 4, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
 
 
@@ -4885,10 +4901,11 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(tabview_260, 0, 0);
     lv_tabview_set_tab_bar_size(tabview_260, 40);
     #ifdef UI_LARGE
-    lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_BOTTOM);
-    lv_tabview_set_tab_bar_size(tabview_260, 30);
+    lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_260, 25);
     #else
     lv_tabview_set_tab_bar_position(tabview_260, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tabview_260, 25);
     #endif
 
     // unnamed: obj_261 (obj)
@@ -4901,6 +4918,7 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     // unnamed: obj_262 (obj)
     lv_obj_t* obj_262 = lv_tabview_get_content(tabview_260);
 
+    lv_obj_add_style(obj_262, container_8, 0);
     lv_obj_remove_flag(obj_262, LV_OBJ_FLAG_SCROLLABLE);
 
     // unnamed: obj_263 (obj)
@@ -4916,6 +4934,12 @@ static void create_ui_obj_253(lv_obj_t* parent) {
     lv_obj_set_style_width(mdi_keyboard_264, lv_pct(100), 0);
     lv_obj_set_style_height(mdi_keyboard_264, lv_pct(100), 0);
     lv_keyboard_set_textarea(mdi_keyboard_264, mdi_input_field_257);
+    lv_keyboard_set_popovers(mdi_keyboard_264, true);
+    lv_keyboard_set_mode(mdi_keyboard_264, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_obj_set_style_radius(mdi_keyboard_264, 3, LV_PART_ITEMS);
+    lv_obj_set_style_pad_column(mdi_keyboard_264, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(mdi_keyboard_264, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(mdi_keyboard_264, 2, LV_PART_MAIN);
     data_binding_add_observer("MDI.is_busy", mdi_keyboard_264, 4, (const binding_map_entry_t[]){ { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=true }, .value = { .b_val = true } }, { .key = { .type=BINDING_TYPE_BOOL, .as.b_val=false }, .value = { .b_val = false } } }, 2, NULL);
 
 

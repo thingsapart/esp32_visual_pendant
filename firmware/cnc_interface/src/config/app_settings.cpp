@@ -278,9 +278,9 @@ bool app_settings_load(void)
             continue;
         }
         size_t sz = s_prefs.getBytesLength(m->nvs_key);
-        if (sz == expected) {
+            if (sz == expected) {
             s_prefs.getBytes(m->nvs_key, &s_vals[g][0], expected);
-            LOGI(TAG, "[%s] loaded %zu bytes", m->name, expected);
+            LOGI(TAG, "[%s] loaded %u bytes", m->name, (unsigned)expected);
         } else {
             LOGW(TAG, "[%s] NVS size %u vs %u — using defaults",
                  m->name, (unsigned)sz, (unsigned)expected);
@@ -309,7 +309,7 @@ bool app_settings_save_group(app_settings_group_t group)
     bool ok = (s_prefs.putBytes(m->nvs_key, &s_vals[group][0], sz) == sz);
     s_prefs.end();
     if (ok) {
-        LOGI(TAG, "[%s] saved %zu bytes", m->name, sz);
+        LOGI(TAG, "[%s] saved %u bytes", m->name, (unsigned)sz);
     } else {
         LOGE(TAG, "[%s] NVS write failed", m->name);
     }

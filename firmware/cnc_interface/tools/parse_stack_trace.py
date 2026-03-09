@@ -77,7 +77,7 @@ def run_addr2line(addr2line, elf, addrs):
     if not addrs:
         print("No addresses found in input.")
         return 1
-    cmd = [addr2line, '-e', elf, '-f', '-p'] + addrs
+    cmd = [addr2line, '-e', elf, '-f', '-p', '-a'] + addrs
     try:
         p = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:

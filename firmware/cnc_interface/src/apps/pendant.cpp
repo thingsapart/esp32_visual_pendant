@@ -328,10 +328,10 @@ void lvgl_task(void *pv_params) {
     lvgl_ui_task_handler();
 
     if ((ctr++ % 50) == 0) {
-      LOGD(TAG, "LVGL task stack size high: %d\n",
-           uxTaskGetStackHighWaterMark(lvgl_task_handle));
       ram_usage();
       task_registry_print_summary();
+      LOGI(TAG, "LVGL task stack size high: %d\n",
+           uxTaskGetStackHighWaterMark(lvgl_task_handle));
     }
 
     // Update all components that rely on data from machine_interface.
@@ -491,9 +491,56 @@ void setup() {
   if (!abort && machine_init()) {
     LOGI(TAG, "DONE\n");
   } else {
-    LOGE(TAG, "\nFAIL: Could not create Machine Task: error");
+    LOGE(TAG, "\nFAIL: Could not create Machine Interfaces: error");
     abort = true;
   }
+
+#ifndef DWC_MACHINE_MODE
+#ifndef MACHINE_REMOTE_ONLY
+#ifdef MACH_UART_PIN_TX
+  // Note: RRF machine queue processing only started if using the serial driver.
+  // When async is on, serial RX is fast-queued for safety. However, if this is
+  // the remote/bridge machine interface (e.g. ESP32-P4 without a UART wired
+  // to the CNC controller) skip this task to avoid a misleading error log
+  // and the wasted 6 KB stack.
+  LOGI(TAG, "Creating RRF Machine State Processing Task... ");
+  if (!abort &&
+      machine_response_proc_task_run(
+          "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
+          &machine_rrf_proc_queue, TASK_MACHINE_CORE,
+          6 * 1024)) {  // RRF serial + cJSON on pendant
+    if (!machine_rrf_setup_response_processing_task(&machine_rrf,
+                                                    machine_rrf_proc_queue)) {
+      LOGE(TAG, "Failed to set up response processing queue for RRF task");
+    }
+    LOGI(TAG, "DONE\n");
+    task_registry_register_handle(machine_rrf_proc_task_handle, "MachineRRFProc");
+  } else {
+    LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
+    abort = true;
+  }
+
+  ram_usage();
+#endif  // MACH_UART_PIN_TX
+#endif  // !MACHINE_REMOTE_ONLY
+
+  LOGI(TAG, "Creating Remote Machine State Processing Task... ");
+  if (!abort && machine_response_proc_task_run(
+                    "MachineRemoteProc", &machine_remote.base,
+                    &machine_remote_proc_task_handle,
+                    &machine_remote_proc_queue, TASK_MACHINE_CORE,
+                    8 * 1024)) {  // 8 KB: process_binary_payload does calloc/strdup loops
+    if (!machine_remote_setup_response_processing_task(
+            &machine_remote, machine_remote_proc_queue)) {
+      LOGE(TAG, "Failed to set up response processing queue for Remote task");
+    }
+    LOGI(TAG, "DONE\n");
+    task_registry_register_handle(machine_remote_proc_task_handle, "MachineRemoteProc");
+  } else {
+    LOGE(TAG, "FAIL: Could not create Remote Machine State Processing Task: error");
+    abort = true;
+  }
+#endif // DWC_MACHINE_MODE
 
   // Register machine task handle if present (when using custom registry)
   task_registry_register_handle(machine_rrf_task, "Machine");
@@ -601,31 +648,6 @@ void setup() {
   // machine_task is kept for the DWC path and for MACHINE_REMOTE_ONLY builds
   // that have no MachineSendTask.
 
-#ifdef MACH_UART_PIN_TX
-  // MachineRRFProc is only meaningful when an RRF serial transport was
-  // configured (MACH_UART_PIN_TX defined).  On boards that rely solely on
-  // the remote/bridge machine interface (e.g. ESP32-P4 without a UART wired
-  // to the CNC controller) skip this task to avoid a misleading error log
-  // and the wasted 6 KB stack.
-  LOGI(TAG, "Creating RRF Machine State Processing Task... ");
-  if (!abort &&
-      machine_response_proc_task_run(
-          "MachineRRFProc", &machine_rrf.base, &machine_rrf_proc_task_handle,
-          &machine_rrf_proc_queue, TASK_MACHINE_CORE,
-          6 * 1024)) {  // RRF serial + cJSON on pendant
-    if (!machine_rrf_setup_response_processing_task(&machine_rrf,
-                                                    machine_rrf_proc_queue)) {
-      LOGE(TAG, "Failed to set up response processing queue for RRF task");
-    }
-    LOGI(TAG, "DONE\n");
-    task_registry_register_handle(machine_rrf_proc_task_handle, "MachineRRFProc");
-  } else {
-    LOGE(TAG, "FAIL: Could not create RRF Machine Processing Task: error");
-    abort = true;
-  }
-
-  ram_usage();
-#endif  // MACH_UART_PIN_TX
 
 #else  // MACHINE_REMOTE_ONLY — single task wired directly to machine_remote
   LOGI(TAG, "Creating Machine Task (remote-only)... ");
@@ -642,23 +664,6 @@ void setup() {
 
 #endif  // !MACHINE_REMOTE_ONLY
 
-  LOGI(TAG, "Creating Remote Machine State Processing Task... ");
-  if (!abort && machine_response_proc_task_run(
-                    "MachineRemoteProc", &machine_remote.base,
-                    &machine_remote_proc_task_handle,
-                    &machine_remote_proc_queue, TASK_MACHINE_CORE,
-                    8 * 1024)) {  // 8 KB: process_binary_payload does calloc/strdup loops
-    if (!machine_remote_setup_response_processing_task(
-            &machine_remote, machine_remote_proc_queue)) {
-      LOGE(TAG, "Failed to set up response processing queue for Remote task");
-    }
-    LOGI(TAG, "DONE\n");
-    task_registry_register_handle(machine_remote_proc_task_handle, "MachineRemoteProc");
-  } else {
-    LOGE(TAG,
-         "FAIL: Could not create Remote Machine State Processing Task: error");
-    abort = true;
-  }
 
 #ifndef MACHINE_REMOTE_ONLY
 #ifdef ASYNC_GCODE_SENDING

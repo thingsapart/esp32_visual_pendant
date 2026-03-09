@@ -1,4 +1,4 @@
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #include "lv_probing_wizard_stubs.h"

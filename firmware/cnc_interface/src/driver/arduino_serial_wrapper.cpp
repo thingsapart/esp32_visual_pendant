@@ -158,6 +158,10 @@ static const size_t LOG_TX_COPY_CHUNK = 256;    // writer local buffer
 static const uint32_t LOG_WRITER_STACK = 2048;  // bytes
 static const UBaseType_t LOG_WRITER_PRIO = tskIDLE_PRIORITY + 1;
 static size_t g_log_dropped_count = 0;
+static bool g_serial_ended = false;
+
+// Forward declaration needed by log_writer_task (defined later in this file)
+static serial_port_data_t *find_port_data(serial_handle_t handle);
 
 static void log_writer_task(void *arg) {
   (void)arg;
@@ -167,17 +171,54 @@ static void log_writer_task(void *arg) {
     size_t received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), portMAX_DELAY);
     if (received == 0) continue;
 
+#ifdef ESP32_HW
+    // Fast path: if the log serial is not connected/ready, drain the entire
+    // stream buffer and discard all pending log data.  This keeps g_log_tx_sb
+    // empty so default_serial_write() can re-enqueue when the host reconnects,
+    // and prevents any write() call that could stall in edge-case USB states
+    // (e.g. during host reconnection or before setTxTimeoutMs(0) takes effect).
+    
+    if (g_serial_ended || !Serial) {
+      __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
+      while ((received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), 0)) > 0)
+        __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
+      continue;
+    }
+#endif
+
     // Write out what we received; keep draining until empty
     for (;;) {
       serial_handle_t handle = get_serial_handle(-1);
       if (!handle) break;  // no standard serial registered
 
-      // Use atomic write helper to safely acquire port mutex and write
+#ifdef ESP32_HW
+      // Bypass serial_write_atomic() (which uses portMAX_DELAY) and use a
+      // bounded mutex timeout instead.  The log serial write_mutex is normally
+      // uncontended (only this task writes), so the 50 ms limit is purely a
+      // safety net against future coding errors or edge-case USB state
+      // transitions that could hold the mutex unexpectedly.
+      serial_port_data_t *port_data = find_port_data(handle);
+      if (!port_data || !port_data->stream) break;
+      if (port_data->write_mutex &&
+          xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(50)) != pdPASS) {
+        // Mutex acquire timed out — drop this batch.
+        __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
+      } else {
+        size_t written = port_data->stream->write(tmp, received);
+        if (port_data->write_mutex) xSemaphoreGive(port_data->write_mutex);
+        if (written < received)
+          __atomic_fetch_add(&g_log_dropped_count, received - written,
+                             __ATOMIC_RELAXED);
+      }
+      // Recheck connectivity before pulling more data.
+      if (!Serial) break;
+#else
       size_t written = serial_write_atomic(handle, tmp, received, false);
       if (written < received) {
         // If partial write occurred, we drop the remainder.
         // Nothing sensible to do here for logs.
       }
+#endif
 
       // Try to pull more without blocking
       received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), 0);
@@ -227,14 +268,14 @@ static void process_received_data(serial_port_data_t *port_data) {
   if (rb_is_empty(&port_data->rx_buffer)) return;
 
   uint8_t byte;
-  LOGD(TAG, "Processing %zu bytes from serial ring buffer for UART %d.",
-       __atomic_load_n(&port_data->rx_buffer.count, __ATOMIC_RELAXED), port_data->uart_num);
+    LOGD(TAG, "Processing %u bytes from serial ring buffer for UART %d.",
+      (unsigned)__atomic_load_n(&port_data->rx_buffer.count, __ATOMIC_RELAXED), port_data->uart_num);
   while (rb_pop(&port_data->rx_buffer, &byte)) {
     // Check for line buffer overflow before adding the character
     if (port_data->line_pos >= MAX_LINE_LENGTH - 1) {
       // Line too long, discard the current line buffer content and start over
-      LOGE(TAG, "Serial line buffer overflow for UART %d (pos=%zu, max=%d) - response truncated and DISCARDED",
-           port_data->uart_num, port_data->line_pos, MAX_LINE_LENGTH);
+       LOGE(TAG, "Serial line buffer overflow for UART %d (pos=%u, max=%d) - response truncated and DISCARDED",
+         port_data->uart_num, (unsigned)port_data->line_pos, MAX_LINE_LENGTH);
       port_data->line_pos = 0;
       // Optionally, add the current byte if it's not part of the overflowed
       // line This depends on desired behavior: discard whole long line vs.
@@ -260,14 +301,7 @@ static void process_received_data(serial_port_data_t *port_data) {
 }
 
 #if defined(ESP32_HW)
-// Generic onReceive callback for HardwareSerial
-// IMPORTANT: This runs in ISR context on ESP32. Keep it short and fast.
 // Avoid blocking calls, memory allocation, or complex logic.
-// IRAM_ATTR is REQUIRED here: this function is invoked from the Arduino-ESP32
-// UART event task (or ISR) which can run while the SPI flash cache is disabled
-// (e.g. during WiFi/ESP-NOW RF-calibration NVS writes at boot).  Without
-// IRAM_ATTR the CPU faults with EXCCAUSE=7 "cache disabled" on every boot-time
-// flash operation, causing the observed random crashes before first full boot.
 static IRAM_ATTR void onReceiveGeneric(void *arg) {
   serial_port_data_t *port_data = (serial_port_data_t *)arg;
   if (!port_data || !port_data->is_hw_serial) return;  // Should not happen
@@ -281,10 +315,10 @@ static IRAM_ATTR void onReceiveGeneric(void *arg) {
     // Try to push to ring buffer. If it fails (full), data is lost.
     LOGV(TAG, "=> RECV/READ - COUNT: %d", byte);
     if (!rb_push(&port_data->rx_buffer, byte)) {
+      LOGE(TAG, "Ring buffer overflow");
       // Ring buffer overflow handling (optional: log, count errors, etc.)
       // For now, we just lose the byte.
       // Consider increasing RING_BUFFER_SIZE if this happens frequently.
-      // Note: Logging directly from ISR is generally unsafe.
     }
   }
   // Data is now in the ring buffer. Processing (line detection, callbacks)
@@ -367,11 +401,28 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
         } else {
             // LOGI(TAG, "Standard Serial already initialized or connected.");
         }
-      // Ensure writes do not block when the TX ring is full: drop-on-full mode.
-      // Note: some HardwareSerial variants may not implement setTxTimeoutMs(),
-      // so initialization for non-blocking TX is handled elsewhere.
+        // Same non-blocking TX guard as in mcu_esp32.cpp: only for
+        // ARDUINO_USB_CDC_ON_BOOT=1 builds (Serial == HWCDCSerial or USBSerial).
+        // ESP32-P4 uses Serial0 (UART0) which never blocks — no guard needed.
+        #if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT == 1)
+          Serial.setTxTimeoutMs(0);
+        #else
+          Serial.setDebugOutput(false);
+        #endif
     } else {  // HardwareSerial UART 1 or 2 etc.
-        HardwareSerial *hw_serial = new HardwareSerial(uart_num < 0 ? 0 : uart_num);
+      // By default use the requested logical UART number for bookkeeping
+      int hw_uart_num = (uart_num < 0) ? 0 : uart_num;
+      // If USB CDC is NOT active on boot (CDC_ON_BOOT undefined or == 0)
+      // then Serial == UART0 hardware.  Remap logical UART0 -> physical UART1
+      // so logging (Serial at 115200) and machine comms (57600) stay on
+      // separate hardware UARTs.  On ESP32-S3 the GPIO matrix allows any
+      // UART to use any pins, so the caller's TX/RX pins still work.
+  #if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
+      if (hw_uart_num == 0) {
+        hw_uart_num = 1;
+      }
+  #endif
+      HardwareSerial *hw_serial = new HardwareSerial(hw_uart_num);
         if (!hw_serial) {
             LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
             return NULL;
@@ -437,28 +488,39 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
   // Register the onReceive callback if it's a HardwareSerial
   if (is_hw) {
     HardwareSerial *hw_serial = static_cast<HardwareSerial *>(serial_stream);
+    // Determine which hardware UART number we actually used for the
+    // HardwareSerial instance. If we remapped above we stored that value in
+    // the object via the HardwareSerial constructor; try to read it back if
+    // possible, otherwise fall back to the logical uart_num. We keep the
+    // logical uart_num in port_data->uart_num for callers, but ISR/table
+    // entries must use the hardware UART index.
+    int hw_uart_num_for_isr = uart_num < 0 ? 0 : uart_num;
+#if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
+    if (hw_uart_num_for_isr == 0) hw_uart_num_for_isr = 1;
+#endif
     // Pass port_data as the argument to the callback
-    if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
-        g_isr_port_data[uart_num] = port_data;
+    if (hw_uart_num_for_isr >= 0 && hw_uart_num_for_isr < MAX_HW_UARTS) {
+        g_isr_port_data[hw_uart_num_for_isr] = port_data;
     }
 
-    if (uart_num == 0) {
+    // Register the appropriate onReceive handler for the hardware UART
+    if (hw_uart_num_for_isr == 0) {
       hw_serial->onReceive(onReceive0, false);
       LOGI(TAG, "OnReceive 0 %p", port_data);
-    } else if (uart_num == 1) {
+    } else if (hw_uart_num_for_isr == 1) {
       hw_serial->onReceive(onReceive1, false);
       LOGI(TAG, "OnReceive 1 %p", port_data);
-    } else if (uart_num == 2) {
+    } else if (hw_uart_num_for_isr == 2) {
       hw_serial->onReceive(onReceive2, false);
       LOGI(TAG, "OnReceive 2 %p", port_data);
-    } else if (uart_num == 3) {
+    } else if (hw_uart_num_for_isr == 3) {
       hw_serial->onReceive(onReceive3, false);
       LOGI(TAG, "OnReceive 3 %p", port_data);
-    } else if (uart_num == 4) {
+    } else if (hw_uart_num_for_isr == 4) {
       hw_serial->onReceive(onReceive4, false);
       LOGI(TAG, "OnReceive 4 %p", port_data);
     }
-    LOGV(TAG, "onReceive callback registered for UART \"%d\"...", uart_num);
+    LOGV(TAG, "onReceive callback registered for hardware UART \"%d\" (logical %d)...", hw_uart_num_for_isr, uart_num);
   }
 #endif
 
@@ -713,12 +775,11 @@ void add_standard_serial() {
   port_data->line_pos = 0;
   port_data->num_callbacks = 0;
 
-  // Non-blocking TX configuration for standard Serial is handled elsewhere
-  // (e.g., platform init). Avoid calling setTxTimeoutMs() here.
-  // Initialize async log TX for default Serial
-#if defined(ESP32_HW)
-  ensure_log_tx_initialized();
-#endif
+  // Register the handle BEFORE initializing the async log writer task.
+  // ensure_log_tx_initialized() spawns log_writer_task which calls
+  // get_serial_handle(-1); if the handle isn't in the map yet the fallback
+  // writes directly to Serial (bypassing setTxTimeoutMs(0)), causing a
+  // startup stall on HWCDC builds.
   g_serial_ports[handle] = port_data;
   g_uart_num_to_handle[uart_num] = handle;
 
@@ -726,6 +787,13 @@ void add_standard_serial() {
   if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
       g_isr_port_data[uart_num] = port_data;
   }
+
+  // Non-blocking TX configuration for standard Serial is handled elsewhere
+  // (e.g., platform init). Avoid calling setTxTimeoutMs() here.
+  // Initialize async log TX for default Serial
+#if defined(ESP32_HW)
+  ensure_log_tx_initialized();
+#endif
 
   // Register the onReceive callback
   // HardwareSerial* hw_serial = static_cast<HardwareSerial*>(serial_stream);
@@ -761,12 +829,10 @@ serial_handle_t get_serial_handle(int uart_num) {
   if (it != g_uart_num_to_handle.end()) {
     return it->second;
   }
-#ifdef ESP32_HW
-  if (Serial) {
-      String msg = "get_serial_handle: Handle for UART not found: " + String(uart_num);
-      Serial.println(msg);
-  }
-#endif
+  // Do NOT call Serial.println() or any direct Serial write here.
+  // get_serial_handle() is called from log_writer_task which can run before
+  // setTxTimeoutMs(0) has been applied; a direct Serial write in that window
+  // blocks for the default 100 ms TX timeout on HWCDC builds.
   return NULL;
 }
 
@@ -779,7 +845,7 @@ void default_serial_write(const uint8_t *buf, size_t len) {
   // (drops data when the TX ring buffer is full rather than waiting).  This
   // guard is still useful as a cheap early exit when USB is physically
   // unplugged so we don't take the serial write_mutex unnecessarily.
-  if (!Serial) return;
+  if (g_serial_ended || !Serial) return;
 #endif
   serial_handle_t handle = get_serial_handle(-1);
   if (handle) {
@@ -802,26 +868,15 @@ void default_serial_write(const uint8_t *buf, size_t len) {
     }
 #endif
     serial_write(handle, buf, len);
-    // NOTE: Do NOT call serial_flush() here.  Flushing after every single log
-    // line acquires the write_mutex a second time and blocks waiting for the
-    // USB host to drain the TX FIFO.  High-priority tasks (WiFi callback at
-    // prio=22, machine_send_task at prio=5) calling this function would then
-    // continuously hold the mutex, starving lower-priority tasks such as the
-    // lvgl_task (prio=2) from ever emitting their own log output.  The TinyUSB
-    // CDC stack drains the TX FIFO automatically every USB SOF interval (~1 ms)
-    // so explicit flushing is not needed for timely log delivery.
   } else {
-    // Fallback if standard serial wasn't initialized/added
-    // printf("%.*s", (int)len, (const char *)buf);
+    // No handle registered yet (called before add_standard_serial() completes
+    // or add_standard_serial() not used for this build).  Drop silently.
+    // NEVER call Serial.flush() here — flush() blocks until the TX buffer is
+    // empty and does NOT respect setTxTimeoutMs(0), causing indefinite stalls
+    // on HWCDC builds when no terminal is connected.
 #ifdef ESP32_HW
-    if (Serial) {
-        Serial.write("Unable to find standard serial");
-        Serial.flush();
-    }
+    __atomic_fetch_add(&g_log_dropped_count, (size_t)len, __ATOMIC_RELAXED);
 #endif
-    //_d(0, "default_serial_write: Standard serial handle not found, writing to
-    //"
-    //      "printf.");
   }
 }
 

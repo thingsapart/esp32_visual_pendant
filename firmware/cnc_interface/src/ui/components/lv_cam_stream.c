@@ -1,6 +1,6 @@
 // lv_cam_stream.c — LVGL camera stream view implementation
 
-#define UI_DEBUG_LOCAL_LEVEL D_DEBUG
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #include "lv_cam_stream.h"

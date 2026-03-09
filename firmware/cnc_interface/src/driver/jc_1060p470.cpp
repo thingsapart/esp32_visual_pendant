@@ -8,7 +8,7 @@
 #include "gt911_touch/gt911_touch.h"
 #include "lvgl.h"
 
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #define LCD_RST 27

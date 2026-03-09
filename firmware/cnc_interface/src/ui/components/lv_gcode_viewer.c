@@ -137,6 +137,14 @@ typedef struct {
     float                axis_min[3];
     float                axis_max[3];
     bool                 has_limits;
+
+    /* Thread-safety: on_pos_changed runs in MachineRemoteProc (Core 1) which
+     * must NOT call lv_obj_invalidate directly — LVGL asserts when
+     * rendering_in_progress==true (LV_ASSERT_HANDLER = while(1)).  Instead
+     * the callback sets this flag and a periodic LVGL timer (running in the
+     * LVGL task on Core 0) drains it safely. */
+    volatile bool        pos_dirty;       /**< set by on_pos_changed; cleared by refr_timer */
+    lv_timer_t          *refr_timer;      /**< periodic invalidation timer (LVGL task ctx) */
 } lv_gcview_priv_t;
 
 /* ─── get_priv helper ──────────────────────────────────────────────────── */
@@ -983,11 +991,13 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
                 /* Bounds check */
                 if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
                 if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
-                /* Render tick arms axis-aligned for cheaper rasterisation:
-                 * X-axis ticks are vertical, Y-axis ticks are horizontal.
-                 * Keep the original perpendicular (xpx_n/xpy_n) for label offset. */
-                gc_pt2_t p1 = { (int16_t)(sx), (int16_t)(sy - tlen) };
-                gc_pt2_t p2 = { (int16_t)(sx), (int16_t)(sy + tlen) };
+                /* Render tick arms perpendicular to the axis direction so
+                 * they visually align with the isometric grid. Use the
+                 * precomputed normalized perpendicular (xpx_n/xpy_n). */
+                float ox = xpx_n * tlen;
+                float oy = xpy_n * tlen;
+                gc_pt2_t p1 = { (int16_t)lrintf(sx - ox), (int16_t)lrintf(sy - oy) };
+                gc_pt2_t p2 = { (int16_t)lrintf(sx + ox), (int16_t)lrintf(sy + oy) };
                 draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
                 if (maj) {
                     /* Label offset along +perpendicular (away from grid) */
@@ -1032,12 +1042,12 @@ static void draw_grid_ticks(lv_layer_t *layer, const gc_view_t *view)
                 float sy   = (float)op.y + yv * ydy;
                 if (sx < (float)vp_x - tlen || sx > (float)(vp_x + vp_w - 1) + tlen) continue;
                 if (sy < (float)vp_y - tlen || sy > (float)(vp_y + vp_h - 1) + tlen) continue;
-                /* Render tick arms axis-aligned for cheaper rasterisation:
-                 * Y-axis ticks are horizontal (arm along X screen axis).
-                 * Keep the original perpendicular (ypx_n/ypy_n) for label offset. */
-                /* Always draw Y-axis ticks vertically */
-                gc_pt2_t p1 = { (int16_t)(sx), (int16_t)(sy - tlen) };
-                gc_pt2_t p2 = { (int16_t)(sx), (int16_t)(sy + tlen) };
+                /* Render tick arms perpendicular to the Y-axis screen
+                 * direction so they align with the iso projection. */
+                float oyx = ypx_n * tlen;
+                float oyy = ypy_n * tlen;
+                gc_pt2_t p1 = { (int16_t)lrintf(sx - oyx), (int16_t)lrintf(sy - oyy) };
+                gc_pt2_t p2 = { (int16_t)lrintf(sx + oyx), (int16_t)lrintf(sy + oyy) };
                 draw_line(layer, p1, p2, TICK_COL(maj), TICK_OPA(maj), 1);
                 if (maj) {
                     float lo = tlen + 2.0f;
@@ -1342,6 +1352,15 @@ static void press_cb(lv_event_t *e) {
  * Machine interface callbacks
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Timer callback: runs in LVGL task context — safe to call lv_obj_invalidate. */
+static void gcview_refr_timer_cb(lv_timer_t *t) {
+    lv_gcview_priv_t *priv = (lv_gcview_priv_t *)lv_timer_get_user_data(t);
+    if (priv && priv->pos_dirty && priv->root) {
+        priv->pos_dirty = false;
+        lv_obj_invalidate(priv->root);
+    }
+}
+
 static void on_pos_changed(machine_interface_t *mi, void *user_data) {
     lv_gcview_priv_t *priv = (lv_gcview_priv_t *)user_data;
     if (!priv || !mi) return;
@@ -1353,9 +1372,11 @@ static void on_pos_changed(machine_interface_t *mi, void *user_data) {
         priv->wcs_offset[i] = mi->position[i] - mi->wcs_position[i];
     }
 
-    /* Invalidate for redraw — but rate-limit to avoid flooding.
-     * LVGL will coalesce invalidations within one frame anyway. */
-    if (priv->root) lv_obj_invalidate(priv->root);
+    /* Signal the periodic refresh timer to invalidate the widget.
+     * DO NOT call lv_obj_invalidate here — this callback runs in
+     * MachineRemoteProc (Core 1) and LVGL will assert / halt if
+     * rendering_in_progress is true at the same time (Core 0). */
+    priv->pos_dirty = true;
 }
 
 static void on_home_changed(machine_interface_t *mi, void *user_data) {
@@ -1380,6 +1401,12 @@ static void on_delete(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
     lv_gcview_priv_t *priv = get_priv(obj);
     if (!priv) return;
+
+    /* Cancel the periodic refresh timer so it doesn't fire after priv is freed */
+    if (priv->refr_timer) {
+        lv_timer_delete(priv->refr_timer);
+        priv->refr_timer = NULL;
+    }
 
     /* Remove draw / touch callbacks */
     lv_obj_remove_event_cb_with_user_data(obj, draw_cb, priv);
@@ -1461,6 +1488,10 @@ lv_obj_t *lv_gcode_viewer_create(lv_obj_t *parent) {
     lv_obj_add_event_cb(root, draw_cb,  LV_EVENT_DRAW_MAIN_END, priv);
     lv_obj_add_event_cb(root, press_cb, LV_EVENT_PRESSING, priv);
     lv_obj_add_event_cb(root, on_delete, LV_EVENT_DELETE, NULL);
+
+    /* Periodic timer to safely invalidate the widget from the LVGL task when
+     * the machine position changes (on_pos_changed sets pos_dirty). */
+    priv->refr_timer = lv_timer_create(gcview_refr_timer_cb, 100, priv);
 
     /* --- UI controls: view dropdown + zoom buttons --- */
     /* Build options string from view_names */

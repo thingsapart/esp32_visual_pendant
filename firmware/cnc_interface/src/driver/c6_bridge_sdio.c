@@ -1,48 +1,57 @@
 /**
- * c6_bridge_sdio.c  —  P4-side SDIO host transport (implementation)
+ * c6_bridge_sdio.c  —  P4-side SDIO host transport — v2 clean-room redesign
  *
- * See c6_bridge_sdio.h for full documentation.
+ * Architecture:
+ *   ONE dedicated FreeRTOS task ("sdio_bus") owns ALL access to the ESSL
+ *   handle.  No mutex is needed.  In a tight loop it:
+ *     1. Does a non-blocking essl_get_packet() — if data arrived, pushes it
+ *        into s_rx_queue (a FreeRTOS queue).
+ *     2. Checks s_tx_queue — if a frame is waiting, calls essl_send_packet().
+ *     3. If nothing happened in either direction, yields for 1 ms.
  *
- * This file is compiled only when REMOTE_COMMS_C6_SDIO_BRIDGE is defined.
- * It uses the ESP-IDF SDMMC host driver together with the
- * esp_serial_slave_link (ESSL) component to talk to the C6 SDIO slave.
+ *   TX callers (any task/core): c6_sdio_bridge_write() pushes into s_tx_queue
+ *     — non-blocking, never touches ESSL, cannot deadlock.
  *
- * c6_sdio_bridge_read() is a simple blocking-with-timeout call that
- * remote_comms_wrapper's own RX task drives in a loop — the same pattern used
- * by the UART bridge with uart_read_bytes().
+ *   RX callers (bridged_sdio_rx_task in esp_bridged_esp_now.c):
+ *     c6_sdio_bridge_read() pops from s_rx_queue with timeout — never touches
+ *     ESSL, cannot deadlock.
+ *
+ *   Deadlock analysis:
+ *     - No mutex exists.
+ *     - FreeRTOS queues are safe for multi-producer/multi-consumer.
+ *     - The bus task is the sole ESSL accessor — no concurrent bus access.
+ *     - TX callers never block on ESSL, only on queue space (bounded, short).
+ *     - RX callers never block on ESSL, only on queue data (bounded, short).
+ *
+ *   Pre-allocated DMA buffers: no per-call heap allocation.
  */
 
 #if defined(ESP32P4_HW) && defined(REMOTE_COMMS_C6_SDIO_BRIDGE)
+
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
+#include "debug.h"
 
 #include "c6_bridge_sdio.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "driver/sdmmc_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_serial_slave_link/essl_sdio.h"
-#include "esp_log.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 
-#define LOG_LOCAL_LEVEL D_VERBOSE
-/* debug.h redefines ESP_LOGI/W/E to use the app's LOG_BACKEND so logs from
- * this file are visible even though CONFIG_LOG_DEFAULT_LEVEL=1 (ERROR). */
-#include "debug.h"
+static const char *TAG = "c6_sdio";
 
-/* BRIDGE_MAX_FRAME_SIZE mirrors the definition in the companion firmware's
- * bridge_protocol.h: BRIDGE_HEADER_SIZE(12) + BRIDGE_MAX_PAYLOAD(250) = 262.
- * It is reproduced here to avoid a fragile cross-project include path.
- * If you change bridge_protocol.h, update this constant to match. */
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Constants (build-time overridable)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
 #ifndef BRIDGE_MAX_FRAME_SIZE
 #  define BRIDGE_MAX_FRAME_SIZE  262
 #endif
-
-static const char *TAG = "c6_bridge_sdio";
-
-// ─── Build-time pin / bus configuration ──────────────────────────────────────
 
 #ifndef C6_SDIO_HOST_SLOT
 #  define C6_SDIO_HOST_SLOT   SDMMC_HOST_SLOT_1
@@ -68,60 +77,103 @@ static const char *TAG = "c6_bridge_sdio";
 #ifndef C6_SDIO_BUS_WIDTH
 #  define C6_SDIO_BUS_WIDTH   4
 #endif
-/** Initial SDIO clock frequency in kHz.  SDMMC_FREQ_HIGHSPEED = 40 MHz.   */
 #ifndef C6_SDIO_FREQ_KHZ
-#  define C6_SDIO_FREQ_KHZ    5000   /* Lowered to 5 MHz for debugging / jumper stability */
+#  define C6_SDIO_FREQ_KHZ    20000
 #endif
-/** Each SDIO packet is one bridge frame (max 262 bytes). */
 #ifndef C6_SDIO_PKT_SIZE
 #  define C6_SDIO_PKT_SIZE    BRIDGE_MAX_FRAME_SIZE
 #endif
 
-// ─── Module state ─────────────────────────────────────────────────────────────
+/* Queue depths. */
+#ifndef C6_SDIO_TX_QUEUE_DEPTH
+#  define C6_SDIO_TX_QUEUE_DEPTH  16
+#endif
+#ifndef C6_SDIO_RX_QUEUE_DEPTH
+#  define C6_SDIO_RX_QUEUE_DEPTH  16
+#endif
 
-static sdmmc_card_t     *s_card      = NULL;
-static essl_handle_t     s_essl      = NULL;
-/* Single mutex that serialises ALL ESSL operations (TX and RX).
- * The ESSL handle s_essl is NOT thread-safe for concurrent access from
- * different tasks/cores — a simultaneous essl_get_packet (bridged_sdio_rx)
- * and essl_send_packet (remote_send_task) corrupts the internal buffer-space
- * accounting and causes writes/reads to hang indefinitely.  One bus mutex
- * that both paths must hold eliminates this race entirely. */
-static SemaphoreHandle_t s_bus_mutex = NULL;
+/* Bus task configuration. */
+#ifndef C6_SDIO_BUS_TASK_STACK
+#  define C6_SDIO_BUS_TASK_STACK  6144
+#endif
+#ifndef C6_SDIO_BUS_TASK_PRIO
+#  define C6_SDIO_BUS_TASK_PRIO   (tskIDLE_PRIORITY + 3)
+#endif
+#ifndef C6_SDIO_BUS_TASK_CORE
+#  define C6_SDIO_BUS_TASK_CORE   1   /* Same core as machine pipeline. */
+#endif
 
-/** One static DMA-capable receive buffer reused on every read call. */
-static uint8_t          *s_rx_dma_buf = NULL;
+/* How many consecutive ESSL errors before attempting bus recovery. */
+#define BUS_ERROR_THRESHOLD  5
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Queue item types
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-bool c6_sdio_bridge_init(void)
+typedef struct {
+    uint16_t len;
+    uint8_t  data[C6_SDIO_PKT_SIZE];
+} sdio_frame_t;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Module state
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static sdmmc_card_t  *s_card = NULL;
+static essl_handle_t  s_essl = NULL;
+
+/* Pre-allocated DMA buffers for bus task — never freed, no per-call malloc. */
+static uint8_t       *s_rx_dma_buf = NULL;   /* for essl_get_packet      */
+static uint8_t       *s_tx_dma_buf = NULL;   /* for essl_send_packet     */
+
+/* FreeRTOS queues for decoupled, deadlock-free data flow. */
+static QueueHandle_t  s_tx_queue  = NULL;    /* any task → bus task      */
+static QueueHandle_t  s_rx_queue  = NULL;    /* bus task → reader task   */
+
+static TaskHandle_t   s_bus_task  = NULL;
+
+/* Statistics (atomic increments from single-writer bus task). */
+static volatile uint32_t s_stat_tx_ok     = 0;
+static volatile uint32_t s_stat_tx_fail   = 0;
+static volatile uint32_t s_stat_rx_ok     = 0;
+static volatile uint32_t s_stat_rx_drop   = 0;  /* RX queue full, evicted. */
+static volatile uint32_t s_stat_bus_err   = 0;
+static volatile uint32_t s_stat_rx_nfound = 0;  /* essl_get_packet: no data */
+static volatile uint32_t s_stat_tx_queued = 0;  /* items popped from s_tx_queue */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Bus recovery
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static bool do_bus_recovery(void)
 {
-    ESP_LOGI(TAG,
-             "Initialising SDIO host (slot=%d, width=%d, freq=%d kHz, "
-             "CLK=GPIO%d CMD=GPIO%d D0=GPIO%d D1=GPIO%d D2=GPIO%d D3=GPIO%d)",
-             C6_SDIO_HOST_SLOT, C6_SDIO_BUS_WIDTH, C6_SDIO_FREQ_KHZ,
-             C6_SDIO_CLK_PIN, C6_SDIO_CMD_PIN,
-             C6_SDIO_D0_PIN,  C6_SDIO_D1_PIN,
-             C6_SDIO_D2_PIN,  C6_SDIO_D3_PIN);
+    LOGE(TAG, "=== SDIO BUS RECOVERY ===");
 
-    /* 1. Allocate card descriptor. */
-    s_card = (sdmmc_card_t *)heap_caps_malloc(sizeof(sdmmc_card_t),
-                                               MALLOC_CAP_DEFAULT);
-    if (!s_card) {
-        ESP_LOGE(TAG, "OOM: sdmmc_card_t");
-        return false;
+    /* Tear down ESSL + SDMMC host. */
+    if (s_essl) {
+        essl_sdio_deinit_dev(s_essl);
+        s_essl = NULL;
     }
-    memset(s_card, 0, sizeof(sdmmc_card_t));
+    if (s_card) {
+        sdmmc_host_deinit();
+        heap_caps_free(s_card);
+        s_card = NULL;
+    }
 
-    /* 2. Configure SDMMC host. */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Re-init from scratch.  We keep the DMA buffers and queues — they are
+     * independent of the bus hardware state. */
+    s_card = (sdmmc_card_t *)heap_caps_calloc(1, sizeof(sdmmc_card_t),
+                                               MALLOC_CAP_DEFAULT);
+    if (!s_card) return false;
+
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.slot         = C6_SDIO_HOST_SLOT;
     host.max_freq_khz = C6_SDIO_FREQ_KHZ;
-    host.flags        = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;   /* also supports 1-bit fallback */
+    host.flags        = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
 
-    /* 3. Configure slot (GPIO assignments). */
     sdmmc_slot_config_t slot_cfg = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot_cfg.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
     slot_cfg.clk   = C6_SDIO_CLK_PIN;
     slot_cfg.cmd   = C6_SDIO_CMD_PIN;
     slot_cfg.d0    = C6_SDIO_D0_PIN;
@@ -130,155 +182,359 @@ bool c6_sdio_bridge_init(void)
     slot_cfg.d2    = C6_SDIO_D2_PIN;
     slot_cfg.d3    = C6_SDIO_D3_PIN;
     slot_cfg.width = 4;
-    host.flags     = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
 #else
     slot_cfg.width = 1;
     host.flags     = SDMMC_HOST_FLAG_1BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
 #endif
     slot_cfg.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
-    /* 4. Initialise the SDMMC host hardware. */
     esp_err_t err = sdmmc_host_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "sdmmc_host_init: %s", esp_err_to_name(err));
-        goto fail;
-    }
+    if (err != ESP_OK) { LOGE(TAG, "recovery: host_init: %s", esp_err_to_name(err)); return false; }
 
     err = sdmmc_host_init_slot(C6_SDIO_HOST_SLOT, &slot_cfg);
+    if (err != ESP_OK) { LOGE(TAG, "recovery: init_slot: %s", esp_err_to_name(err)); return false; }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    err = sdmmc_card_init(&host, s_card);
+    if (err != ESP_OK) { LOGE(TAG, "recovery: card_init: %s", esp_err_to_name(err)); return false; }
+
+    essl_sdio_config_t essl_cfg = {
+        .card             = s_card,
+        .recv_buffer_size = C6_SDIO_PKT_SIZE,
+    };
+    err = essl_sdio_init_dev(&s_essl, &essl_cfg);
+    if (err != ESP_OK) { LOGE(TAG, "recovery: essl_init_dev: %s", esp_err_to_name(err)); return false; }
+
+    err = essl_init(s_essl, 10000);
+    if (err != ESP_OK) { LOGE(TAG, "recovery: essl_init: %s", esp_err_to_name(err)); return false; }
+
+    LOGI(TAG, "Bus recovery successful");
+    return true;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Bus task — sole accessor of ESSL
+ *
+ *  Loop:
+ *    1. Non-blocking RX: essl_get_packet with 0 timeout.
+ *       - On success: push into s_rx_queue (evict oldest on full).
+ *       - On ESP_ERR_NOT_FOUND: no data, move on.
+ *    2. Non-blocking TX: peek s_tx_queue.
+ *       - If item waiting: essl_send_packet, on success dequeue.
+ *    3. If neither RX nor TX produced work: vTaskDelay(1) to yield.
+ *
+ *  This ensures the bus is never held for more than one operation at a time
+ *  and both directions make progress every iteration.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void sdio_bus_task(void *arg)
+{
+    (void)arg;
+    LOGI(TAG, "Bus task started on core %d  essl=%p rx_dma=%p tx_dma=%p"
+             " tx_q=%p rx_q=%p",
+             xPortGetCoreID(), s_essl, s_rx_dma_buf, s_tx_dma_buf,
+             (void *)s_tx_queue, (void *)s_rx_queue);
+
+    uint32_t consecutive_errors = 0;
+    uint32_t loop_count = 0;
+    TickType_t last_stats = xTaskGetTickCount();
+
+    while (true) {
+        bool did_work = false;
+        loop_count++;
+
+        /* ── 1. RX: non-blocking read ── */
+        if (s_essl && s_rx_dma_buf) {
+            size_t rx_size = 0;
+            esp_err_t err = essl_get_packet(s_essl, s_rx_dma_buf,
+                                            C6_SDIO_PKT_SIZE, &rx_size, 0);
+            if (err == ESP_OK && rx_size > 0 && rx_size <= C6_SDIO_PKT_SIZE) {
+                sdio_frame_t frame;
+                frame.len = (uint16_t)rx_size;
+                memcpy(frame.data, s_rx_dma_buf, rx_size);
+
+                if (xQueueSend(s_rx_queue, &frame, 0) != pdTRUE) {
+                    /* RX queue full — evict oldest to keep fresh data flowing. */
+                    sdio_frame_t discard;
+                    xQueueReceive(s_rx_queue, &discard, 0);
+                    xQueueSend(s_rx_queue, &frame, 0);
+                    s_stat_rx_drop++;
+                }
+                s_stat_rx_ok++;
+                consecutive_errors = 0;
+                did_work = true;
+                /* Log first 20 RX events for diagnostics. */
+                if (s_stat_rx_ok <= 20) {
+                    LOGI(TAG, "[bus] RX #%lu: %u B  sof=0x%02x%02x",
+                             (unsigned long)s_stat_rx_ok, (unsigned)rx_size,
+                             s_rx_dma_buf[0],
+                             rx_size > 1 ? s_rx_dma_buf[1] : 0);
+                }
+            } else if (err != ESP_OK && err != ESP_ERR_NOT_FOUND
+                       && err != ESP_ERR_TIMEOUT) {
+                consecutive_errors++;
+                s_stat_bus_err++;
+                LOGW(TAG, "[bus] RX err: %s (streak=%lu)",
+                         esp_err_to_name(err),
+                         (unsigned long)consecutive_errors);
+            } else {
+                /* Normal: no data available. */
+                s_stat_rx_nfound++;
+            }
+        } else {
+            /* Log once if pre-conditions aren't met. */
+            if (loop_count <= 3) {
+                LOGE(TAG, "[bus] RX skip: essl=%p rx_dma=%p",
+                         s_essl, s_rx_dma_buf);
+            }
+        }
+
+        /* ── 2. TX: drain one frame from the queue ── */
+        if (s_essl && s_tx_dma_buf) {
+            sdio_frame_t tx_frame;
+            if (xQueueReceive(s_tx_queue, &tx_frame, 0) == pdTRUE) {
+                s_stat_tx_queued++;
+                memset(s_tx_dma_buf, 0, C6_SDIO_PKT_SIZE);
+                memcpy(s_tx_dma_buf, tx_frame.data, tx_frame.len);
+
+                esp_err_t err = essl_send_packet(s_essl, s_tx_dma_buf,
+                                                 C6_SDIO_PKT_SIZE,
+                                                 pdMS_TO_TICKS(100));
+                if (err == ESP_OK) {
+                    s_stat_tx_ok++;
+                    consecutive_errors = 0;
+                    /* Log first 20 TX events for diagnostics. */
+                    if (s_stat_tx_ok <= 20) {
+                        LOGI(TAG, "[bus] TX #%lu: %u B  first=0x%02x",
+                                 (unsigned long)s_stat_tx_ok,
+                                 (unsigned)tx_frame.len,
+                                 tx_frame.data[0]);
+                    }
+                } else {
+                    s_stat_tx_fail++;
+                    consecutive_errors++;
+                    LOGW(TAG, "[bus] TX err: %s  len=%u first=0x%02x "
+                             "(streak=%lu)",
+                             esp_err_to_name(err),
+                             (unsigned)tx_frame.len,
+                             tx_frame.data[0],
+                             (unsigned long)consecutive_errors);
+                }
+                did_work = true;
+            }
+        } else {
+            if (loop_count <= 3) {
+                LOGE(TAG, "[bus] TX skip: essl=%p tx_dma=%p",
+                         s_essl, s_tx_dma_buf);
+            }
+        }
+
+        /* ── 3. Error recovery ── */
+        if (consecutive_errors >= BUS_ERROR_THRESHOLD) {
+            LOGE(TAG, "Bus error threshold reached (%lu) — attempting recovery",
+                     (unsigned long)consecutive_errors);
+            if (do_bus_recovery()) {
+                consecutive_errors = 0;
+            } else {
+                LOGE(TAG, "Recovery failed — retrying in 2 s");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+            }
+            continue;
+        }
+
+        /* ── 4. Periodic stats ── */
+        TickType_t now = xTaskGetTickCount();
+        if ((now - last_stats) >= pdMS_TO_TICKS(5000)) {
+            last_stats = now;
+            LOGI(TAG, "[stats] loops=%lu tx_ok=%lu tx_fail=%lu "
+                     "tx_queued=%lu rx_ok=%lu rx_nf=%lu "
+                     "rx_drop=%lu bus_err=%lu "
+                     "txQ=%u/%d rxQ=%u/%d",
+                     (unsigned long)loop_count,
+                     (unsigned long)s_stat_tx_ok,
+                     (unsigned long)s_stat_tx_fail,
+                     (unsigned long)s_stat_tx_queued,
+                     (unsigned long)s_stat_rx_ok,
+                     (unsigned long)s_stat_rx_nfound,
+                     (unsigned long)s_stat_rx_drop,
+                     (unsigned long)s_stat_bus_err,
+                     (unsigned)(s_tx_queue ? uxQueueMessagesWaiting(s_tx_queue) : 0),
+                     C6_SDIO_TX_QUEUE_DEPTH,
+                     (unsigned)(s_rx_queue ? uxQueueMessagesWaiting(s_rx_queue) : 0),
+                     C6_SDIO_RX_QUEUE_DEPTH);
+        }
+
+        /* ── 5. ALWAYS yield — even when busy.  Without this,
+         *  continuous data flow keeps did_work==true and this task
+         *  starves everything at prio ≤ C6_SDIO_BUS_TASK_PRIO on the
+         *  same core (bridged_rx, swdraw workers, heartbeat, etc.).
+         *  In the SDIO build C6_SDIO_BUS_TASK_PRIO is overridden to 2
+         *  (display-jc8012p4a1-sdio env) so the LVGL swdraw workers
+         *  (prio 3, unpinned) can be scheduled on Core 1 alongside
+         *  lvgl_task (Core 0), enabling true parallel SW rendering.
+         *  1 tick ≈ 1 ms is enough for the scheduler to service them. */
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Public API
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+bool c6_sdio_bridge_init(void)
+{
+    LOGI(TAG, "Init SDIO host (slot=%d width=%d freq=%d kHz "
+             "CLK=%d CMD=%d D0=%d D1=%d D2=%d D3=%d)",
+             C6_SDIO_HOST_SLOT, C6_SDIO_BUS_WIDTH, C6_SDIO_FREQ_KHZ,
+             C6_SDIO_CLK_PIN, C6_SDIO_CMD_PIN,
+             C6_SDIO_D0_PIN, C6_SDIO_D1_PIN, C6_SDIO_D2_PIN, C6_SDIO_D3_PIN);
+
+    /* 1. Allocate card descriptor. */
+    s_card = (sdmmc_card_t *)heap_caps_calloc(1, sizeof(sdmmc_card_t),
+                                               MALLOC_CAP_DEFAULT);
+    if (!s_card) { LOGE(TAG, "OOM: card"); return false; }
+
+    /* 2. Configure SDMMC host. */
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot         = C6_SDIO_HOST_SLOT;
+    host.max_freq_khz = C6_SDIO_FREQ_KHZ;
+    host.flags        = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
+
+    /* 3. Configure slot. */
+    sdmmc_slot_config_t slot_cfg = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_cfg.clk   = C6_SDIO_CLK_PIN;
+    slot_cfg.cmd   = C6_SDIO_CMD_PIN;
+    slot_cfg.d0    = C6_SDIO_D0_PIN;
+#if C6_SDIO_BUS_WIDTH >= 4
+    slot_cfg.d1    = C6_SDIO_D1_PIN;
+    slot_cfg.d2    = C6_SDIO_D2_PIN;
+    slot_cfg.d3    = C6_SDIO_D3_PIN;
+    slot_cfg.width = 4;
+#else
+    slot_cfg.width = 1;
+    host.flags     = SDMMC_HOST_FLAG_1BIT | SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
+#endif
+    slot_cfg.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+    /* 4. Initialise SDMMC host. */
+    esp_err_t err = sdmmc_host_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "sdmmc_host_init_slot: %s", esp_err_to_name(err));
+        LOGE(TAG, "sdmmc_host_init: %s", esp_err_to_name(err));
+        goto fail;
+    }
+    err = sdmmc_host_init_slot(C6_SDIO_HOST_SLOT, &slot_cfg);
+    if (err != ESP_OK) {
+        LOGE(TAG, "sdmmc_host_init_slot: %s", esp_err_to_name(err));
         goto fail;
     }
 
-    ESP_LOGI(TAG, "Waiting 1.5s for C6 SDIO slave bridge to boot...");
+    /* 5. Wait for C6 to boot its SDIO slave. */
+    LOGI(TAG, "Waiting 1.5 s for C6 SDIO slave...");
     vTaskDelay(pdMS_TO_TICKS(1500));
 
-    /* 5. Enumerate the slave card (this also activates SDIO function 0). */
+    /* 6. Enumerate slave. */
     err = sdmmc_card_init(&host, s_card);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "sdmmc_card_init: %s", esp_err_to_name(err));
+        LOGE(TAG, "sdmmc_card_init: %s", esp_err_to_name(err));
         goto fail;
     }
     sdmmc_card_print_info(stdout, s_card);
 
-    /* 6. Create an ESSL device on SDIO function 1.
-     *    recv_buffer_size must match SDIO_PKT_SIZE used by the C6 slave. */
+    /* 7. Create ESSL device. */
     essl_sdio_config_t essl_cfg = {
         .card             = s_card,
         .recv_buffer_size = C6_SDIO_PKT_SIZE,
     };
     err = essl_sdio_init_dev(&s_essl, &essl_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "essl_sdio_init_dev: %s", esp_err_to_name(err));
+        LOGE(TAG, "essl_sdio_init_dev: %s", esp_err_to_name(err));
         goto fail;
     }
 
-    /* 7. Perform the ESSL handshake with the slave.
-     * Use a bounded timeout — portMAX_DELAY would stall forever if the C6
-     * WiFi / SDIO slave init is slow, blocking app_main with no log output. */
-    err = essl_init(s_essl, 10000 /* ms */);
+    /* 8. ESSL handshake (10 s timeout). */
+    err = essl_init(s_essl, 10000);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "essl_init failed after 10 s: %s — C6 slave not ready?",
-                 esp_err_to_name(err));
+        LOGE(TAG, "essl_init: %s", esp_err_to_name(err));
         goto fail;
     }
-    ESP_LOGI(TAG, "ESSL handshake with C6 slave succeeded");
+    LOGI(TAG, "ESSL handshake OK");
 
-    /* 7b. Send a "host-ready ping" to the C6 and wait for its DEBUG reply.
-     *
-     * The C6 TX gate (bridge_transport_set_host_ready) only opens after
-     * bridge_transport_read() returns its first packet.  A single ping can
-     * be missed if the C6's loop() is not yet polling when the packet
-     * arrives.  We therefore retry the ping up to C6_PING_RETRIES times,
-     * each time waiting up to C6_PING_REPLY_TIMEOUT_MS for ANY packet back
-     * from the C6 (which the '?' trigger causes it to send).  Once a reply
-     * arrives we know the C6 has opened its TX gate.
-     *
-     * Allocate a single DMA-capable ping buffer and the RX DMA path needs
-     * the RX mutex / RX DMA buffer, but those are not initialised yet.
-     * We read the reply directly into a temporary stack buffer here. */
-/* Ping-pong handshake knobs.  Worst case = RETRIES × (REPLY_TIMEOUT + RETRY_INTERVAL).
- * Defaults give  3 × (200 + 100) = ~0.9 s worst case; was 10 × 900 = 9 s. */
-#ifndef C6_PING_RETRIES
-#  define C6_PING_RETRIES            3
-#endif
-#ifndef C6_PING_RETRY_INTERVAL_MS
-#  define C6_PING_RETRY_INTERVAL_MS  100
-#endif
-#ifndef C6_PING_REPLY_TIMEOUT_MS
-#  define C6_PING_REPLY_TIMEOUT_MS   200
-#endif
+    /* 9. Host-ready ping: send '?' to open the C6's TX gate. */
     {
         uint8_t *ping = (uint8_t *)heap_caps_calloc(C6_SDIO_PKT_SIZE, 1,
-                                                     MALLOC_CAP_DMA |
-                                                     MALLOC_CAP_INTERNAL);
+                                                     MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         uint8_t *rx_tmp = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
-                                                      MALLOC_CAP_DMA |
-                                                      MALLOC_CAP_INTERNAL);
-        bool c6_acked = false;
-
-        if (!ping || !rx_tmp) {
-            ESP_LOGW(TAG, "OOM: host-ready ping skipped");
-        } else {
-            ping[0] = 0x3F;  /* '?' = BRIDGE_DEBUG_TRIGGER */
-            for (int attempt = 0; attempt < C6_PING_RETRIES && !c6_acked; attempt++) {
+                                                       MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (ping && rx_tmp) {
+            ping[0] = 0x3F;  /* '?' */
+            bool acked = false;
+            for (int attempt = 0; attempt < 5 && !acked; attempt++) {
                 esp_err_t perr = essl_send_packet(s_essl, ping,
                                                   C6_SDIO_PKT_SIZE,
                                                   pdMS_TO_TICKS(500));
                 if (perr != ESP_OK) {
-                    ESP_LOGW(TAG, "Ping attempt %d/%d: send failed: %s",
-                             attempt + 1, C6_PING_RETRIES,
+                    LOGW(TAG, "Ping %d/5 send: %s", attempt + 1,
                              esp_err_to_name(perr));
-                    vTaskDelay(pdMS_TO_TICKS(C6_PING_RETRY_INTERVAL_MS));
+                    vTaskDelay(pdMS_TO_TICKS(100));
                     continue;
                 }
-                ESP_LOGI(TAG, "Ping attempt %d/%d sent — waiting for C6 reply...",
-                         attempt + 1, C6_PING_RETRIES);
-                /* Wait for any packet back from the C6. The '?' trigger causes
-                 * the C6 to enqueue a DEBUG hello frame immediately. */
                 size_t rx_sz = 0;
                 esp_err_t rerr = essl_get_packet(s_essl, rx_tmp,
                                                  C6_SDIO_PKT_SIZE,
-                                                 &rx_sz,
-                                                 C6_PING_REPLY_TIMEOUT_MS);
-                if (rerr == ESP_OK && rx_sz > 0) {
-                    ESP_LOGI(TAG, "C6 replied (%zu bytes) on attempt %d — "
-                                  "TX gate open", rx_sz, attempt + 1);
-                    c6_acked = true;
+                                                 &rx_sz, 200);
+                    if (rerr == ESP_OK && rx_sz > 0) {
+                    LOGI(TAG, "C6 replied (%u B) on ping %d", (unsigned)rx_sz,
+                             attempt + 1);
+                    acked = true;
                 } else {
-                    ESP_LOGW(TAG, "Ping attempt %d/%d: no reply (%s), retrying...",
-                             attempt + 1, C6_PING_RETRIES,
-                             esp_err_to_name(rerr));
-                    vTaskDelay(pdMS_TO_TICKS(C6_PING_RETRY_INTERVAL_MS));
+                    vTaskDelay(pdMS_TO_TICKS(100));
                 }
             }
-            if (!c6_acked) {
-                ESP_LOGW(TAG, "C6 did not reply after %d ping attempts — "
-                              "TX gate may stay blocked until first app command",
-                         C6_PING_RETRIES);
+            if (!acked) {
+                LOGW(TAG, "C6 did not reply to ping — will open gate on "
+                              "first app traffic");
             }
         }
         if (ping)   heap_caps_free(ping);
         if (rx_tmp) heap_caps_free(rx_tmp);
     }
 
-    /* 8. Create the single bus mutex that serialises all ESSL operations. */
-    s_bus_mutex = xSemaphoreCreateMutex();
-    if (!s_bus_mutex) {
-        ESP_LOGE(TAG, "OOM: bus mutex");
-        goto fail;
-    }
-
-    /* 9. Allocate the shared DMA receive buffer. */
+    /* 10. Allocate pre-allocated DMA buffers for the bus task. */
     s_rx_dma_buf = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
-                                                MALLOC_CAP_DMA |
-                                                MALLOC_CAP_INTERNAL);
-    if (!s_rx_dma_buf) {
-        ESP_LOGE(TAG, "OOM: RX DMA buffer");
+                                                MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    s_tx_dma_buf = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
+                                                MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_rx_dma_buf || !s_tx_dma_buf) {
+        LOGE(TAG, "OOM: DMA buffers");
         goto fail;
     }
 
-    ESP_LOGI(TAG, "C6 SDIO bridge ready");
+    /* 11. Create TX and RX queues. */
+    if (!s_tx_queue)
+        s_tx_queue = xQueueCreate(C6_SDIO_TX_QUEUE_DEPTH, sizeof(sdio_frame_t));
+    if (!s_rx_queue)
+        s_rx_queue = xQueueCreate(C6_SDIO_RX_QUEUE_DEPTH, sizeof(sdio_frame_t));
+    if (!s_tx_queue || !s_rx_queue) {
+        LOGE(TAG, "OOM: queues");
+        goto fail;
+    }
+
+    /* 12. Start the bus task (if not already running). */
+    if (!s_bus_task) {
+        BaseType_t rc = xTaskCreatePinnedToCore(
+            sdio_bus_task, "sdio_bus",
+            C6_SDIO_BUS_TASK_STACK, NULL,
+            C6_SDIO_BUS_TASK_PRIO, &s_bus_task,
+            C6_SDIO_BUS_TASK_CORE);
+        if (rc != pdPASS) {
+            LOGE(TAG, "Failed to create bus task");
+            goto fail;
+        }
+    }
+
+    LOGI(TAG, "C6 SDIO bridge ready (tx_q=%d rx_q=%d)",
+             C6_SDIO_TX_QUEUE_DEPTH, C6_SDIO_RX_QUEUE_DEPTH);
     return true;
 
 fail:
@@ -288,115 +544,49 @@ fail:
 
 bool c6_sdio_bridge_write(const uint8_t *buf, size_t len)
 {
-    if (!s_essl || len == 0 || len > C6_SDIO_PKT_SIZE) {
-        ESP_LOGE(TAG, "write: bad state or invalid len %zu", len);
+    if (!s_tx_queue || !buf || len == 0 || len > C6_SDIO_PKT_SIZE)
         return false;
+
+    sdio_frame_t frame;
+    frame.len = (uint16_t)len;
+    memcpy(frame.data, buf, len);
+
+    /* Non-blocking enqueue.  If full, evict oldest and retry.
+     * This guarantees the calling task NEVER blocks on SDIO. */
+    if (xQueueSend(s_tx_queue, &frame, 0) == pdTRUE)
+        return true;
+
+    /* Queue full — evict oldest. */
+    sdio_frame_t discard;
+    if (xQueueReceive(s_tx_queue, &discard, 0) == pdTRUE) {
+        LOGW(TAG, "TX queue full — evicted oldest (%u B)", discard.len);
     }
-
-    /* Allocate a DMA-accessible copy (essl_send_packet may DMA directly).
-     * IMPORTANT: essl_send_packet rounds the length up to recv_buffer_size
-     * (C6_SDIO_PKT_SIZE = 262) for DMA transfer.  The buffer MUST be that
-     * large or the DMA engine will read beyond the allocation → crash. */
-    uint8_t *tx_buf = (uint8_t *)heap_caps_malloc(C6_SDIO_PKT_SIZE,
-                                                   MALLOC_CAP_DMA |
-                                                   MALLOC_CAP_INTERNAL);
-    if (!tx_buf) {
-        ESP_LOGE(TAG, "write: OOM for TX buffer");
-        return false;
-    }
-    memset(tx_buf, 0, C6_SDIO_PKT_SIZE);
-    memcpy(tx_buf, buf, len);
-
-    /* Acquire the bus mutex.  Both c6_sdio_bridge_write and c6_sdio_bridge_read
-     * must hold this mutex before any essl_* call; ESSL state is not re-entrant
-     * across simultaneous TX+RX from different tasks/cores.
-     * Timeout 100 ms: generous enough for one full frame (262 B at 5 MHz
-     * SDIO = ~0.4 ms wire time, but essl_wait_for_ready can take up to 50 ms). */
-    if (xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "write: bus mutex timeout — dropping frame");
-        heap_caps_free(tx_buf);
-        return false;
-    }
-
-    /* Wait until the slave has a receive buffer available. */
-    esp_err_t err = essl_wait_for_ready(s_essl, pdMS_TO_TICKS(50));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "essl_wait_for_ready: %s", esp_err_to_name(err));
-        xSemaphoreGive(s_bus_mutex);
-        heap_caps_free(tx_buf);
-        return false;
-    }
-
-    ESP_LOGD(TAG, "write: essl_wait_for_ready OK, sending %zu bytes (padded to %d)", len, C6_SDIO_PKT_SIZE);
-
-    err = essl_send_packet(s_essl, tx_buf, C6_SDIO_PKT_SIZE, pdMS_TO_TICKS(50));
-
-    if (err == ESP_OK) {
-        ESP_LOGD(TAG, "write: essl_send_packet OK len=%zu (sent %d)", len, C6_SDIO_PKT_SIZE);
-    }
-
-    xSemaphoreGive(s_bus_mutex);
-    heap_caps_free(tx_buf);
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "essl_send_packet: %s", esp_err_to_name(err));
-        return false;
-    }
-    return true;
+    return (xQueueSend(s_tx_queue, &frame, 0) == pdTRUE);
 }
 
 bool c6_sdio_bridge_read(uint8_t *buf, size_t max_len,
                           size_t *out_len, uint32_t timeout_ms)
 {
-    if (!s_essl || !s_rx_dma_buf || !buf || !out_len) return false;
+    if (!s_rx_queue || !buf || !out_len) return false;
 
-    /* Acquire the shared bus mutex before any essl_* operation.
-     * timeout_ms is the SDIO transaction timeout; add a margin for the mutex
-     * wait itself.  If a write is in progress we wait up to timeout_ms+100 ms
-     * total before giving up and returning "no data" to the caller. */
-    if (xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        return false;  /* write side held the bus too long — caller retries */
-    }
-
-    size_t    rx_size = 0;
-    /* essl_get_packet expects a timeout in milliseconds.  Do not convert
-     * to ticks here (the implementation converts ms->ticks internally). */
-    esp_err_t err = essl_get_packet(s_essl, s_rx_dma_buf, C6_SDIO_PKT_SIZE,
-                                     &rx_size, timeout_ms);
-
-    xSemaphoreGive(s_bus_mutex);
-
-    if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT) {
-        return false;   /* nothing available within timeout */
-    }
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "essl_get_packet: %s", esp_err_to_name(err));
-        /* Avoid busy-looping if the underlying ESSL layer reports a failure
-         * such as NOT_FINISHED or INVALID_ARG to yield CPU. */
-        vTaskDelay(pdMS_TO_TICKS(50));
+    sdio_frame_t frame;
+    if (xQueueReceive(s_rx_queue, &frame, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
         return false;
-    }
-    if (rx_size == 0 || rx_size > C6_SDIO_PKT_SIZE) {
-        ESP_LOGW(TAG, "read: unexpected rx_size %zu", rx_size);
-        return false;
-    }
 
-    size_t copy_len = (rx_size < max_len) ? rx_size : max_len;
-    memcpy(buf, s_rx_dma_buf, copy_len);
-    *out_len = copy_len;
+    size_t copy = (frame.len < max_len) ? frame.len : max_len;
+    memcpy(buf, frame.data, copy);
+    *out_len = copy;
     return true;
 }
 
 void c6_sdio_bridge_deinit(void)
 {
-    if (s_rx_dma_buf) {
-        heap_caps_free(s_rx_dma_buf);
-        s_rx_dma_buf = NULL;
-    }
-    if (s_bus_mutex) {
-        vSemaphoreDelete(s_bus_mutex);
-        s_bus_mutex = NULL;
-    }
+    /* NOTE: We do NOT delete the bus task, queues, or DMA buffers here.
+     * They survive across recovery cycles.  Only the ESSL + SDMMC state
+     * is torn down. */
+    if (s_rx_dma_buf) { heap_caps_free(s_rx_dma_buf); s_rx_dma_buf = NULL; }
+    if (s_tx_dma_buf) { heap_caps_free(s_tx_dma_buf); s_tx_dma_buf = NULL; }
+
     if (s_essl) {
         essl_sdio_deinit_dev(s_essl);
         s_essl = NULL;

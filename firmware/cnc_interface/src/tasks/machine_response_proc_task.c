@@ -44,7 +44,11 @@ extern "C" {
 // This avoids the eviction-race that the old ring_buffer design had when
 // ring_buffer_add_line called ring_buffer_free_oldest (erasing data the
 // proc_task had not yet consumed).
-#define PROC_MSG_MAX_DATA 252  // >= REMOTE_COMMS_DATA_MAX (251) + 1 for safety
+// No inline-data size cap: proc_msg_t now carries a heap pointer so both
+// short ESP-NOW frames (≤250 B) and long RRF serial lines (up to ~4 KB)
+// pass through without truncation.  Sanity-check upper bound kept to catch
+// obviously corrupt lengths before attempting the malloc.
+#define PROC_MSG_MAX_LEN 4096  // sanity cap — any len above this is corrupt
 #define QUEUE_LENGTH 40        // Direct message queue depth — must be large enough
 
 // Non-ESP32_HW still uses the ring-buffer path (gcode_queue).
@@ -60,9 +64,11 @@ static const char *TAG = "MACHINE_RESP_PROC_TASK";
 
 #ifdef ESP32_HW
 // Direct message item stored in the FreeRTOS queue.
+// data is heap-allocated by the producer (pvPortMalloc) and must be freed
+// by the consumer (vPortFree) after processing.
 typedef struct {
-  uint16_t len;
-  uint8_t  data[PROC_MSG_MAX_DATA];
+  uint16_t  len;
+  uint8_t  *data;
 } proc_msg_t;
 
 #else  // non-ESP32_HW: keep ring-buffer path
@@ -432,14 +438,21 @@ int machine_response_proc_task_data_ready(
     LOGE(TAG, "data_ready: queue is NULL");
     return 1;
   }
-  if (len == 0 || len > PROC_MSG_MAX_DATA) {
+  if (len == 0 || len > PROC_MSG_MAX_LEN) {
     LOGW(TAG, "data_ready: invalid len %u, dropping", (unsigned)len);
     return 1;
   }
 
+  uint8_t *buf = (uint8_t *)pvPortMalloc(len);
+  if (!buf) {
+    LOGW(TAG, "data_ready: pvPortMalloc(%u) failed, dropping", (unsigned)len);
+    return 1;
+  }
+  memcpy(buf, data, len);
+
   proc_msg_t msg;
-  msg.len = (uint16_t)len;
-  memcpy(msg.data, data, len);
+  msg.len  = (uint16_t)len;
+  msg.data = buf;
 
   BaseType_t result = pdFAIL;
   if (!from_isr) {
@@ -454,7 +467,8 @@ int machine_response_proc_task_data_ready(
   }
   if (result != pdTRUE) {
     LOGW(TAG, "Proc queue full — message type=%d len=%u dropped.",
-         len > 0 ? (int)data[0] : -1, (unsigned)len);
+         buf[0], (unsigned)len);
+    vPortFree(buf);
     return 1;
   }
   return 0;
@@ -526,13 +540,24 @@ void machine_response_proc_task(void *vpargs) {
 #ifdef ESP32_HW
     // Each queue item IS the message: receive directly into a proc_msg_t.
     proc_msg_t msg;
-    if (xQueueReceive(queue, &msg, portMAX_DELAY) == pdTRUE) {
+
+    LOGD(TAG, "[PROC] Awaiting queue...");
+    if (xQueueReceive(queue, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
       LOGD(TAG, "[PROC] type=%d len=%d",
-           msg.len > 0 ? (int)msg.data[0] : -1, (int)msg.len);
-      if (msg.len > 0) {
+           (msg.len > 0 && msg.data) ? (int)msg.data[0] : -1, (int)msg.len);
+      if (msg.len > 0 && msg.data) {
+        TickType_t proc_start = xTaskGetTickCount();
+        LOGD(TAG, "[PROC] processing start tick=%u",
+             (unsigned)proc_start);
         machine_interface_process_machine_state_response(machine, msg.data,
                                                          msg.len);
+        TickType_t proc_end = xTaskGetTickCount();
+        LOGD(TAG, "[PROC] processing done tick=%u took=%u",
+             (unsigned)proc_end, (unsigned)(proc_end - proc_start));
       }
+      vPortFree(msg.data);  /* release the producer-allocated buffer */
+    } else {
+      LOGD(TAG, "[PROC] false => looping");
     }
     // If xQueueReceive returns pdFALSE unexpectedly, loop and retry.
 
@@ -595,9 +620,9 @@ bool machine_response_proc_task_run(const char *task_name,
 
   LOGI(TAG, "Initializing machine response processing...");
 #ifdef ESP32_HW
-  // Queue holds complete proc_msg_t items (data + length). Each item is at
-  // most PROC_MSG_MAX_DATA+2 bytes.  20 slots ≈ 5 KB — avoids the old
-  // ring-buffer / notification-queue split that suffered an eviction race.
+  // Queue holds proc_msg_t items (heap pointer + length). Each slot is just
+  // sizeof(proc_msg_t) ≈ 8 bytes; actual message data lives on the heap
+  // (allocated by the producer, freed by this task after processing).
   *queue = xQueueCreate(QUEUE_LENGTH, sizeof(proc_msg_t));
 #else
   gcode_queue_init(queue);

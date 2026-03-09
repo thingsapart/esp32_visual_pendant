@@ -130,7 +130,7 @@ esp_err_t esp_lvgl_adapter_init_display(
 #if (CONFIG_IDF_TARGET_ESP32P4 && \
      ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
     buffer_size_bytes =
-        disp_cfg->hres * disp_cfg->vres * ((LV_COLOR_DEPTH) / 8);
+      disp_cfg->hres * disp_cfg->vres * ((LV_COLOR_DEPTH) / 8);
     size_t num_buf = disp_cfg->double_buffer ? 2 : 1;
     ESP_GOTO_ON_ERROR(
         esp_lcd_dpi_panel_get_frame_buffer(disp_cfg->panel_handle, num_buf,
@@ -153,6 +153,11 @@ esp_err_t esp_lvgl_adapter_init_display(
   // Configure the existing display object
   lv_display_set_driver_data(disp, disp_ctx);
   lv_display_set_flush_cb(disp, lvgl_port_flush_callback);
+
+  // Save the raw LVGL draw buffer pointers so rounder/flush helpers
+  // can reason about alignment if needed.
+  disp_ctx->draw_buffs[0] = (lv_color_t *)buf1;
+  disp_ctx->draw_buffs[1] = (lv_color_t *)buf2;
 
   if (disp_cfg->flags.direct_mode) {
     disp_ctx->flags.direct_mode = 1;
@@ -177,6 +182,65 @@ esp_err_t esp_lvgl_adapter_init_display(
                           disp_ctx->panel_handle, &cbs, disp),
                       err, TAG, "Failed to register vsync callback");
   }
+#endif
+
+#ifdef LV_USE_GPU_ESP32_P4_PPA
+
+  /*
+   * Rounder callback: ensure dirty areas satisfy the PPA engine's
+   * alignment/length constraints. The PPA requires row byte-lengths to be
+   * a multiple of 64 bytes and that the first pixel of the rendered area
+   * is 64-byte aligned. We round the horizontal window to pixel counts that
+   * satisfy this constraint where possible.
+   */
+  lv_display_add_event_cb(disp, [](lv_event_t *e){
+    lv_area_t *area = (lv_area_t *)lv_event_get_param(e);
+    lv_display_t *d = (lv_display_t *)lv_event_get_target(e);
+    if (!area || !d) return;
+
+    const int bpp = (LV_COLOR_DEPTH) / 8;
+    const int align_bytes = 64;
+    if (bpp <= 0) return;
+    const int align_px = align_bytes / bpp;
+    if (align_px <= 1) return; // already aligned
+
+    const int hres = lv_disp_get_hor_res(d);
+
+    int x1 = area->x1;
+    int x2 = area->x2;
+    if (x1 < 0) x1 = 0;
+    if (x2 >= hres) x2 = hres - 1;
+
+    int width = x2 - x1 + 1;
+    if (width <= 0) return;
+
+    int new_x1 = (x1 / align_px) * align_px;
+    // Span must be computed from new_x1, not x1 — rounding x1 down widens
+    // the covered region, so we need to round *that* span up too.
+    // Using width=(x2-x1+1) instead would let new_x2 fall short of x2.
+    int span = x2 - new_x1 + 1;
+    int new_width = ((span + align_px - 1) / align_px) * align_px;
+    int new_x2 = new_x1 + new_width - 1;
+
+    if (new_x2 >= hres) {
+      // Try shifting left to fit the rounded window without reducing its width.
+      int overflow = new_x2 - (hres - 1);
+      new_x1 -= overflow;
+      if (new_x1 < 0) {
+        // Can't shift left enough — fall back to full-width expansion.
+        new_x1 = 0;
+        new_x2 = hres - 1;
+        ESP_LOGW(TAG, "PPA rounder: forcing full-width expansion for area [%d,%d] -> [%d,%d]",
+                 area->x1, area->x2, new_x1, new_x2);
+      } else {
+        new_x2 = new_x1 + new_width - 1;
+      }
+    }
+
+    // Apply the rounded coordinates.
+    area->x1 = new_x1;
+    area->x2 = new_x2;
+  }, LV_EVENT_INVALIDATE_AREA, NULL);
 #endif
 
   return ESP_OK;

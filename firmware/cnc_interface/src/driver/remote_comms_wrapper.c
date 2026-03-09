@@ -1,7 +1,6 @@
 // remote_comms_wrapper.c
 
 #include "remote_comms_wrapper.h"
-#include "esp_log.h"
 #include "debug.h"
 
 // ---- Shared Stats ----
@@ -54,6 +53,20 @@ static void                    *g_send_user_data = NULL;
 // Multi-receiver table
 typedef struct { remote_wrapper_recv_cb_t cb; void *user; } rcb_slot_t;
 static rcb_slot_t g_recv_cbs[REMOTE_WRAPPER_MAX_RECV_CBS];
+
+static void wifi_init() {
+  esp_err_t _err;
+  ESP_ERROR_CHECK(esp_netif_init());
+  _err = esp_event_loop_create_default();
+  if (_err != ESP_OK && _err != ESP_ERR_INVALID_STATE) {
+    ESP_ERROR_CHECK(_err);
+  }
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+  ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_start());
+}
 
 bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data)
 {
@@ -203,7 +216,8 @@ bool remote_wrapper_send(const uint8_t *mac_addr, const uint8_t *data,
 
 bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
                          remote_wrapper_send_cb_t send_cb, void *user_data) {
-  // Initialize NVS (needed for Wi-Fi)
+#ifndef REMOTE_COMMS_C6_SDIO_BRIDGE
+  // Initialize NVS (needed for Wi-Fi) - not done when we use c6_espnow_bridge.
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -211,9 +225,13 @@ bool remote_wrapper_init(remote_wrapper_recv_cb_t recv_cb,
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  wifi_init();
+#endif
 
-  
   // Initialize ESP-NOW
+  // WiFi STA must already be running (started by mcu_startup() and kept alive
+  // for ESP_NOW_HUB builds). esp_now_send() returns ESP_ERR_ESPNOW_IF if the
+  // Arduino-managed STA netif is absent.
   ESP_ERROR_CHECK(esp_now_init());
 
   g_send_cb        = send_cb;
@@ -296,7 +314,9 @@ bool remote_wrapper_send_now(const uint8_t *mac_addr, const uint8_t *data,
   assert(len <= ESP_NOW_MAX_DATA_LEN);
   esp_err_t res = ESP_OK;
   if ((res = esp_now_send(mac_addr, data, len)) != ESP_OK) {
-    LOGE(TAG, "Error sending ESP-NOW data (%d)", res);
+    const char *ename = esp_err_to_name(res);
+    LOGE(TAG, "Error sending ESP-NOW data %s (%d) to " MACSTR,
+         ename, res, MAC2STR(mac_addr));
     return false;
   }
 
@@ -320,8 +340,8 @@ bool remote_wrapper_send_fragmented_message(const uint8_t *mac_addr, uint8_t sub
     uint16_t total_fragments = (len + max_payload_per_fragment - 1) / max_payload_per_fragment;
     uint16_t current_seq_id = seq_id_counter++;
 
-    LOGI(TAG, "Sending fragmented message: seq=%u, total_size=%zu, fragments=%u to " MACSTR,
-         current_seq_id, len, total_fragments, MAC2STR(mac_addr));
+    LOGI(TAG, "Sending fragmented message: seq=%u, total_size=%u, fragments=%u to " MACSTR,
+         current_seq_id, (unsigned)len, total_fragments, MAC2STR(mac_addr));
 
     for (uint16_t i = 0; i < total_fragments; i++) {
         size_t offset = i * max_payload_per_fragment;

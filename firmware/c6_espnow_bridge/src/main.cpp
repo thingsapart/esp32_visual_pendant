@@ -1,3 +1,5 @@
+#include "debug.h"
+
 #include <Arduino.h>
 #include "esp_now.h"
 #include <WiFi.h>
@@ -23,18 +25,19 @@
 // per-packet and per-event logs beyond the always-on startup / error logs.
 static const char *TAG = "c6_bridge";
 #ifdef C6_BRIDGE_LOG_EXT
-#  define BLOG_I(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
-#  define BLOG_W(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
+#  define BLOG_I(fmt, ...) LOGI(TAG, fmt, ##__VA_ARGS__)
+#  define BLOG_W(fmt, ...) LOGW(TAG, fmt, ##__VA_ARGS__)
 #else
 #  define BLOG_I(fmt, ...) do {} while (0)
 #  define BLOG_W(fmt, ...) do {} while (0)
 #endif
 
 // Always-on logs (errors and critical state changes).
-#define BLOG_E(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
+#define BLOG_E(fmt, ...) LOGE(TAG, fmt, ##__VA_ARGS__)
 
-// Number of pending TX segments allowed
-#define C6_BRIDGE_TX_QUEUE_LEN 24
+// Number of pending TX segments in the ring buffer.
+// Sized larger than the SDIO TX queue to absorb ESP-NOW bursts.
+#define C6_BRIDGE_TX_QUEUE_LEN 48
 
 // --- Globals ----------------------------------------------------------------
 
@@ -52,7 +55,7 @@ static uint8_t s_local_mac[6];
 // Verbose serial logging control: enabled at boot, auto-disabled if no
 // host activity shortly after startup so we don't waste CPU sending data
 // to nowhere.  Timeout can be overridden via build flag.
-static bool g_c6_serial_verbose = true;
+bool g_c6_serial_verbose = true;
 static unsigned long g_c6_serial_disable_deadline = 0;
 #ifndef C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS
 #define C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS 30000 // Increased timeout for debugging
@@ -70,18 +73,24 @@ static volatile uint16_t s_tx_q_head = 0;
 static volatile uint16_t s_tx_q_tail = 0;
 static portMUX_TYPE s_tx_q_lock = portMUX_INITIALIZER_UNLOCKED;
 
-// Helper to push frame to Host via queue
+// Statistics for dropped frames (overflow eviction).
+static uint32_t s_stat_tx_evict = 0;
+
+// Helper to push frame to Host via queue.
+// If the queue is full, evicts the oldest entry and logs a warning.
+// Safe to call from ISR context (ESP-NOW callbacks).
 static bool tx_queue_push(uint8_t dir, const uint8_t *mac, const uint8_t *payload, uint16_t payload_len)
 {
     if (payload_len > BRIDGE_MAX_PAYLOAD) return false;
-    
+
     portENTER_CRITICAL_ISR(&s_tx_q_lock);
     uint16_t next_head = (s_tx_q_head + 1) % C6_BRIDGE_TX_QUEUE_LEN;
     if (next_head == s_tx_q_tail) {
-        portEXIT_CRITICAL_ISR(&s_tx_q_lock);
-        return false; // Queue full
+        // Queue full — evict oldest to make room for fresh data.
+        s_tx_q_tail = (s_tx_q_tail + 1) % C6_BRIDGE_TX_QUEUE_LEN;
+        s_stat_tx_evict++;
     }
-    
+
     tx_queue_slot_t *slot = &s_tx_queue[s_tx_q_head];
     slot->buf[0] = BRIDGE_SOF0;
     slot->buf[1] = BRIDGE_SOF1;
@@ -94,7 +103,7 @@ static bool tx_queue_push(uint8_t dir, const uint8_t *mac, const uint8_t *payloa
     }
     slot->buf[11 + payload_len] = bridge_crc8(mac, payload_len, payload);
     slot->len = BRIDGE_FRAME_OVERHEAD + payload_len;
-    
+
     s_tx_q_head = next_head;
     portEXIT_CRITICAL_ISR(&s_tx_q_lock);
     return true;
@@ -102,81 +111,29 @@ static bool tx_queue_push(uint8_t dir, const uint8_t *mac, const uint8_t *payloa
 
 static void tx_queue_flush(void)
 {
-    // Send AT MOST ONE item per loop() iteration.  The old "drain all" while-
-    // loop could block for (queue_len × TX_timeout) — up to many seconds —
-    // preventing bridge_transport_read() from running and causing P4→C6
-    // command loss once the SDIO RX DMA slots filled up.
-    if (s_tx_q_tail == s_tx_q_head) return;
-
-    tx_queue_slot_t *slot = &s_tx_queue[s_tx_q_tail];
-    if (bridge_transport_write(slot->buf, slot->len) < 0) {
-        // Write failed (TX pool full / host not reading); try again next loop.
-        return;
-    }
-    s_stat_host_tx++;
-
-    portENTER_CRITICAL_ISR(&s_tx_q_lock);
-    s_tx_q_tail = (s_tx_q_tail + 1) % C6_BRIDGE_TX_QUEUE_LEN;
-    portEXIT_CRITICAL_ISR(&s_tx_q_lock);
-}
-
-#ifdef C6_BRIDGE_TRANSPORT_SDIO
-static void c6_serial_print(const char *s) {
-    if (!g_c6_serial_verbose || !s) return;
-    Serial.print(s);
-#ifdef C6_BRIDGE_TRANSPORT_SDIO
-    // Serial0 = physical UART0 (pins 30/31), initialised early in setup().
-    Serial0.write((const uint8_t *)s, strlen(s));
-#endif
-}
-
-static void c6_serial_vprintf(const char *fmt, ...) {
-    if (!g_c6_serial_verbose || !fmt) return;
-    char tmp[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
-    va_end(ap);
-    if (n > 0) {
-        /* Ensure newline termination for raw writes */
-        if ((size_t)n >= sizeof(tmp) - 1) {
-            tmp[sizeof(tmp) - 1] = '\0';
-            c6_serial_print(tmp);
-            c6_serial_print("\n");
-        } else {
-            c6_serial_print(tmp);
-            if (tmp[n - 1] != '\n') { 
-                c6_serial_print("\n");
-            }
+    // Drain ALL queued items.  bridge_transport_write() is non-blocking
+    // (enqueues into the SDIO TX task's FreeRTOS queue), so this loop
+    // cannot stall and will not starve bridge_transport_read().
+    while (s_tx_q_tail != s_tx_q_head) {
+        tx_queue_slot_t *slot = &s_tx_queue[s_tx_q_tail];
+        if (bridge_transport_write(slot->buf, slot->len) < 0) {
+            // Underlying queue full or host not ready; stop and retry next loop.
+            break;
         }
-     }
- }
+        s_stat_host_tx++;
 
-
-#define C6_LOG(...) c6_serial_vprintf(__VA_ARGS__)
-#define C6_PRINT(s)   c6_serial_print(s)
-
-// Verbose logging macro: enabled only when C6_BRIDGE_LOG_EXT is defined.
-#ifdef C6_BRIDGE_LOG_EXT
-#define C6_VLOG(fmt, ...) ESP_LOGV(TAG, fmt, ##__VA_ARGS__)
-#else
-#define C6_VLOG(fmt, ...) do { (void)0; } while (0)
-#endif
-
-static int c6_esp_log_vprintf(const char *fmt, va_list ap)
-{
-    char tmp[512];
-    int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
-    if (n > 0) {
-        // Write to USB-CDC (Serial) and hardware UART (Serial0) so logs
-        // are visible whether you're monitoring USB or the board UART pins.
-        Serial.write((const uint8_t *)tmp, n);
-        Serial0.write((const uint8_t *)tmp, n);
+        portENTER_CRITICAL_ISR(&s_tx_q_lock);
+        s_tx_q_tail = (s_tx_q_tail + 1) % C6_BRIDGE_TX_QUEUE_LEN;
+        portEXIT_CRITICAL_ISR(&s_tx_q_lock);
     }
-    return n;
-}
-#endif
 
+    // Periodically log eviction stats if any occurred.
+    static uint32_t s_last_evict_log = 0;
+    if (s_stat_tx_evict > 0 && (millis() - s_last_evict_log) > 5000) {
+        LOGW(TAG, "TX queue evictions: %u total", (unsigned)s_stat_tx_evict);
+        s_last_evict_log = millis();
+    }
+}
 // --- ESP-NOW Callbacks ------------------------------------------------------
 
 static void esp_now_recv_callback(const esp_now_recv_info_t *info, const uint8_t *data, int len)
@@ -184,20 +141,18 @@ static void esp_now_recv_callback(const esp_now_recv_info_t *info, const uint8_t
     s_stat_radio_rx++;
     C6_LOG("radio-rx #%u len=%d from " MACSTR,
            (unsigned)s_stat_radio_rx, len, MAC2STR(info->src_addr));
-    if (!tx_queue_push(BRIDGE_DIR_INCOMING, info->src_addr, data, len)) {
-        C6_LOG("radio-rx: TX queue full, dropping %d bytes", len);
-    }
+    tx_queue_push(BRIDGE_DIR_INCOMING, info->src_addr, data, len);
 }
 
 static void esp_now_send_callback(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
     const char *status_str = (status == ESP_NOW_SEND_SUCCESS) ? "OK" : "FAIL";
-    // Use ESP_LOGE for failures so they survive the verbose-logging gate.
+    // Use LOGE for failures so they survive the verbose-logging gate.
     if (status != ESP_NOW_SEND_SUCCESS) {
-        ESP_LOGE(TAG, "radio-tx #%u FAIL to " MACSTR,
+        C6_LOG(TAG, "radio-tx #%u FAIL to " MACSTR,
                  (unsigned)s_stat_radio_tx, MAC2STR(mac_addr));
     } else {
-        BLOG_I("radio-tx #%u done: OK to " MACSTR,
+        C6_LOG("radio-tx #%u done: OK to " MACSTR,
                (unsigned)s_stat_radio_tx, MAC2STR(mac_addr));
     }
 
@@ -294,7 +249,7 @@ static void process_frame(void)
                    (unsigned)s_stat_radio_tx, MAC2STR(s_rx_mac));
         } else {
             // Always-on error: visible even after verbose auto-disable.
-            ESP_LOGE(TAG, "esp-now-send FAILED err=%d to " MACSTR,
+            LOGE(TAG, "esp-now-send FAILED err=%d to " MACSTR,
                      err, MAC2STR(s_rx_mac));
         }
     } else if (s_rx_dir == BRIDGE_DIR_CONTROL) {
@@ -327,7 +282,7 @@ static void parse_byte(uint8_t c)
          * RETRY_INTERVAL ms on the P4 side). */
         uint8_t pong_payload[1] = { BRIDGE_PROTOCOL_VERSION };
         tx_queue_push(BRIDGE_DIR_DEBUG, s_local_mac, pong_payload, sizeof(pong_payload));
-        ESP_LOGI(TAG, "[ping] debug trigger received — host_ready set, pong queued");
+        LOGI(TAG, "[ping] debug trigger received — host_ready set, pong queued");
         return;
     }
 
@@ -372,7 +327,7 @@ static void parse_byte(uint8_t c)
             if (c == expect_crc) {
                 process_frame();
             } else {
-                ESP_LOGE(TAG, "CRC mismatch: got=0x%02x expect=0x%02x dir=0x%02x len=%u from " MACSTR,
+                LOGE(TAG, "CRC mismatch: got=0x%02x expect=0x%02x dir=0x%02x len=%u from " MACSTR,
                          c, expect_crc, s_rx_dir, (unsigned)s_rx_len, MAC2STR(s_rx_mac));
             }
             s_parse_state = PARSE_SOF0;
@@ -396,7 +351,7 @@ void setup()
 #endif
 #endif
     delay(100);
-    ESP_LOGI(TAG, "C6 bridge starting (built " __DATE__ " " __TIME__ ")");
+    LOGI(TAG, "C6 bridge starting (built " __DATE__ " " __TIME__ ")");
     C6_LOG("[BRIDGE] Booting ESP32-C6 ESP-NOW bridge...\n");
 
     /* Start a short timeout after which verbose serial logging will be
@@ -404,19 +359,19 @@ void setup()
     g_c6_serial_disable_deadline = millis() + C6_BRIDGE_SERIAL_DISABLE_TIMEOUT_MS;
 
     // 1. Initialize Wi-Fi
-    ESP_LOGI(TAG, "Init WiFi STA channel=%d ...", C6_BRIDGE_WIFI_CHANNEL);
+    LOGI(TAG, "Init WiFi STA channel=%d ...", C6_BRIDGE_WIFI_CHANNEL);
     WiFi.mode(WIFI_STA);
     WiFi.setChannel(C6_BRIDGE_WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     WiFi.disconnect();
 
     esp_read_mac(s_local_mac, ESP_MAC_WIFI_STA);
-    ESP_LOGI(TAG, "Local MAC: " MACSTR, MAC2STR(s_local_mac));
+    LOGI(TAG, "Local MAC: " MACSTR, MAC2STR(s_local_mac));
 
     if (esp_now_init() != ESP_OK) {
-        ESP_LOGE(TAG, "ESP-NOW init failed — restarting");
+        LOGE(TAG, "ESP-NOW init failed — restarting");
         esp_restart();
     }
-    ESP_LOGI(TAG, "ESP-NOW init OK");
+    LOGI(TAG, "ESP-NOW init OK");
 
     esp_now_register_recv_cb(esp_now_recv_callback);
     esp_now_register_send_cb(esp_now_send_callback);
@@ -429,9 +384,9 @@ void setup()
     esp_now_add_peer(&bcast);
 
     // 2. Initialize Transport
-    ESP_LOGI(TAG, "Init transport...");
+    LOGI(TAG, "Init transport...");
     bridge_transport_init();
-    ESP_LOGI(TAG, "Setup complete — waiting for P4 host ping");
+    LOGI(TAG, "Setup complete — waiting for P4 host ping");
 #ifdef C6_BRIDGE_TRANSPORT_SDIO
     C6_LOG("[BRIDGE] Transport: SDIO slave\n");
 #else
@@ -502,7 +457,7 @@ void loop()
     // Heartbeat timeout watchdog
     if (g_last_p4_rx_time > 0 && bridge_transport_is_host_ready()) {
         if (millis() - g_last_p4_rx_time > P4_HEARTBEAT_TIMEOUT_MS) {
-            ESP_LOGE(TAG, "P4 heartbeat missing for >%u ms — rebooting",
+            LOGE(TAG, "P4 heartbeat missing for >%u ms — rebooting",
                      (unsigned)P4_HEARTBEAT_TIMEOUT_MS);
             delay(100);
             esp_restart();
@@ -513,7 +468,7 @@ void loop()
     uint32_t now_ms = millis();
     if (now_ms - s_last_stats_ms >= C6_STATS_INTERVAL_MS) {
         s_last_stats_ms = now_ms;
-        ESP_LOGI(TAG, "[stats] radio_rx=%u radio_tx=%u host_rx=%u host_tx=%u "
+        LOGI(TAG, "[stats] radio_rx=%u radio_tx=%u host_rx=%u host_tx=%u "
                       "host_ready=%d",
                  (unsigned)s_stat_radio_rx, (unsigned)s_stat_radio_tx,
                  (unsigned)s_stat_host_rx,  (unsigned)s_stat_host_tx,

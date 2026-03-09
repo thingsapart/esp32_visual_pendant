@@ -131,6 +131,10 @@ def create_manifest(source, target, env):
         builds.append({ "chipFamily": "ESP32-C3", "improv": False })
     elif (mcu == 'esp32c6'):
         builds.append({ "chipFamily": "ESP32-C6", "improv": False })
+    elif (mcu == 'esp32p4'):
+        builds.append({ "chipFamily": "ESP32-P4", "improv": False })
+    if not builds:
+        builds.append({ "chipFamily": mcu.upper(), "improv": False })
     builds[0]["parts"] = parts
     data["builds"] = builds
     json_data = json.dumps(data, indent=4, sort_keys=False)

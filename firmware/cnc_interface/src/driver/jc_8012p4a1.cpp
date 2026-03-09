@@ -9,7 +9,7 @@
 #include "jc8012p4a1/touch/gsl3680_touch.h"
 #include "lvgl.h"
 
-#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #define TP_I2C_SDA 7

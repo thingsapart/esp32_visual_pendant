@@ -7,7 +7,7 @@
  * Only compiled on ESP32 hardware targets where FreeRTOS is available.
  */
 
-#define UI_DEBUG_LOCAL_LEVEL D_INFO
+#define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
 
 #include "jog_accumulator_task.h"

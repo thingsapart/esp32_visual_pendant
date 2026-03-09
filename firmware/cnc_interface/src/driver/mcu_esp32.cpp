@@ -201,39 +201,38 @@ void mcu_setup() {
   while (!Serial && (millis() - start_time < 500)) {
     delay(10);
   }
+  // Apply non-blocking TX when Serial is a USB CDC type (HWCDC/USBCDC).
+  // This applies to ESP32-S3 builds with ARDUINO_USB_CDC_ON_BOOT=1, where
+  // Serial == HWCDCSerial or USBSerial and has a 100 ms TX timeout by default.
+  // macOS auto-enumerates the USB device, so isCDC_Connected() returns true
+  // even without a terminal open — write() then blocks up to 100 ms per call,
+  // stalling lvgl_task when the display/touch drivers emit IDF log messages.
+  //
+  // Note: ESP32-P4 (ESP32P4_HW) uses ARDUINO_USB_MODE=1 but NOT
+  // ARDUINO_USB_CDC_ON_BOOT, so Serial == Serial0 (UART0 / HardwareSerial)
+  // which never blocks.  The P4's USB-JTAG secondary console blocking is an
+  // IDF-level issue (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG) handled
+  // separately — HWCDCSerial is not externally declared in that config.
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT)
+  // Serial == HWCDCSerial or USBSerial — both have setTxTimeoutMs.
+  Serial.setTxTimeoutMs(0);
+#endif
   add_standard_serial();
 #else
   init_standard_serial(115200, CFG_SERIAL_8N1, USB_UART_PIN_RX,
                        USB_UART_PIN_TX);
 #endif
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT)
-  // On HWCDC (ARDUINO_USB_MODE=1) the TX ring buffer is only 256 bytes and
-  // tx_timeout_ms defaults to 100 ms.  On macOS the USB host enumerates the
-  // device and sends periodic IN tokens, so isCDC_Connected() returns true
-  // even when no terminal app has the port open.  write() then takes the
-  // "connected" blocking path and stalls for up to 100 ms each call when the
-  // 256-byte ring buffer is full.  With 20-40 LOGD/LOGV calls per poll cycle
-  // (machine_rrf.c is compiled at D_VERBOSE), hub_task accumulates seconds of
-  // stall time per 120-ms poll, never draining the 4096-byte UART ring buffer.
-  // The buffer fills (~40 unprocessed JSON messages), rb_push silently drops
-  // bytes including '\n' terminators, line_pos never resets, and the next
-  // message is concatenated onto the partial previous line — producing the
-  // observed {"ke{" / {"ke}" corruption at the start of JSON responses.
-  //
-  // Fix: setTxTimeoutMs(0) makes write() non-blocking — it immediately drops
-  // data rather than waiting when the ring buffer is full.  No task ever stalls
-  // inside default_serial_write() again.
-  Serial.setTxTimeoutMs(0);
-#endif
-  // Do NOT call Serial.setDebugOutput(true) on USB-CDC builds.
-  // setDebugOutput routes ESP-IDF framework logs (WiFi, ESP-NOW, etc.)
-  // directly through the Serial (HWCDC) write path, bypassing the !Serial
-  // guard and the setTxTimeoutMs(0) timeout we set above.  Those IDF log
-  // calls can still block if they race with a connected state transition.
-  // Application-level logging already uses default_serial_write() which has
-  // the correct guards; setDebugOutput is not needed.
-#if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
-  // Only safe on builds where Serial is a plain hardware UART (always "connected").
+  // Do NOT forward IDF logs to Serial on USB-CDC builds (ARDUINO_USB_CDC_ON_BOOT=1
+  // or ESP32-P4).  setDebugOutput() routes esp_log output directly through
+  // Serial.write() in whatever task generates the log — bypassing the async
+  // stream-buffer path and the !Serial guard.  On HWCDC without
+  // setTxTimeoutMs(0) this blocks for the default 100 ms TX timeout, stalling
+  // lvgl_task when the LVGL port or touch driver emits IDF log messages.
+  // Application-level logging already goes through default_serial_write().
+  // Only enable setDebugOutput on UART-based Serial (always "connected",
+  // hardware FIFO never blocks).
+#if (!defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)) && \
+    !defined(ESP32P4_HW)
   Serial.setDebugOutput(true);
 #endif
   LOGI(TAG, "PRE-INIT");
@@ -282,8 +281,8 @@ void LIST_TASKS() {
 
   // Check if the function returned the correct number of tasks
   if (num_tasks_populated != num_tasks) {
-    LOGI(TAG, "Error: uxTaskGetSystemState returned %zu tasks, expected %zu\n",
-         num_tasks_populated, num_tasks);
+    LOGI(TAG, "Error: uxTaskGetSystemState returned %u tasks, expected %u\n",
+         (unsigned)num_tasks_populated, (unsigned)num_tasks);
     vPortFree(task_status_array);
     return;
   }

@@ -24,7 +24,7 @@
 
 static const char *TAG = "JC3248W535C/touch";
 
-#define DEBUG_TOUCH 0
+#define DEBUG_TOUCH 1
 
 /* ── Build-path includes ───────────────────────────────────────────────────*/
 
