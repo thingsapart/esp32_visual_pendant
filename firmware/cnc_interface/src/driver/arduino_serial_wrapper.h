@@ -180,6 +180,13 @@ void default_serial_write(const uint8_t *buf, size_t len);
  */
 void serial_process_input(serial_handle_t handle);
 
+/**
+ * @brief Returns the cumulative count of log bytes dropped since boot.
+ * Incremented when the log StreamBuffer is full or Serial is unavailable.
+ * Useful for diagnosing log congestion during high-traffic periods.
+ */
+uint32_t serial_get_log_drop_count(void);
+
 // The extern "C" block opened at the top is closed here
 #ifdef __cplusplus
 }

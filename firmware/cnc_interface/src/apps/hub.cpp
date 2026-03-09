@@ -58,7 +58,7 @@ static SemaphoreHandle_t log_batch_lock = NULL;
 static void log_batch_timer_cb(void *arg) {
   // Flush batched log messages
   if (!log_batch_lock) return;
-  if (xSemaphoreTake(log_batch_lock, pdMS_TO_TICKS(100)) != pdTRUE) return;
+  if (xSemaphoreTake(log_batch_lock, pdMS_TO_TICKS(10)) != pdTRUE) return;
   if (log_batch_len > 0) {
     size_t len = log_batch_len + 1; // include NUL
     led_status_sending();

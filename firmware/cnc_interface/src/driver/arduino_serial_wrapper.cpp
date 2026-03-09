@@ -125,6 +125,7 @@ typedef struct {
   ring_buffer_t rx_buffer;
   char line_buffer[MAX_LINE_LENGTH];
   size_t line_pos;
+  bool line_overflow;  // true while discarding bytes of an overflowed line
 
   // Mutex to serialize writes to the underlying Stream
 #if defined(ESP32_HW)
@@ -145,6 +146,10 @@ static std::map<int, serial_handle_t> g_uart_num_to_handle;
 // ISR-safe lookup table for port data based on UART number.
 #define MAX_HW_UARTS 5 // ESP32-S3 has 3, but this provides a safe upper bound
 static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
+// ISR-safe pointer for the log serial (uart_num == -1). Populated by
+// add_standard_serial() to avoid calling get_serial_handle() + find_port_data()
+// (std::map heap traversal) inside the UART event-task context.
+static serial_port_data_t *g_log_port_data = NULL;
 
 // --- Log TX async writer (default Serial only) ---
 // Use a FreeRTOS StreamBuffer for thread-safe, non-blocking enqueue from
@@ -153,7 +158,7 @@ static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
 #if defined(ESP32_HW)
 static StreamBufferHandle_t g_log_tx_sb = NULL;
 static TaskHandle_t g_log_writer_task = NULL;
-static const size_t LOG_TX_BUFFER_SIZE = 1024;   // bytes; tune as needed
+static const size_t LOG_TX_BUFFER_SIZE = 4096;   // bytes; 4 KB prevents drops during WiFi-reconnect log bursts
 static const size_t LOG_TX_COPY_CHUNK = 256;    // writer local buffer
 static const uint32_t LOG_WRITER_STACK = 2048;  // bytes
 static const UBaseType_t LOG_WRITER_PRIO = tskIDLE_PRIORITY + 1;
@@ -271,16 +276,25 @@ static void process_received_data(serial_port_data_t *port_data) {
     LOGD(TAG, "Processing %u bytes from serial ring buffer for UART %d.",
       (unsigned)__atomic_load_n(&port_data->rx_buffer.count, __ATOMIC_RELAXED), port_data->uart_num);
   while (rb_pop(&port_data->rx_buffer, &byte)) {
-    // Check for line buffer overflow before adding the character
+    // Fast-path discard when this line already overflowed: drop bytes until
+    // the closing newline arrives, then resume normal line assembly.
+    if (port_data->line_overflow) {
+      if (byte == '\n') {
+        port_data->line_overflow = false;
+        port_data->line_pos = 0;
+      }
+      continue;
+    }
+
+    // Detect overflow: line too long for the buffer.  Enter overflow state
+    // so the rest of this line is cleanly discarded on subsequent bytes.
     if (port_data->line_pos >= MAX_LINE_LENGTH - 1) {
-      // Line too long, discard the current line buffer content and start over
-       LOGE(TAG, "Serial line buffer overflow for UART %d (pos=%u, max=%d) - response truncated and DISCARDED",
-         port_data->uart_num, (unsigned)port_data->line_pos, MAX_LINE_LENGTH);
+      LOGE(TAG, "Serial line buffer overflow for UART %d (pos=%u, max=%d) - discarding until next newline",
+           port_data->uart_num, (unsigned)port_data->line_pos, MAX_LINE_LENGTH);
+      port_data->line_overflow = true;
       port_data->line_pos = 0;
-      // Optionally, add the current byte if it's not part of the overflowed
-      // line This depends on desired behavior: discard whole long line vs.
-      // split it. Let's discard the partial long line for simplicity.
-      continue;  // Skip processing this byte as part of a new line yet
+      if (byte == '\n') port_data->line_overflow = false;  // newline ends the overlong line immediately
+      continue;
     }
 
     port_data->line_buffer[port_data->line_pos++] = (char)byte;
@@ -342,9 +356,11 @@ static IRAM_ATTR void onReceiveGeneric(void *arg) {
   }
 
 void onReceiveM1(void) {
-  serial_handle_t handle = get_serial_handle(-1);
-  serial_port_data_t *arg = find_port_data(handle);
-  onReceiveGeneric(arg);
+  // Use the pre-cached g_log_port_data pointer to avoid calling
+  // get_serial_handle() + find_port_data() (std::map traversal) from the
+  // UART event-task context, which is not safe during flash-cache-disable
+  // windows and can race with map modifications at startup.
+  onReceiveGeneric(g_log_port_data);
 }
 ONRECV(0)
 ONRECV(1)
@@ -622,7 +638,13 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
   // commands which could interleave and corrupt messages (observed as
   // partial or malformed M409 responses on the controller).
 #if defined(ESP32_HW)
-  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+  if (port_data->write_mutex) {
+    if (xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(200)) != pdPASS) {
+      LOGW(TAG, "serial_write: TX mutex timeout UART %d, dropping %u bytes",
+           port_data->uart_num, (unsigned)size);
+      return 0;
+    }
+  }
 #else
   if (port_data->write_mutex) port_data->write_mutex->lock();
 #endif
@@ -643,7 +665,13 @@ size_t serial_write_atomic(serial_handle_t handle, const uint8_t *buffer, size_t
   if (!port_data || !port_data->stream) return 0;
 
 #if defined(ESP32_HW)
-  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+  if (port_data->write_mutex) {
+    if (xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(200)) != pdPASS) {
+      LOGW(TAG, "serial_write_atomic: TX mutex timeout UART %d, dropping %u bytes",
+           port_data->uart_num, (unsigned)size);
+      return 0;
+    }
+  }
 #else
   if (port_data->write_mutex) port_data->write_mutex->lock();
 #endif
@@ -668,7 +696,12 @@ bool serial_flush(serial_handle_t handle) {
 
   // Ensure flush is serialized with writes
 #if defined(ESP32_HW)
-  if (port_data->write_mutex) xSemaphoreTake(port_data->write_mutex, portMAX_DELAY);
+  if (port_data->write_mutex) {
+    if (xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(200)) != pdPASS) {
+      LOGW(TAG, "serial_flush: mutex timeout UART %d", port_data->uart_num);
+      return false;
+    }
+  }
 #else
   if (port_data->write_mutex) port_data->write_mutex->lock();
 #endif
@@ -787,6 +820,8 @@ void add_standard_serial() {
   if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
       g_isr_port_data[uart_num] = port_data;
   }
+  // Cache the log serial pointer for onReceiveM1 (uart_num == -1)
+  g_log_port_data = port_data;
 
   // Non-blocking TX configuration for standard Serial is handled elsewhere
   // (e.g., platform init). Avoid calling setTxTimeoutMs() here.
@@ -918,6 +953,16 @@ void serial_process_input(serial_handle_t handle) {
   // Process whatever is in the ring buffer now (bytes pushed by onReceiveGeneric
   // for HW serial, or by the loop above for non-HW serial).
   process_received_data(port_data);
+}
+
+// Returns the cumulative count of log bytes dropped since boot (StreamBuffer
+// full or Serial unavailable).  Useful for diagnose log congestion.
+uint32_t serial_get_log_drop_count(void) {
+#if defined(ESP32_HW)
+  return (uint32_t)__atomic_load_n(&g_log_dropped_count, __ATOMIC_RELAXED);
+#else
+  return 0;
+#endif
 }
 
 }  // extern "C"

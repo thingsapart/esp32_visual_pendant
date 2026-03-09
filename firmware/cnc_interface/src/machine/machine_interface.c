@@ -623,6 +623,7 @@ void machine_interface_maybe_execute_continuous_move(
 }
 
 void machine_interface_position_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_POSITION, __ATOMIC_RELEASE);
   machine_interface_maybe_execute_continuous_move(self);
   LOGD(TAG, "Pos updated: callbacks %p, %p, %p", self->pos_changed_cb[0],
        self->pos_changed_cb[1], self->pos_changed_cb[2]);
@@ -630,14 +631,17 @@ void machine_interface_position_updated(machine_interface_t *self) {
 }
 
 void machine_interface_home_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_HOME, __ATOMIC_RELEASE);
   call_callbacks(home_changed_cb);
 }
 
 void machine_interface_state_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_STATE, __ATOMIC_RELEASE);
   call_callbacks(state_change_cb);
 }
 
 void machine_interface_wcs_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_WCS, __ATOMIC_RELEASE);
   // Clear target positions
   for (int i = 0; i < 3; i++) {
     self->target_position[i] = 0.0f;  // Or any appropriate default value
@@ -648,23 +652,28 @@ void machine_interface_wcs_updated(machine_interface_t *self) {
 }
 
 void machine_interface_feed_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_FEED, __ATOMIC_RELEASE);
   call_callbacks(feed_changed_cb);
 }
 
 void machine_interface_sensors_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_SENSORS, __ATOMIC_RELEASE);
   call_callbacks(sensors_changed_cb);
 }
 
 void machine_interface_dialogs_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_DIALOGS, __ATOMIC_RELEASE);
   call_callbacks(dialogs_changed_cb);
 }
 
 void machine_interface_spindles_tools_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_SPINDLES_TOOLS, __ATOMIC_RELEASE);
   call_callbacks(spindles_tools_changed_cb);
 }
 
 void machine_interface_files_updated(machine_interface_t *self,
                                      const char *fdir) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_FILES, __ATOMIC_RELEASE);
   // Find the filelist entry that corresponds to fdir. Since fdir may be a
   // subdirectory (eg. "gcodes/sub"), prefer an exact match but accept a
   // prefix match where the stored slot root is a prefix of the requested
@@ -705,7 +714,15 @@ void machine_interface_files_updated(machine_interface_t *self,
 }
 
 void machine_interface_connected_updated(machine_interface_t *self) {
+  __atomic_fetch_or(&self->dirty_flags, MI_DIRTY_CONNECTED, __ATOMIC_RELEASE);
   call_callbacks(connected_changed_cb);
+}
+
+uint32_t machine_interface_take_dirty(machine_interface_t *self, uint32_t mask) {
+  // Atomically clear the requested bits and return which ones were set.
+  // __ATOMIC_ACQ_REL: acquire so we see the latest writes that set the bits;
+  // release so our caller sees them cleared before (re-)reading state.
+  return __atomic_fetch_and(&self->dirty_flags, ~mask, __ATOMIC_ACQ_REL) & mask;
 }
 
 void machine_interface_current_move_axis_updated(machine_interface_t *self) {

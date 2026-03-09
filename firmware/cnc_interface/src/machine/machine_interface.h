@@ -254,6 +254,23 @@ typedef struct log_message_callback_t {
   log_message_cb_t cb_fn;
 } log_message_callback_t;
 
+// ---------------------------------------------------------------------------
+// Dirty flags — set atomically by machine_interface_*_updated() functions.
+// Read and cleared by interface_tick() (LVGL task) via machine_interface_take_dirty().
+// Using dirty flags ensures LVGL mutations only happen in the LVGL task;
+// the *_updated() callbacks can be called from any task.
+// ---------------------------------------------------------------------------
+#define MI_DIRTY_POSITION        (1u << 0)  ///< position[] / wcs_position[] changed
+#define MI_DIRTY_STATE           (1u << 1)  ///< machine_status changed
+#define MI_DIRTY_HOME            (1u << 2)  ///< axes_homed[] changed
+#define MI_DIRTY_WCS             (1u << 3)  ///< wcs / target_position changed
+#define MI_DIRTY_FEED            (1u << 4)  ///< feed / feed_multiplier changed
+#define MI_DIRTY_SPINDLES_TOOLS  (1u << 5)  ///< spindles[] / tool changed
+#define MI_DIRTY_SENSORS         (1u << 6)  ///< io_channels[] / probes changed
+#define MI_DIRTY_DIALOGS         (1u << 7)  ///< message_box changed
+#define MI_DIRTY_FILES           (1u << 8)  ///< filelists[] changed
+#define MI_DIRTY_CONNECTED       (1u << 9)  ///< connection state changed
+
 // --- Machine Interface Structure (Virtual Class) ---
 
 typedef struct machine_interface_t {
@@ -350,6 +367,11 @@ typedef struct machine_interface_t {
   // clear it immediately after.  Not re-entrant / not atomically safe, but
   // the single-bit benign race (one poll going to front once) is acceptable.
   bool gcode_queue_priority;
+
+  // Dirty flags for deferred LVGL updates.  Set atomically by
+  // machine_interface_*_updated(); read+cleared by interface_tick() so that
+  // lv_obj_* calls only happen on the LVGL task.  See MI_DIRTY_* constants.
+  volatile uint32_t dirty_flags;
 
   // --- "Virtual" Methods (Function Pointers) ---
   void (*send_gcode)(machine_interface_t *self, const char *gcode,
@@ -464,6 +486,19 @@ void machine_interface_process_machine_state_response(machine_interface_t *self,
                                                       void *data, size_t len);
 
 bool machine_interface_should_poll(machine_interface_t *self);
+
+/**
+ * @brief Atomically read and clear the specified dirty flag bits.
+ *
+ * Returns the subset of @p mask bits that were dirty (set) before clearing.
+ * Safe to call from any task; intended for use in interface_tick() running
+ * on the LVGL task to apply pending state changes to the UI safely.
+ *
+ * Example:
+ *   uint32_t dirty = machine_interface_take_dirty(mach, MI_DIRTY_POSITION | MI_DIRTY_STATE);
+ *   if (dirty & MI_DIRTY_POSITION) update_position_widgets();
+ */
+uint32_t machine_interface_take_dirty(machine_interface_t *self, uint32_t mask);
 
 // ---------------------------------------------------------------------------
 // Chipload calculation
