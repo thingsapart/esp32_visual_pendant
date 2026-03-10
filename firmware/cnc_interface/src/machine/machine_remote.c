@@ -592,8 +592,7 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
   // Check if message is too large ONLY for non-binary messages if using fixed
   // buffer
   if (data[0] != MSG_TYPE_BINARY &&
-      data_len > sizeof(remote_msg_t)) {  // sizeof(remote_msg_t) is max size
-                                          // for simple types
+      data_len > sizeof(remote_msg_t)) {
         LOGW(TAG,
           "Non-binary remote message too large (%u bytes) to buffer. "
           "Discarding.",
@@ -601,11 +600,12 @@ void machine_interface_remote_buffer_message(machine_interface_remote_t *self,
     return;
   }
 
-  // Process binary message fragments to buffer directly.
+  // Binary fragments should have been dispatched to the proc task by the
+  // caller (_machi_remote_esp_now_data_recv).  Handle here only as a fallback
+  // when ASYNC_RESPONSE_PROCESSING is disabled (non-production path).
   if (data[0] == MSG_TYPE_BINARY) {
-    LOGT(TAG, "Processing binary fragment directly (not buffering).");
+    LOGT(TAG, "buffer_message: processing binary fragment (non-async path).");
     binary_message_fragment_to_buffer(self, data, data_len);
-
     return;
   }
 
@@ -1062,24 +1062,31 @@ void machine_interface_remote_process_message(machine_interface_remote_t *self,
       break;
     }
     case MSG_TYPE_BINARY: {
-      uint8_t *ptr = (uint8_t *)data;
-      uint8_t target_slot = data[1];
-      if (target_slot >= MAX_CONCURRENT_FRAGMENTED_MSGS) {
-        LOGE(TAG, "MSG_TYPE_BINARY: invalid slot %u (max %u), dropping",
-             target_slot, MAX_CONCURRENT_FRAGMENTED_MSGS);
-        break;
+      if (len >= BINARY_FRAGMENT_MSG_HEADER_SIZE) {
+        // Raw fragment routed through the proc task (ASYNC_RESPONSE_PROCESSING).
+        // Reassemble into the slot; when complete this self-posts
+        // {MSG_TYPE_BINARY, slot} (len==2) back to the proc stream buffer.
+        binary_message_fragment_to_buffer(self, data, len);
+      } else if (len == 2) {
+        // Internal reassembly-complete notification: data[1] is the slot index.
+        uint8_t target_slot = data[1];
+        if (target_slot >= MAX_CONCURRENT_FRAGMENTED_MSGS) {
+          LOGE(TAG, "MSG_TYPE_BINARY: invalid slot %u (max %u), dropping",
+               target_slot, MAX_CONCURRENT_FRAGMENTED_MSGS);
+          break;
+        }
+        binary_payload_buffer_t *target_buffer =
+            &g_binary_payload_buffers[target_slot];
+        LOGT(TAG, "Processsing binary PAYLOAD: slot %d", target_slot);
+        LOGT(TAG, "mach %p, sub_type %d, buf %p, total_sz %u", &self->base,
+             target_buffer->sub_type, (void *)target_buffer->buffer,
+             target_buffer->total_size);
+        process_binary_payload(&self->base, target_buffer->sub_type,
+                               target_buffer->buffer, target_buffer->total_size);
+        binary_payload_slot_cleanup(target_slot);
+      } else {
+        LOGE(TAG, "MSG_TYPE_BINARY: unexpected len=%u, dropping", (unsigned)len);
       }
-      binary_payload_buffer_t *target_buffer =
-          &g_binary_payload_buffers[target_slot];
-      LOGT(TAG, "Processsing binary PAYLOAD: slot %d", target_slot);
-      LOGT(TAG, "mach %p, sub_type %d, buf %p, total_sz %u", &self->base,
-           target_buffer->sub_type, (void *)target_buffer->buffer,
-           target_buffer->total_size);
-
-      process_binary_payload(&self->base, target_buffer->sub_type,
-                             target_buffer->buffer, target_buffer->total_size);
-      binary_payload_slot_cleanup(target_slot);
-
       break;
     }
 
@@ -1151,24 +1158,37 @@ static void _machi_remote_esp_now_data_recv(const uint8_t *mac_addr,
 
 #ifdef ASYNC_RESPONSE_PROCESSING
 
-  // Process binary message fragments to buffer directly.
-  if (data[0] == MSG_TYPE_BINARY) {
-    LOGT(TAG, "Processing binary fragment immediately (not buffering).");
-    binary_message_fragment_to_buffer(self, data, data_len);
-
-    return;
-  }
-
+  // Route ALL message types — including binary fragments — through the proc
+  // task queue.  Previously, MSG_TYPE_BINARY was handled directly here (WiFi
+  // task, prio 22) which ran malloc + reassembly-slot scan at high priority,
+  // blocking the WiFi stack for up to a few hundred microseconds per fragment.
+  //
+  // The proc task already has a MSG_TYPE_BINARY case that calls
+  // binary_message_fragment_to_buffer().  Routing through the queue:
+  //   - Moves all heap allocation off the WiFi task.
+  //   - Serialises fragment processing with other message types (no race
+  //     between reassembly state and proc-task consumption).
+  //   - Falls back to inline processing only when the queue is full (same
+  //     behaviour as before for the completed-reassembly path).
   if (self->proc_task_event_queue != NULL) {
-    LOGD(TAG, "[DIAG] Queuing non-binary type=%d len=%d to proc_task", data[0], data_len);
-    // from_isr=false: this callback runs in bridged_sdio_rx_task (regular task context).
-    machine_response_proc_task_data_ready(self->proc_task_event_queue, data,
-                                          data_len, false);
+    LOGD(TAG, "[DIAG] Queuing type=%d len=%d to proc_task", data[0], data_len);
+    if (machine_response_proc_task_data_ready(self->proc_task_event_queue, data,
+                                              data_len, false) != 0) {
+      // Queue / stream buffer full — for binary fragments, process inline so
+      // we don't lose the fragment and leave a reassembly slot dangling.
+      if (data[0] == MSG_TYPE_BINARY) {
+        LOGW(TAG, "Proc queue full — processing binary fragment inline.");
+        binary_message_fragment_to_buffer(self, data, data_len);
+      }
+      // For non-binary messages that don't fit, they are dropped (same as before).
+    }
   } else {
-    LOGW(TAG, "Cannot machine_response_process_for_task => queue NULL");
+    LOGW(TAG, "Cannot queue to proc_task => queue NULL");
+    // Last-resort inline processing for binary fragments when no task is running.
+    if (data[0] == MSG_TYPE_BINARY)
+      binary_message_fragment_to_buffer(self, data, data_len);
   }
 #else
-  // machine_interface_remote_process_message(self, data, data_len);
   machine_interface_remote_buffer_message(self, data, data_len);
 #endif
 }

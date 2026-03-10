@@ -29,8 +29,12 @@ void remote_wrapper_print_stats(void) {
 #include <assert.h>
 #include <esp_event.h>
 #include <esp_netif.h>
+#ifdef REMOTE_COMMS_C6_SDIO_BRIDGE
+#include "esp_bridged_esp_now.h"
+#else
 #include <esp_now.h>
 #include <esp_wifi.h>
+#endif
 #include <nvs_flash.h>
 #include <string.h>
 
@@ -54,6 +58,8 @@ static void                    *g_send_user_data = NULL;
 typedef struct { remote_wrapper_recv_cb_t cb; void *user; } rcb_slot_t;
 static rcb_slot_t g_recv_cbs[REMOTE_WRAPPER_MAX_RECV_CBS];
 
+#ifndef REMOTE_COMMS_C6_SDIO_BRIDGE
+
 static void wifi_init() {
   esp_err_t _err;
   ESP_ERROR_CHECK(esp_netif_init());
@@ -67,6 +73,14 @@ static void wifi_init() {
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
   ESP_ERROR_CHECK(esp_wifi_start());
 }
+
+#else
+
+// C6-Bridge because we have no wifi! C6 running custom firmware so built-in
+// Wifi won't start.
+static void wifi_init() {}
+
+#endif
 
 bool remote_wrapper_add_recv_cb(remote_wrapper_recv_cb_t recv_cb, void *user_data)
 {

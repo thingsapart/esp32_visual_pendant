@@ -99,6 +99,7 @@ static machine_status_t machine_status_from_rrf_string(const char *rrf_status);
 void _free_modal(machine_interface_t *self, int modal_id);
 static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _serial_set_connected_impl(machine_rrf_t *self, bool connect);
+static void _serial_drain_rx_impl(machine_interface_t *self);
 static void _machine_rrf_attempt_connect(machine_interface_t *self);
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode);
 static inline bool _is_m114_body_start(const char *s);
@@ -904,9 +905,18 @@ static bool _serial_parse_json_response(machine_rrf_t *self,
 // NOTE: Keys cannot be combined! Every key needs to be polled on its own.
 // So for example `M409 K"state.status,move.currentMove,move.speedFactor,spindles[]"`
 // will NOT work. It needs to broken down into 4 requests.
-static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
-  // Process any data that has been received since the last poll.
+// Drain the RX ring buffer into line callbacks without sending any poll commands.
+// Called every machine_send_task loop iteration via machine_interface_drain_rx().
+static void _serial_drain_rx_impl(machine_interface_t *base) {
+  machine_rrf_t *self = (machine_rrf_t *)base;
   serial_process_input(self->transport_state.serial.uart);
+}
+
+static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
+  // RX draining is now handled by _serial_drain_rx_impl called every
+  // machine_send_task loop iteration — no need to call serial_process_input()
+  // here again.  But keep a redundant call as belt-and-suspenders for paths
+  // that invoke _serial_poll_state_impl directly (e.g. machine_rrf.c sync mode).
 
 #ifdef ESP32_HW
   // Check for response timeout: if we have been connected but nothing has been
@@ -1620,6 +1630,12 @@ machine_rrf_t *machine_rrf_init_serial(machine_rrf_t *self, int rrf_serial_num,
   self->_list_files_impl = _serial_list_files_impl;
   self->_deinit_impl = _serial_deinit_impl;
   self->_proc_state_resp_impl = _serial_proc_state_resp_impl;
+
+  // Wire _drain_rx so machine_send_task can drain the UART ring buffer every
+  // loop iteration, regardless of whether a TX or poll was attempted.
+  // This decouples RX draining from the poll cadence and prevents the ring
+  // buffer from filling when a TX is blocked on write_mutex.
+  self->base._drain_rx = _serial_drain_rx_impl;
 
   /* RRF-specific poll/backoff hook */
   self->base.should_poll = _machine_rrf_should_poll;

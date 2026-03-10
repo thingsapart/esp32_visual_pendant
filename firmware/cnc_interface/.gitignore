@@ -6,3 +6,6 @@ build_output
 .vscode/ipch
 managed_components
 MilleniumOS
+dependencies.lock
+sdkconfig.*
+CMakeLists.txt

@@ -20,6 +20,7 @@ extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "driver/task_registry.h"
 #else
@@ -39,17 +40,30 @@ extern "C" {
   (tskIDLE_PRIORITY + 4)  // Higher priority to ensure it can preempt UI task
 
 // --- Configuration Constants ---
-// On ESP32_HW the FreeRTOS queue IS the message buffer: each slot holds a
-// complete message payload (up to PROC_MSG_MAX_DATA bytes + a 2-byte length).
-// This avoids the eviction-race that the old ring_buffer design had when
-// ring_buffer_add_line called ring_buffer_free_oldest (erasing data the
-// proc_task had not yet consumed).
-// No inline-data size cap: proc_msg_t now carries a heap pointer so both
-// short ESP-NOW frames (≤250 B) and long RRF serial lines (up to ~4 KB)
-// pass through without truncation.  Sanity-check upper bound kept to catch
-// obviously corrupt lengths before attempting the malloc.
-#define PROC_MSG_MAX_LEN 4096  // sanity cap — any len above this is corrupt
-#define QUEUE_LENGTH 40        // Direct message queue depth — must be large enough
+// On ESP32_HW the message channel is a FreeRTOS StreamBuffer: the producer
+// writes a 2-byte little-endian length header followed by the payload bytes;
+// the consumer reads the header, then exactly that many payload bytes into a
+// static line buffer.  This design has:
+//   - Zero heap allocations on the fast path (no pvPortMalloc per line).
+//   - Natural back-pressure: xStreamBufferSend returns 0 when the buffer is
+//     full, and the producer logs a warning and drops the message.
+//   - A static proc_line_buf[PROC_MSG_MAX_LEN] stays in task stack — avoids
+//     heap fragmentation under the burst of 30+ lines from M409 d5 responses.
+//
+// StreamBuffer sizing: 12 KB (3 × MAX_LINE_LENGTH) handles a worst-case burst
+// of ~3 full-length M409 d5 lines (≈4 KB each) without dropping.
+// Each message occupies sizeof(uint16_t) + payload bytes.
+//
+// No inline-data size cap: any payload up to PROC_MSG_MAX_LEN is accepted.
+// Sanity-check upper bound kept to catch obviously corrupt lengths.
+#define PROC_MSG_MAX_LEN       4096  // sanity cap — corrupt if larger
+#define PROC_STREAM_BUFFER_SIZE (3 * PROC_MSG_MAX_LEN + 128)  // 12 KB + overhead
+
+// The QueueHandle_t API surface in the .h is kept for callers (hub.cpp,
+// machine_rrf.c) but the underlying object is now a StreamBufferHandle_t cast
+// to QueueHandle_t.  This avoids changing every call-site signature.
+// The cast is safe: FreeRTOS stream buffer and queue handles are both void*
+// and we only pass them back to our own proc task functions.
 
 // Non-ESP32_HW still uses the ring-buffer path (gcode_queue).
 #ifndef ESP32_HW
@@ -63,14 +77,8 @@ extern "C" {
 static const char *TAG = "MACHINE_RESP_PROC_TASK";
 
 #ifdef ESP32_HW
-// Direct message item stored in the FreeRTOS queue.
-// data is heap-allocated by the producer (pvPortMalloc) and must be freed
-// by the consumer (vPortFree) after processing.
-typedef struct {
-  uint16_t  len;
-  uint8_t  *data;
-} proc_msg_t;
-
+// No proc_msg_t struct needed: the StreamBuffer carries raw
+// [uint16_t len][uint8_t payload[len]] records directly.
 #else  // non-ESP32_HW: keep ring-buffer path
 typedef struct {
   char *ptr;
@@ -418,13 +426,12 @@ static bool ring_buffer_get_line(ring_buffer_t *rb, char *out_buffer,
 /**
  * Notify task of data being ready.
  *
- * On ESP32_HW the message is copied directly into the FreeRTOS data queue
- * (proc_msg_t).  The old ring-buffer indirection is gone; this avoids the
- * race where ring_buffer_add_line's free_oldest evicted data before the
- * proc_task could process it, leaving the task perpetually finding an empty
- * buffer despite a full notification queue.
+ * On ESP32_HW: writes a 2-byte length header + payload into the StreamBuffer.
+ * This is zero-allocation — no pvPortMalloc per message.  If the StreamBuffer
+ * is full, the message is dropped with a warning (back-pressure: the proc task
+ * is falling behind).
  *
- * On non-ESP32_HW the gcode_queue path is unchanged.
+ * On non-ESP32_HW: gcode_queue path unchanged (desktop unit-test builds).
  */
 int machine_response_proc_task_data_ready(
 #ifdef ESP32_HW
@@ -434,8 +441,9 @@ int machine_response_proc_task_data_ready(
 #endif
     const uint8_t *data, size_t len, bool from_isr) {
 #ifdef ESP32_HW
-  if (task_event_queue == NULL) {
-    LOGE(TAG, "data_ready: queue is NULL");
+  StreamBufferHandle_t sb = (StreamBufferHandle_t)task_event_queue;
+  if (!sb) {
+    LOGE(TAG, "data_ready: stream buffer is NULL");
     return 1;
   }
   if (len == 0 || len > PROC_MSG_MAX_LEN) {
@@ -443,46 +451,82 @@ int machine_response_proc_task_data_ready(
     return 1;
   }
 
-  uint8_t *buf = (uint8_t *)pvPortMalloc(len);
-  if (!buf) {
-    LOGW(TAG, "data_ready: pvPortMalloc(%u) failed, dropping", (unsigned)len);
-    return 1;
-  }
-  memcpy(buf, data, len);
+  // Pack [uint16_t len | payload] into a small stack frame.
+  // Maximum total: 2 + PROC_MSG_MAX_LEN = 4098 bytes.
+  // We use a VLA-equivalent via a small header + pointer trick to avoid a
+  // 4 KB on-stack buffer; instead send header and payload in two consecutive
+  // xStreamBufferSend calls.  FreeRTOS StreamBuffer does NOT guarantee
+  // atomicity of multi-send, but the consumer reads exactly header+payload as
+  // a unit because it reads the header first and then immediately reads the
+  // exact payload size.  Since the consumer task is the only reader and the
+  // StreamBuffer internal state is protected by a critical section, a partial
+  // write by the producer is still coherent: the consumer will block waiting
+  // for enough bytes before it reads the length header.
+  //
+  // To ensure the length header and payload are always adjacent in the
+  // StreamBuffer (no interleaving from another producer), we must send them
+  // as a single region.  Use a stack-allocated header+payload struct when len
+  // is small; for large payloads (rare) fall back to a temporary heap buffer.
+  //
+  // Simpler approach: send header + payload as one xStreamBufferSend in a
+  // single stack buffer.  PROC_MSG_MAX_LEN is 4096 so the max frame is 4098B.
+  // Stack budget on the caller (machine_rrf line callback, prio=1 task): 4KB.
+  // Use a heap allocation here only for the intermediate buffer to avoid
+  // blowing the caller's stack.  This is a single alloc per line, the same
+  // order as before, but now without the separate consumer-side free.
+  //
+  // NOTE: xStreamBufferSend is safe to call from task context and from ISR
+  // via xStreamBufferSendFromISR.
+  uint8_t hdr[2] = { (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
 
-  proc_msg_t msg;
-  msg.len  = (uint16_t)len;
-  msg.data = buf;
-
-  BaseType_t result = pdFAIL;
+  BaseType_t result;
   if (!from_isr) {
-    result = xQueueSend(task_event_queue, &msg, 0);
-  } else {
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    result = xQueueSendFromISR(task_event_queue, &msg,
-                               &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken) {
-      portYIELD_FROM_ISR();
+    // Send header then payload; the consumer won't read the header until both
+    // are in the buffer because it reads header first and then waits for
+    // exactly len more bytes.
+    size_t sent_hdr = xStreamBufferSend(sb, hdr, sizeof(hdr), 0);
+    if (sent_hdr != sizeof(hdr)) {
+      LOGW(TAG, "Proc stream buffer full (header) — message len=%u dropped.", (unsigned)len);
+      return 1;
     }
+    size_t sent_data = xStreamBufferSend(sb, data, len, 0);
+    if (sent_data != len) {
+      // Partial write: the buffer filled between the header write and the data
+      // write.  This leaves the stream buffer in an inconsistent state (a
+      // length header with no corresponding payload).  Reset the entire stream
+      // buffer to re-establish a clean state — this drops all buffered messages
+      // but prevents the consumer from hanging reading a partial record.
+      LOGE(TAG, "Proc stream buffer partial write after header (sent %u/%u) — resetting buffer.",
+           (unsigned)sent_data, (unsigned)len);
+      xStreamBufferReset(sb);
+      return 1;
+    }
+    result = pdTRUE;
+  } else {
+    BaseType_t woken = pdFALSE;
+    size_t sent_hdr = xStreamBufferSendFromISR(sb, hdr, sizeof(hdr), &woken);
+    if (sent_hdr != sizeof(hdr)) {
+      LOGW(TAG, "Proc stream buffer full (ISR header) — message dropped.");
+      if (woken) portYIELD_FROM_ISR();
+      return 1;
+    }
+    size_t sent_data = xStreamBufferSendFromISR(sb, data, len, &woken);
+    if (sent_data != len) {
+      LOGE(TAG, "Proc stream buffer partial ISR write — resetting buffer.");
+      xStreamBufferReset(sb);
+      if (woken) portYIELD_FROM_ISR();
+      return 1;
+    }
+    if (woken) portYIELD_FROM_ISR();
+    result = pdTRUE;
   }
-  if (result != pdTRUE) {
-    LOGW(TAG, "Proc queue full — message type=%d len=%u dropped.",
-         buf[0], (unsigned)len);
-    vPortFree(buf);
-    return 1;
-  }
-  return 0;
+  return (result == pdTRUE) ? 0 : 1;
 
 #else  // non-ESP32_HW: gcode_queue path unchanged
   (void)from_isr;
   if (task_event_queue == NULL) return 1;
-  // Non-ESP32_HW still uses gcode_queue which stores string pointers;
-  // this path is only exercised in desktop unit-test builds.
-  bool result = gcode_queue_push(task_event_queue, (const char *)data);
-  if (!result) {
-    LOGW(TAG, "gcode_queue full — message dropped.");
-    return 1;
-  }
+  bool r = gcode_queue_push(task_event_queue, (const char *)data);
+  if (!r) { LOGW(TAG, "gcode_queue full — message dropped."); return 1; }
   return 0;
 #endif
 }
@@ -536,30 +580,53 @@ void machine_response_proc_task(void *vpargs) {
   bool abort = false;
   LOGI(TAG, ">> Starting machine response processing task...");
 
+  // Static receive buffer — avoids per-message heap allocation.
+  // Size matches PROC_MSG_MAX_LEN (= MAX_LINE_LENGTH = 4096 B).
+  //static uint8_t proc_line_buf[PROC_MSG_MAX_LEN];
+
+  uint8_t *proc_line_buf = heap_caps_malloc(PROC_MSG_MAX_LEN, MALLOC_CAP_SPIRAM);
+  if (!proc_line_buf) { LOGE(TAG, "OOM: proc_line_buf PSRAM alloc failed"); return; }
+
   while (!abort) {
 #ifdef ESP32_HW
-    // Each queue item IS the message: receive directly into a proc_msg_t.
-    proc_msg_t msg;
+    StreamBufferHandle_t sb = (StreamBufferHandle_t)queue;
 
-    LOGD(TAG, "[PROC] Awaiting queue...");
-    if (xQueueReceive(queue, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      LOGD(TAG, "[PROC] type=%d len=%d",
-           (msg.len > 0 && msg.data) ? (int)msg.data[0] : -1, (int)msg.len);
-      if (msg.len > 0 && msg.data) {
-        TickType_t proc_start = xTaskGetTickCount();
-        LOGD(TAG, "[PROC] processing start tick=%u",
-             (unsigned)proc_start);
-        machine_interface_process_machine_state_response(machine, msg.data,
-                                                         msg.len);
-        TickType_t proc_end = xTaskGetTickCount();
-        LOGD(TAG, "[PROC] processing done tick=%u took=%u",
-             (unsigned)proc_end, (unsigned)(proc_end - proc_start));
-      }
-      vPortFree(msg.data);  /* release the producer-allocated buffer */
-    } else {
-      LOGD(TAG, "[PROC] false => looping");
+    // Step 1: read the 2-byte length header.  Block up to 1 s waiting for data.
+    uint8_t hdr[2];
+    size_t hdr_received = xStreamBufferReceive(sb, hdr, sizeof(hdr), pdMS_TO_TICKS(1000));
+    if (hdr_received == 0) {
+      // Timeout — loop back and wait again.
+      LOGD(TAG, "[PROC] timeout, looping");
+      continue;
     }
-    // If xQueueReceive returns pdFALSE unexpectedly, loop and retry.
+    if (hdr_received != sizeof(hdr)) {
+      // Shouldn't happen (trigger level = 1 byte), but be defensive.
+      LOGW(TAG, "[PROC] partial header read (%u bytes), resetting buffer", (unsigned)hdr_received);
+      xStreamBufferReset(sb);
+      continue;
+    }
+    uint16_t msg_len = (uint16_t)hdr[0] | ((uint16_t)hdr[1] << 8);
+
+    if (msg_len == 0 || msg_len > PROC_MSG_MAX_LEN) {
+      LOGE(TAG, "[PROC] corrupt length %u in stream — resetting buffer", (unsigned)msg_len);
+      xStreamBufferReset(sb);
+      continue;
+    }
+
+    // Step 2: read exactly msg_len bytes.  Block indefinitely — we must drain
+    // the payload we committed to in the header; there is no valid partial read.
+    size_t data_received = xStreamBufferReceive(sb, proc_line_buf, msg_len, portMAX_DELAY);
+    if (data_received != msg_len) {
+      LOGE(TAG, "[PROC] payload read mismatch (got %u want %u) — resetting buffer",
+           (unsigned)data_received, (unsigned)msg_len);
+      xStreamBufferReset(sb);
+      continue;
+    }
+
+    LOGD(TAG, "[PROC] type=%d len=%d", (int)proc_line_buf[0], (int)msg_len);
+    TickType_t t0 = xTaskGetTickCount();
+    machine_interface_process_machine_state_response(machine, proc_line_buf, msg_len);
+    LOGD(TAG, "[PROC] done in %u ticks", (unsigned)(xTaskGetTickCount() - t0));
 
 #else  // non-ESP32_HW: gcode_queue (desktop / unit-test builds)
     // The non-ESP32 path keeps the old ring-buffer approach via gcode_queue.
@@ -620,10 +687,16 @@ bool machine_response_proc_task_run(const char *task_name,
 
   LOGI(TAG, "Initializing machine response processing...");
 #ifdef ESP32_HW
-  // Queue holds proc_msg_t items (heap pointer + length). Each slot is just
-  // sizeof(proc_msg_t) ≈ 8 bytes; actual message data lives on the heap
-  // (allocated by the producer, freed by this task after processing).
-  *queue = xQueueCreate(QUEUE_LENGTH, sizeof(proc_msg_t));
+  // Create a StreamBuffer instead of a queue.
+  // The caller receives it cast to QueueHandle_t (both are opaque void*).
+  // PROC_STREAM_BUFFER_SIZE is 12 KB + overhead; trigger level = 1 so the
+  // consumer unblocks as soon as the first header byte arrives.
+  StreamBufferHandle_t sb = xStreamBufferCreate(PROC_STREAM_BUFFER_SIZE, 1);
+  if (!sb) {
+    LOGE(TAG, "Failed to create proc stream buffer (OOM?)!");
+    return false;
+  }
+  *queue = (QueueHandle_t)sb;
 #else
   gcode_queue_init(queue);
 #endif
@@ -661,10 +734,9 @@ bool machine_response_proc_task_run(const char *task_name,
     LOGE(TAG, "Failed to create machine response processing task (%d)!",
          task_created);
 #ifdef ESP32_HW
-    // TODO: if we move to higher up the queue creation we should also delete
-    // there vs here.
-    vQueueDelete(*queue);  // Clean up queue
-    *task_handle = NULL;   // Ensure handle is NULL on failure
+    vStreamBufferDelete((StreamBufferHandle_t)*queue);
+    *queue = NULL;
+    *task_handle = NULL;
 #endif
     free(args);
     return false;

@@ -1,16 +1,17 @@
 #include "arduino_serial_wrapper.h"
 
-#include <cstdlib>  // For malloc, free (if used, prefer new/delete in C++)
-#include <cstring>  // For memcpy, memset
-#include <map>
-#include <vector>
-#include <mutex>
+#include <cstring>  // memcpy, memset
 
 #if defined(ESP32_HW)
 #include "Arduino.h"
 #include "HardwareSerial.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
+#include "soc/uart_reg.h"  // UART_RX_FILT_REG, UART_GLITCH_FILT_*, UART_GLITCH_FILT_EN
+#else
+#include <mutex>
 #endif
 
 #ifdef RRF_SIM
@@ -18,7 +19,7 @@
 #endif
 
 #ifndef ESP32_HW
-typedef RRFMachineSimStream Stream;  // Use the simulator stream
+typedef RRFMachineSimStream Stream;
 #endif
 
 #define UI_DEBUG_LOCAL_LEVEL D_ERROR
@@ -27,107 +28,44 @@ typedef RRFMachineSimStream Stream;  // Use the simulator stream
 static const char *TAG = "arduino_serial_wrapper";
 
 // --- Configuration ---
-#define RING_BUFFER_SIZE \
-  4096  // Size of the ring buffer for incoming serial data
-#define MAX_LINE_LENGTH \
-  4096  // Maximum length of a line; must fit largest RRF M409 response (move.axes[] at d3 ~600B, d5 can exceed 1536B)
-#define MAX_CALLBACKS 5      // Maximum number of callbacks per serial port
-#define RRF_SIM_UART_NUM 99  // Logical UART number for the RRF simulator
+// Buffer given to HardwareSerial::setRxBufferSize().  This is the sole RX
+// buffer between the UART FIFO and our line assembly — the secondary SPSC
+// ring buffer was removed (IDF/Arduino already provides a thread-safe one).
+#define HW_RX_BUF_SIZE     4096
+#ifdef APP_PENDANT
+// Pendant only uses the standard log serial port; serial_process_input() is
+// never called on pendant so line_buffer is never written.  Use a minimal
+// size to avoid wasting ~32 KB of internal SRAM on targets like ESP32-P4.
+#define MAX_LINE_LENGTH    64
+#define MAX_PORTS          1    // Only the log serial port on pendant.
+#else
+#define MAX_LINE_LENGTH    8192  // M409 d5 for 5-axis + 9 WCS can exceed 4096 B
+#define MAX_PORTS          4     // Flat table: 1 log serial + up to 3 machine UARTs
+#endif
+#define MAX_CALLBACKS      5     // Callbacks per serial port
+#define MAX_HW_UARTS       5     // ESP32-S3 has UART0-2; keep some head-room
+#define RRF_SIM_UART_NUM   99    // Logical UART number for the RRF sim
 
-// --- Ring Buffer Implementation ---
-// This is a single-producer / single-consumer (SPSC) lock-free ring buffer.
-// Producer: onReceiveGeneric() running in the UART event task (Core 0 typically)
-// Consumer: process_received_data() running in the machine task (Core 1)
-//
-// Rules for correctness on dual-core Xtensa LX7:
-//  - Only the producer writes `head`; only the consumer writes `tail`.
-//  - `count` is updated by both sides using __atomic builtins so the
-//    read-modify-write is visible across cores without a mutex.
-//  - `head` and `tail` themselves are only written by one side each, but
-//    the other side READS them, so we use release/acquire semantics.
-typedef struct {
-  uint8_t *buffer;
-  size_t size;
-  // head is written by the producer, read by consumer/isfull checks.
-  // tail is written by the consumer, read by producer/isempty checks.
-  // Use volatile so the compiler never caches these in a register across a
-  // call boundary that can be preempted.
-  volatile size_t head;
-  volatile size_t tail;
-  // count is written by both sides; use __atomic operations.
-  volatile size_t count;
-} ring_buffer_t;
-
-static bool rb_init(ring_buffer_t *rb, size_t size) {
-  rb->buffer = (uint8_t *)malloc(size);
-  if (!rb->buffer) return false;
-  rb->size = size;
-  __atomic_store_n(&rb->head,  0u, __ATOMIC_RELAXED);
-  __atomic_store_n(&rb->tail,  0u, __ATOMIC_RELAXED);
-  __atomic_store_n(&rb->count, 0u, __ATOMIC_RELAXED);
-  return true;
-}
-
-static void rb_free(ring_buffer_t *rb) {
-  if (rb->buffer) {
-    free(rb->buffer);
-    rb->buffer = NULL;
-  }
-}
-
-// rb_push and rb_is_full must be IRAM_ATTR because they are called (directly or
-// inlined) from onReceiveGeneric which runs in UART ISR/event-task context.
-// Without IRAM_ATTR, any SPI-flash operation that disables the MMU cache
-// (e.g. WiFi/ESP-NOW RF-calibration NVS writes during boot) will crash the CPU
-// when it tries to fetch these small functions from flash.
-static IRAM_ATTR bool rb_is_full(const ring_buffer_t *rb) {
-  return __atomic_load_n(&rb->count, __ATOMIC_ACQUIRE) == rb->size;
-}
-
-static IRAM_ATTR bool rb_is_empty(const ring_buffer_t *rb) {
-  return __atomic_load_n(&rb->count, __ATOMIC_ACQUIRE) == 0;
-}
-
-// Producer-side push.  Called only from onReceiveGeneric (UART event task).
-static IRAM_ATTR bool rb_push(ring_buffer_t *rb, uint8_t data) {
-  if (rb_is_full(rb)) return false;
-  size_t h = __atomic_load_n(&rb->head, __ATOMIC_RELAXED);
-  rb->buffer[h] = data;
-  // Store the updated head with RELEASE so the consumer sees the data write
-  // before it sees the new count.
-  __atomic_store_n(&rb->head, (h + 1) % rb->size, __ATOMIC_RELEASE);
-  __atomic_fetch_add(&rb->count, 1u, __ATOMIC_RELEASE);
-  return true;
-}
-
-// Consumer-side pop.  Called only from process_received_data (machine task).
-static bool rb_pop(ring_buffer_t *rb, uint8_t *data) {
-  if (rb_is_empty(rb)) return false;
-  size_t t = __atomic_load_n(&rb->tail, __ATOMIC_RELAXED);
-  // ACQUIRE ensures we read the buffer byte that the producer wrote before
-  // it incremented count.
-  *data = rb->buffer[t];
-  __atomic_store_n(&rb->tail, (t + 1) % rb->size, __ATOMIC_RELEASE);
-  __atomic_fetch_sub(&rb->count, 1u, __ATOMIC_RELEASE);
-  return true;
-}
+// No secondary ring buffer — the IDF/Arduino HardwareSerial internal ring
+// buffer (sized via setRxBufferSize) is the only RX buffer.  Line assembly
+// reads directly from stream->read() in process_received_data(), which is
+// called from serial_process_input() → machine_interface_drain_rx() on every
+// machine task loop iteration.  HardwareSerial::read() uses xRingbufferReceive
+// internally, which is SMP-safe across cores.
 
 // --- Serial Port Data Structure ---
 typedef struct {
-  Stream *stream;  // Underlying Arduino Stream object (HardwareSerial*,
-                   // RRFMachineSimStream*, etc.)
-  int uart_num;    // Original UART number (-1 for Serial, RRF_SIM_UART_NUM for
-                   // sim)
-  bool is_hw_serial;  // Flag to indicate if it's a HardwareSerial instance
-  bool owns_stream;   // Flag to indicate if we need to delete the stream object
-                      // in serial_end
+  Stream *stream;
+  int uart_num;       // Logical UART number (-1 for log Serial, RRF_SIM_UART_NUM for sim)
+  bool is_hw_serial;
+  bool owns_stream;   // True if we allocated the Stream and must delete it in serial_end
+  bool in_use;        // True if this slot is occupied
 
-  ring_buffer_t rx_buffer;
   char line_buffer[MAX_LINE_LENGTH];
   size_t line_pos;
-  bool line_overflow;  // true while discarding bytes of an overflowed line
+  bool line_overflow;  // True while discarding bytes of an overflowed line
 
-  // Mutex to serialize writes to the underlying Stream
+  // Serialize writes; uncontended except for the CNC UART during burst sends.
 #if defined(ESP32_HW)
   SemaphoreHandle_t write_mutex;
 #else
@@ -138,94 +76,81 @@ typedef struct {
   size_t num_callbacks;
 } serial_port_data_t;
 
-// --- Global State ---
-// Map the serial handle (Stream*) to its associated data
-static std::map<serial_handle_t, serial_port_data_t *> g_serial_ports;
-// Map the UART number back to the handle for easy lookup
-static std::map<int, serial_handle_t> g_uart_num_to_handle;
-// ISR-safe lookup table for port data based on UART number.
-#define MAX_HW_UARTS 5 // ESP32-S3 has 3, but this provides a safe upper bound
-static serial_port_data_t* g_isr_port_data[MAX_HW_UARTS] = {NULL};
-// ISR-safe pointer for the log serial (uart_num == -1). Populated by
-// add_standard_serial() to avoid calling get_serial_handle() + find_port_data()
-// (std::map heap traversal) inside the UART event-task context.
+// ---------------------------------------------------------------------------
+// Global state — flat fixed-size table instead of std::map.
+//
+// WHY: std::map uses heap allocations and its internal traversal is NOT safe
+// to call from the UART event task (a driver task that can run while flash
+// cache is disabled, e.g. during NVS writes at boot).  A flat array is
+// cache-line friendly and can be searched with a simple loop from any context.
+//
+// Thread-safety contract:
+//  - g_port_table entries are written ONLY at init time (serial_init /
+//    add_standard_serial / serial_end), which must not be called concurrently.
+//  - After init, individual fields are only written by their owner task
+//    (ring buffer producer/consumer, write_mutex holder).
+//  - g_isr_port_data[] and g_log_port_data are written once at init and then
+//    only read — safe from any task/ISR context.
+// ---------------------------------------------------------------------------
+static serial_port_data_t g_port_table[MAX_PORTS];
+static int g_port_count = 0;  // Number of active (in_use) entries
+
+// Cached pointer for the log serial (uart_num == -1), set by add_standard_serial.
+// Used by log_writer_task and default_serial_write to avoid a table scan.
 static serial_port_data_t *g_log_port_data = NULL;
 
-// --- Log TX async writer (default Serial only) ---
-// Use a FreeRTOS StreamBuffer for thread-safe, non-blocking enqueue from
-// multiple producers. A low-priority writer task drains the buffer and
-// writes to the Serial under the normal write mutex.
+// --- Log TX async writer (standard Serial / log port only) ---
+// A small FreeRTOS StreamBuffer decouples producers (any task calling LOGI etc.)
+// from Serial.write() which can block on HWCDC builds without setTxTimeoutMs(0).
+// The dedicated writer task runs at idle+1 priority so it never preempts real work.
 #if defined(ESP32_HW)
 static StreamBufferHandle_t g_log_tx_sb = NULL;
-static TaskHandle_t g_log_writer_task = NULL;
-static const size_t LOG_TX_BUFFER_SIZE = 4096;   // bytes; 4 KB prevents drops during WiFi-reconnect log bursts
-static const size_t LOG_TX_COPY_CHUNK = 256;    // writer local buffer
-static const uint32_t LOG_WRITER_STACK = 2048;  // bytes
+static TaskHandle_t g_log_writer_task_handle = NULL;
+static const size_t LOG_TX_BUFFER_SIZE = 4096;   // 4 KB prevents drops during WiFi-reconnect bursts
+static const size_t LOG_TX_COPY_CHUNK  = 256;
+static const uint32_t LOG_WRITER_STACK = 2048;
 static const UBaseType_t LOG_WRITER_PRIO = tskIDLE_PRIORITY + 1;
-static size_t g_log_dropped_count = 0;
-static bool g_serial_ended = false;
-
-// Forward declaration needed by log_writer_task (defined later in this file)
-static serial_port_data_t *find_port_data(serial_handle_t handle);
+static volatile size_t g_log_dropped_count = 0;
+static volatile bool g_serial_ended = false;
 
 static void log_writer_task(void *arg) {
   (void)arg;
   uint8_t tmp[LOG_TX_COPY_CHUNK];
   for (;;) {
-    // Block until at least 1 byte is available
     size_t received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), portMAX_DELAY);
     if (received == 0) continue;
 
-#ifdef ESP32_HW
-    // Fast path: if the log serial is not connected/ready, drain the entire
-    // stream buffer and discard all pending log data.  This keeps g_log_tx_sb
-    // empty so default_serial_write() can re-enqueue when the host reconnects,
-    // and prevents any write() call that could stall in edge-case USB states
-    // (e.g. during host reconnection or before setTxTimeoutMs(0) takes effect).
-    
-    if (g_serial_ended || !Serial) {
+    if (g_serial_ended) {
+      // Clean shutdown — drain and discard any remaining buffered log data.
       __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
       while ((received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), 0)) > 0)
         __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
       continue;
     }
-#endif
+    // Wait until a USB CDC host is connected before writing.  On HWCDC builds
+    // setTxTimeoutMs(0) means write() returns 0 immediately when no host is
+    // open, so we'd discard the data anyway — instead hold the batch until
+    // Serial is ready.  The 4 KB stream buffer is the effective holdover for
+    // pre-connection boot log output.
+    while (!g_serial_ended && !Serial)
+      vTaskDelay(pdMS_TO_TICKS(50));
+    if (g_serial_ended) continue;  // shutdown arrived while waiting
 
-    // Write out what we received; keep draining until empty
+    // Write directly using the cached log port pointer — no map lookup needed.
+    serial_port_data_t *port = g_log_port_data;
     for (;;) {
-      serial_handle_t handle = get_serial_handle(-1);
-      if (!handle) break;  // no standard serial registered
-
-#ifdef ESP32_HW
-      // Bypass serial_write_atomic() (which uses portMAX_DELAY) and use a
-      // bounded mutex timeout instead.  The log serial write_mutex is normally
-      // uncontended (only this task writes), so the 50 ms limit is purely a
-      // safety net against future coding errors or edge-case USB state
-      // transitions that could hold the mutex unexpectedly.
-      serial_port_data_t *port_data = find_port_data(handle);
-      if (!port_data || !port_data->stream) break;
-      if (port_data->write_mutex &&
-          xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(50)) != pdPASS) {
-        // Mutex acquire timed out — drop this batch.
+      if (!port || !port->stream) break;
+      if (port->write_mutex &&
+          xSemaphoreTake(port->write_mutex, pdMS_TO_TICKS(50)) != pdPASS) {
+        // Mutex timeout — drop this batch (log serial should be uncontended).
         __atomic_fetch_add(&g_log_dropped_count, received, __ATOMIC_RELAXED);
       } else {
-        size_t written = port_data->stream->write(tmp, received);
-        if (port_data->write_mutex) xSemaphoreGive(port_data->write_mutex);
+        size_t written = port->stream->write(tmp, received);
+        if (port->write_mutex) xSemaphoreGive(port->write_mutex);
         if (written < received)
-          __atomic_fetch_add(&g_log_dropped_count, received - written,
-                             __ATOMIC_RELAXED);
+          __atomic_fetch_add(&g_log_dropped_count, received - written, __ATOMIC_RELAXED);
       }
-      // Recheck connectivity before pulling more data.
       if (!Serial) break;
-#else
-      size_t written = serial_write_atomic(handle, tmp, received, false);
-      if (written < received) {
-        // If partial write occurred, we drop the remainder.
-        // Nothing sensible to do here for logs.
-      }
-#endif
-
-      // Try to pull more without blocking
       received = xStreamBufferReceive(g_log_tx_sb, tmp, sizeof(tmp), 0);
       if (received == 0) break;
     }
@@ -239,43 +164,63 @@ static void ensure_log_tx_initialized() {
     LOGE(TAG, "Failed to create log TX stream buffer");
     return;
   }
-  BaseType_t r = xTaskCreate(log_writer_task, "log_writer", LOG_WRITER_STACK / sizeof(StackType_t), NULL, LOG_WRITER_PRIO, &g_log_writer_task);
+  BaseType_t r = xTaskCreate(log_writer_task, "log_writer",
+                             LOG_WRITER_STACK / sizeof(StackType_t),
+                             NULL, LOG_WRITER_PRIO, &g_log_writer_task_handle);
   if (r != pdPASS) {
     LOGE(TAG, "Failed to create log writer task");
     vStreamBufferDelete(g_log_tx_sb);
     g_log_tx_sb = NULL;
-    g_log_writer_task = NULL;
+    g_log_writer_task_handle = NULL;
   }
 }
 #endif
 
 // --- Forward Declarations ---
 static void process_received_data(serial_port_data_t *port_data);
-#if defined(ESP32_HW)
-static IRAM_ATTR void onReceiveGeneric(
-    void *arg);  // Must be IRAM_ATTR — called during flash-cache-disable windows
-#endif
 
-// --- Internal Helper Functions ---
+// --- Internal Helpers ---
 
-// Finds the port data associated with a handle
+// Find the port entry for a given Stream* handle.
+// Linear scan over MAX_PORTS — fast enough (≤8 iterations) from any task.
 static serial_port_data_t *find_port_data(serial_handle_t handle) {
-  auto it = g_serial_ports.find(handle);
-  if (it != g_serial_ports.end()) {
-    return it->second;
+  for (int i = 0; i < MAX_PORTS; ++i) {
+    if (g_port_table[i].in_use && (serial_handle_t)g_port_table[i].stream == handle)
+      return &g_port_table[i];
   }
   return NULL;
 }
 
-// Processes data from the ring buffer, assembling lines and calling callbacks
-static void process_received_data(serial_port_data_t *port_data) {
-  if (!port_data) return;
-  if (rb_is_empty(&port_data->rx_buffer)) return;
+// Find the port entry for a given logical UART number.
+static serial_port_data_t *find_port_by_uart(int uart_num) {
+  for (int i = 0; i < MAX_PORTS; ++i) {
+    if (g_port_table[i].in_use && g_port_table[i].uart_num == uart_num)
+      return &g_port_table[i];
+  }
+  return NULL;
+}
 
-  uint8_t byte;
-    LOGD(TAG, "Processing %u bytes from serial ring buffer for UART %d.",
-      (unsigned)__atomic_load_n(&port_data->rx_buffer.count, __ATOMIC_RELAXED), port_data->uart_num);
-  while (rb_pop(&port_data->rx_buffer, &byte)) {
+// Allocate a free slot from the flat table.
+static serial_port_data_t *alloc_port_slot() {
+  for (int i = 0; i < MAX_PORTS; ++i) {
+    if (!g_port_table[i].in_use) {
+      memset(&g_port_table[i], 0, sizeof(serial_port_data_t));
+      g_port_table[i].in_use = true;
+      return &g_port_table[i];
+    }
+  }
+  return NULL;
+}
+
+// Drain stream->read() directly, assemble lines and dispatch callbacks.
+// Works for both HardwareSerial (thread-safe IDF ring buffer internally) and
+// plain Stream types (RRF sim, etc.).
+static void process_received_data(serial_port_data_t *port_data) {
+  if (!port_data || !port_data->stream) return;
+
+  int byte_in;
+  while ((byte_in = port_data->stream->read()) != -1) {
+    uint8_t byte = (uint8_t)byte_in;
     // Fast-path discard when this line already overflowed: drop bytes until
     // the closing newline arrives, then resume normal line assembly.
     if (port_data->line_overflow) {
@@ -315,59 +260,6 @@ static void process_received_data(serial_port_data_t *port_data) {
 }
 
 #if defined(ESP32_HW)
-// Avoid blocking calls, memory allocation, or complex logic.
-static IRAM_ATTR void onReceiveGeneric(void *arg) {
-  serial_port_data_t *port_data = (serial_port_data_t *)arg;
-  if (!port_data || !port_data->is_hw_serial) return;  // Should not happen
-
-  HardwareSerial *hw_serial = static_cast<HardwareSerial *>(port_data->stream);
-  LOGV(TAG, "=> RECV/READ hw serial %p", hw_serial);
-
-  // Read all available bytes from HW FIFO into the ring buffer
-  while (hw_serial->available()) {
-    uint8_t byte = hw_serial->read();
-    // Try to push to ring buffer. If it fails (full), data is lost.
-    LOGV(TAG, "=> RECV/READ - COUNT: %d", byte);
-    if (!rb_push(&port_data->rx_buffer, byte)) {
-      LOGE(TAG, "Ring buffer overflow");
-      // Ring buffer overflow handling (optional: log, count errors, etc.)
-      // For now, we just lose the byte.
-      // Consider increasing RING_BUFFER_SIZE if this happens frequently.
-    }
-  }
-  // Data is now in the ring buffer. Processing (line detection, callbacks)
-  // should happen outside the ISR, e.g., in serial_process_input() called from
-  // loop/task, or triggered by a semaphore/queue from the ISR if immediate
-  // processing is needed.
-  // --- Let's process directly here for simplicity, BUT BEWARE OF ISR
-  // CONSTRAINTS --- This is generally okay if callbacks are short and
-  // non-blocking. If callbacks are complex, use a task/queue mechanism.
-  //
-#ifdef PROCESS_HW_SERIAL_IN_ISR
-   process_received_data(port_data);
-#endif
-}
-
-#define ONRECV(N)                                     \
-   void onReceive##N(void) {                          \
-     if (N < MAX_HW_UARTS) {                          \
-       onReceiveGeneric(g_isr_port_data[N]);          \
-     }                                                \
-  }
-
-void onReceiveM1(void) {
-  // Use the pre-cached g_log_port_data pointer to avoid calling
-  // get_serial_handle() + find_port_data() (std::map traversal) from the
-  // UART event-task context, which is not safe during flash-cache-disable
-  // windows and can race with map modifications at startup.
-  onReceiveGeneric(g_log_port_data);
-}
-ONRECV(0)
-ONRECV(1)
-ONRECV(2)
-ONRECV(3)
-ONRECV(4)
-
 #endif  // ESP32_HW
 
 // --- Public C Functions ---
@@ -376,120 +268,95 @@ extern "C" {
 serial_handle_t serial_init(int uart_num, unsigned long baud,
                             serial_config_t config, int8_t rx_pin,
                             int8_t tx_pin) {
+  // Guard double-init: check flat table
+  if (find_port_by_uart(uart_num)) {
+    LOGW(TAG, "Serial port %d already initialized.", uart_num);
+    return (serial_handle_t)find_port_by_uart(uart_num)->stream;
+  }
+
   Stream *serial_stream = NULL;
   bool is_hw = false;
   bool owns_stream = false;
 
-  // Check if already initialized
-  if (g_uart_num_to_handle.count(uart_num)) {
-    LOGW(TAG, "Serial port %d already initialized.", uart_num);
-    return g_uart_num_to_handle[uart_num];
-  }
-
 #ifdef RRF_SIM
   if (uart_num == RRF_SIM_UART_NUM) {
     serial_stream = new RRFMachineSimStream(uart_num);
-    if (!serial_stream) {
-      LOGE(TAG, "Failed to allocate RRFMachineSimStream");
-      return NULL;
-    }
+    if (!serial_stream) { LOGE(TAG, "Failed to allocate RRFMachineSimStream"); return NULL; }
     is_hw = false;
     owns_stream = true;
-    LOGV(TAG, "RRFMachineSimStream initialized.");
-  }
-  else
+  } else
 #endif
   {
 #if defined(ESP32_HW)
-    if (uart_num == -1 && rx_pin == -1) {  // Standard Serial (usually UART0)
-        serial_stream = &Serial;
-        is_hw = false;
-        
-        unsigned long start_time = millis();
-        while (!Serial && (millis() - start_time < 500)) {
-            delay(10); 
-        }
-
-        if (!Serial) { 
-            // LOGI(TAG, "Standard Serial not connected, initializing anyway.");
-            Serial.setRxBufferSize(RING_BUFFER_SIZE / 2);
-            Serial.begin(baud);
-        } else {
-            // LOGI(TAG, "Standard Serial already initialized or connected.");
-        }
-        // Same non-blocking TX guard as in mcu_esp32.cpp: only for
-        // ARDUINO_USB_CDC_ON_BOOT=1 builds (Serial == HWCDCSerial or USBSerial).
-        // ESP32-P4 uses Serial0 (UART0) which never blocks — no guard needed.
-        #if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT == 1)
-          Serial.setTxTimeoutMs(0);
-        #else
-          Serial.setDebugOutput(false);
-        #endif
-    } else {  // HardwareSerial UART 1 or 2 etc.
-      // By default use the requested logical UART number for bookkeeping
-      int hw_uart_num = (uart_num < 0) ? 0 : uart_num;
-      // If USB CDC is NOT active on boot (CDC_ON_BOOT undefined or == 0)
-      // then Serial == UART0 hardware.  Remap logical UART0 -> physical UART1
-      // so logging (Serial at 115200) and machine comms (57600) stay on
-      // separate hardware UARTs.  On ESP32-S3 the GPIO matrix allows any
-      // UART to use any pins, so the caller's TX/RX pins still work.
-  #if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
-      if (hw_uart_num == 0) {
-        hw_uart_num = 1;
+    if (uart_num == -1 && rx_pin == -1) {
+      // Standard Serial (USB-CDC or UART0): already begun by mcu_setup().
+      serial_stream = &Serial;
+      is_hw = false;
+      unsigned long t0 = millis();
+      while (!Serial && (millis() - t0 < 500)) delay(10);
+      if (!Serial) {
+        Serial.setRxBufferSize(HW_RX_BUF_SIZE);
+        Serial.begin(baud);
       }
-  #endif
-      HardwareSerial *hw_serial = new HardwareSerial(hw_uart_num);
-        if (!hw_serial) {
-            LOGE(TAG, "Failed to allocate HardwareSerial for UART %d", uart_num);
-            return NULL;
-        }
-        hw_serial->setRxBufferSize(RING_BUFFER_SIZE / 2);  // Set buffer size
-        hw_serial->begin(baud, config, rx_pin, tx_pin);
-        hw_serial->setRxFIFOFull(100); 
-        hw_serial->setRxTimeout(1);
-        serial_stream = hw_serial;
-        is_hw = true;
-        owns_stream = true;
-        // LOGI(TAG, "HardwareSerial UART %d initialized.", uart_num);
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT == 1)
+      Serial.setTxTimeoutMs(0);
+#else
+      Serial.setDebugOutput(false);
+#endif
+    } else {
+      int hw_uart_num = (uart_num < 0) ? 0 : uart_num;
+#if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
+      if (hw_uart_num == 0) hw_uart_num = 1;  // Avoid stomping log UART0
+#endif
+      HardwareSerial *hw = new HardwareSerial(hw_uart_num);
+      if (!hw) { LOGE(TAG, "OOM HardwareSerial UART %d", uart_num); return NULL; }
+      hw->setRxBufferSize(HW_RX_BUF_SIZE);  // sole RX buffer — no secondary copy
+      hw->begin(baud, config, rx_pin, tx_pin);
+      hw->setRxFIFOFull(100);
+      hw->setRxTimeout(1);
+
+      // Enable the UART hardware RX glitch filter on chips that have the
+      // dedicated UART_RX_FILT_REG (ESP32-S3 and newer Espressif SoCs).
+      // On the original ESP32 the macro is not defined and this block compiles
+      // out entirely — the original ESP32 UART lacks a data-path glitch filter.
+      //
+      // The filter rejects pulses shorter than GLITCH_FILT APB clock cycles.
+      // Default at reset: length field = 8 cycles, but filter DISABLED.
+      // At 80 MHz APB, 16 cycles = 200 ns.  A valid UART bit at 115200 baud is
+      // ~8.7 µs (43 000× longer), so only genuine EMI spikes are suppressed.
+#ifdef UART_RX_FILT_REG
+      REG_WRITE(UART_RX_FILT_REG(hw_uart_num),
+                (16u << UART_GLITCH_FILT_S) | UART_GLITCH_FILT_EN);
+#endif
+
+      serial_stream = hw;
+      is_hw = true;
+      owns_stream = true;
     }
 #else
-    // Fallback for native/posix if not sim
     LOGE(TAG, "Serial port %d not supported on this platform.", uart_num);
     return NULL;
 #endif
   }
 
-  // Allocate and initialize port data structure
-  serial_port_data_t *port_data = new serial_port_data_t;
+  serial_port_data_t *port_data = alloc_port_slot();
   if (!port_data) {
-    LOGE(TAG, "Failed to allocate serial_port_data_t for UART %d", uart_num);
-    if (owns_stream && serial_stream) delete serial_stream;
-    return NULL;
-  }
-  memset(port_data, 0, sizeof(serial_port_data_t));  // Zero out the struct
-
-  if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
-    LOGE(TAG, "Failed to allocate ring buffer for UART %d", uart_num);
-    delete port_data;
-    if (owns_stream && serial_stream) delete serial_stream;
+    LOGE(TAG, "Port table full — cannot init UART %d (MAX_PORTS=%d)", uart_num, MAX_PORTS);
+    if (owns_stream) delete serial_stream;
     return NULL;
   }
 
-  port_data->stream = serial_stream;
-  port_data->uart_num = uart_num;
+  port_data->stream       = serial_stream;
+  port_data->uart_num     = uart_num;
   port_data->is_hw_serial = is_hw;
-  port_data->owns_stream = owns_stream;
-  port_data->line_pos = 0;
-  port_data->num_callbacks = 0;
+  port_data->owns_stream  = owns_stream;
 
-  // Create write mutex
 #if defined(ESP32_HW)
   port_data->write_mutex = xSemaphoreCreateMutex();
   if (!port_data->write_mutex) {
-    LOGE(TAG, "Failed to create write mutex for UART %d", uart_num);
-    rb_free(&port_data->rx_buffer);
-    delete port_data;
-    if (owns_stream && serial_stream) delete serial_stream;
+    LOGE(TAG, "OOM write_mutex UART %d", uart_num);
+    port_data->in_use = false;
+    if (owns_stream) delete serial_stream;
     return NULL;
   }
 #else
@@ -497,146 +364,59 @@ serial_handle_t serial_init(int uart_num, unsigned long baud,
 #endif
 
   serial_handle_t handle = (serial_handle_t)serial_stream;
-  g_serial_ports[handle] = port_data;
-  g_uart_num_to_handle[uart_num] = handle;
 
 #if defined(ESP32_HW)
-  // Register the onReceive callback if it's a HardwareSerial
-  if (is_hw) {
-    HardwareSerial *hw_serial = static_cast<HardwareSerial *>(serial_stream);
-    // Determine which hardware UART number we actually used for the
-    // HardwareSerial instance. If we remapped above we stored that value in
-    // the object via the HardwareSerial constructor; try to read it back if
-    // possible, otherwise fall back to the logical uart_num. We keep the
-    // logical uart_num in port_data->uart_num for callers, but ISR/table
-    // entries must use the hardware UART index.
-    int hw_uart_num_for_isr = uart_num < 0 ? 0 : uart_num;
-#if !defined(ARDUINO_USB_CDC_ON_BOOT) || (ARDUINO_USB_CDC_ON_BOOT == 0)
-    if (hw_uart_num_for_isr == 0) hw_uart_num_for_isr = 1;
-#endif
-    // Pass port_data as the argument to the callback
-    if (hw_uart_num_for_isr >= 0 && hw_uart_num_for_isr < MAX_HW_UARTS) {
-        g_isr_port_data[hw_uart_num_for_isr] = port_data;
-    }
-
-    // Register the appropriate onReceive handler for the hardware UART
-    if (hw_uart_num_for_isr == 0) {
-      hw_serial->onReceive(onReceive0, false);
-      LOGI(TAG, "OnReceive 0 %p", port_data);
-    } else if (hw_uart_num_for_isr == 1) {
-      hw_serial->onReceive(onReceive1, false);
-      LOGI(TAG, "OnReceive 1 %p", port_data);
-    } else if (hw_uart_num_for_isr == 2) {
-      hw_serial->onReceive(onReceive2, false);
-      LOGI(TAG, "OnReceive 2 %p", port_data);
-    } else if (hw_uart_num_for_isr == 3) {
-      hw_serial->onReceive(onReceive3, false);
-      LOGI(TAG, "OnReceive 3 %p", port_data);
-    } else if (hw_uart_num_for_isr == 4) {
-      hw_serial->onReceive(onReceive4, false);
-      LOGI(TAG, "OnReceive 4 %p", port_data);
-    }
-    LOGV(TAG, "onReceive callback registered for hardware UART \"%d\" (logical %d)...", hw_uart_num_for_isr, uart_num);
-  }
-#endif
-
-  LOGI(TAG, "Serial port %d (handle %p) successfully initialized.", uart_num,
-       handle);
+  // No onReceive callback registered — bytes are drained by polling via
+  // serial_process_input() → machine_interface_drain_rx() on every task
+  // iteration.  HardwareSerial's IDF ring buffer is the only RX buffer.
+  LOGI(TAG, "Serial port %d (handle %p) initialized.", uart_num, handle);
   return handle;
 }
+#endif  // ESP32_HW
 
 void serial_end(serial_handle_t handle) {
   if (!handle) return;
 
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data) {
-    LOGI(TAG, "serial_end: Handle %p not found.", handle);
+    LOGW(TAG, "serial_end: handle %p not found.", handle);
     return;
   }
 
-  LOGI(TAG, "Ending serial port %d (handle %p)...", port_data->uart_num,
-       handle);
+  LOGI(TAG, "Ending serial port %d (handle %p)...", port_data->uart_num, handle);
 
-  // Unregister callback and stop hardware serial if applicable
 #if defined(ESP32_HW)
   if (port_data->is_hw_serial) {
-    HardwareSerial *hw_serial =
-        static_cast<HardwareSerial *>(port_data->stream);
-    hw_serial->onReceive(NULL);  // Unregister callback
-    // Only call end() if we own the stream (i.e., not standard Serial unless we
-    // explicitly initialized it) or if it's a dynamically created
-    // HardwareSerial instance. Ending standard Serial might break other things
-    // (like USB CDC). Be careful.
-    if (port_data->owns_stream) {
-      LOGI(TAG, "Calling end() for owned HardwareSerial UART %d",
-           port_data->uart_num);
-      hw_serial->end();
-    }
+    HardwareSerial *hw = static_cast<HardwareSerial *>(port_data->stream);
+    if (port_data->owns_stream) hw->end();
   }
+  if (g_log_port_data == port_data) g_log_port_data = NULL;
 #endif
 
-  // Clean up internal data structures
-  rb_free(&port_data->rx_buffer);
+  if (port_data->owns_stream && port_data->stream)
+    delete port_data->stream;
 
-  // Remove from maps
-  g_serial_ports.erase(handle);
-  g_uart_num_to_handle.erase(port_data->uart_num);
-
-  // Clear from ISR-safe table
-  if (port_data->uart_num >= 0 && port_data->uart_num < MAX_HW_UARTS) {
-      g_isr_port_data[port_data->uart_num] = NULL;
-  }
-
-  // Delete the stream object *if* we allocated it
-  if (port_data->owns_stream && port_data->stream) {
-    LOGI(TAG, "Deleting owned stream object for UART %d", port_data->uart_num);
-    delete port_data
-        ->stream;  // This deletes HardwareSerial or RRFMachineSimStream
-  }
-
-  // Delete write mutex
 #if defined(ESP32_HW)
-  if (port_data->write_mutex) {
-    vSemaphoreDelete(port_data->write_mutex);
-    port_data->write_mutex = NULL;
-  }
+  if (port_data->write_mutex) { vSemaphoreDelete(port_data->write_mutex); port_data->write_mutex = NULL; }
 #else
-  if (port_data->write_mutex) {
-    delete port_data->write_mutex;
-    port_data->write_mutex = NULL;
-  }
+  if (port_data->write_mutex) { delete port_data->write_mutex; port_data->write_mutex = NULL; }
 #endif
 
-  // Delete the port data struct itself
-  delete port_data;
-
+  port_data->in_use = false;
   LOGI(TAG, "Serial port ended successfully.");
 }
 
-size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
-                    size_t size) {
+size_t serial_write(serial_handle_t handle, const uint8_t *buffer, size_t size) {
+  if (!handle) {
+    printf("%.*s", (int)size, (const char *)buffer);
+    return size;
+  }
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data || !port_data->stream) {
-    // Special case: if handle is NULL, maybe write to default stdout?
-    if (!handle) {
-      // This matches the previous behavior for NULL handle in non-ESP32 write
-      printf("%.*s", (int)size, (const char *)buffer);
-      return size;
-    }
-    LOGE(TAG, "serial_write: Invalid handle %p", handle);
+    LOGE(TAG, "serial_write: invalid handle %p", handle);
     return 0;
   }
-#ifdef SERIAL_WRAPPER_LOG_VERBOSE
-  Serial.print("[I][SERIAL]TX UART");
-  Serial.print(port_data->uart_num);
-  Serial.print(", size ");
-  Serial.print(size);
-  Serial.print((char*)buffer); //
-#endif
 
-  // Serialize writes to avoid races between concurrent tasks sending
-  // commands which could interleave and corrupt messages (observed as
-  // partial or malformed M409 responses on the controller).
 #if defined(ESP32_HW)
   if (port_data->write_mutex) {
     if (xSemaphoreTake(port_data->write_mutex, pdMS_TO_TICKS(200)) != pdPASS) {
@@ -656,7 +436,6 @@ size_t serial_write(serial_handle_t handle, const uint8_t *buffer,
 #else
   if (port_data->write_mutex) port_data->write_mutex->unlock();
 #endif
-
   return written;
 }
 
@@ -774,70 +553,40 @@ bool serial_unregister_line_callback(serial_handle_t handle,
   return false;
 }
 
-// Initializes standard serial without specific pins (assumes defaults or
-// already set)
+// Registers the global Serial object (already begun by mcu_setup()) into the
+// port table so logging and callbacks work without re-initializing the UART.
 void add_standard_serial() {
-  int uart_num = -1;
-  if (g_uart_num_to_handle.count(uart_num)) {
-    LOGW(TAG, "Standard serial already added/initialized.");
-    return;  // Already managed
-  }
-
-#if defined(ESP32_HW)
-  Stream *serial_stream = &Serial;
-  serial_handle_t handle = (serial_handle_t)serial_stream;
-
-  // Assume Serial might be initialized externally, just manage it
-  serial_port_data_t *port_data = new serial_port_data_t;
-  if (!port_data) {
-    LOGE(TAG, "Failed to allocate serial_port_data_t for standard serial");
+  if (find_port_by_uart(-1)) {
+    LOGW(TAG, "Standard serial already registered.");
     return;
   }
-  memset(port_data, 0, sizeof(serial_port_data_t));
 
-  if (!rb_init(&port_data->rx_buffer, RING_BUFFER_SIZE)) {
-      LOGE(TAG,  "Failed to allocate ring buffer for standard serial");
-      delete port_data;
-      return;
+#if defined(ESP32_HW)
+  serial_port_data_t *port_data = alloc_port_slot();
+  if (!port_data) {
+    LOGE(TAG, "Port table full — cannot register standard serial");
+    return;
   }
 
-  port_data->stream = serial_stream;
-  port_data->uart_num = uart_num;
-  port_data->is_hw_serial = false;  // Assume standard Serial is not HardwareSerial
-  port_data->owns_stream = false;   // We don't own the global Serial object
-  port_data->line_pos = 0;
-  port_data->num_callbacks = 0;
+  port_data->stream       = &Serial;
+  port_data->uart_num     = -1;
+  port_data->is_hw_serial = false;
+  port_data->owns_stream  = false;
 
-  // Register the handle BEFORE initializing the async log writer task.
-  // ensure_log_tx_initialized() spawns log_writer_task which calls
-  // get_serial_handle(-1); if the handle isn't in the map yet the fallback
-  // writes directly to Serial (bypassing setTxTimeoutMs(0)), causing a
-  // startup stall on HWCDC builds.
-  g_serial_ports[handle] = port_data;
-  g_uart_num_to_handle[uart_num] = handle;
-
-  // Populate the ISR-safe lookup table if it's a valid hardware UART
-  if (uart_num >= 0 && uart_num < MAX_HW_UARTS) {
-      g_isr_port_data[uart_num] = port_data;
+  port_data->write_mutex = xSemaphoreCreateMutex();
+  if (!port_data->write_mutex) {
+    LOGE(TAG, "OOM write_mutex for standard serial");
+    port_data->in_use = false;
+    return;
   }
-  // Cache the log serial pointer for onReceiveM1 (uart_num == -1)
+
+  // Cache for ISR-safe and log_writer_task access (no map lookup needed).
   g_log_port_data = port_data;
 
-  // Non-blocking TX configuration for standard Serial is handled elsewhere
-  // (e.g., platform init). Avoid calling setTxTimeoutMs() here.
-  // Initialize async log TX for default Serial
-#if defined(ESP32_HW)
+  // Start the async log writer task AFTER the port is in the table.
   ensure_log_tx_initialized();
-#endif
-
-  // Register the onReceive callback
-  // HardwareSerial* hw_serial = static_cast<HardwareSerial*>(serial_stream);
-  // hw_serial->onReceive(onReceiveM1, port_data);
-  // LOGI(TAG, "Standard Serial added for management. onReceive callback
-  // registered.");
-
 #else
-  LOGW(TAG, "add_standard_serial: Not supported on this platform.");
+  LOGW(TAG, "add_standard_serial: not supported on this platform.");
 #endif
 }
 
@@ -860,98 +609,45 @@ int add_rrf_sim_serial() {
 #endif
 
 serial_handle_t get_serial_handle(int uart_num) {
-  auto it = g_uart_num_to_handle.find(uart_num);
-  if (it != g_uart_num_to_handle.end()) {
-    return it->second;
-  }
-  // Do NOT call Serial.println() or any direct Serial write here.
-  // get_serial_handle() is called from log_writer_task which can run before
-  // setTxTimeoutMs(0) has been applied; a direct Serial write in that window
-  // blocks for the default 100 ms TX timeout on HWCDC builds.
-  return NULL;
+  serial_port_data_t *port = find_port_by_uart(uart_num);
+  return port ? (serial_handle_t)port->stream : NULL;
 }
-
-// ---------------------------------------------------------------------------
 
 void default_serial_write(const uint8_t *buf, size_t len) {
 #ifdef ESP32_HW
-  // Fast lock-free check: isCDC_Connected() / isPlugged() — no lock needed.
-  // With setTxTimeoutMs(0) called at boot, write() is already non-blocking
-  // (drops data when the TX ring buffer is full rather than waiting).  This
-  // guard is still useful as a cheap early exit when USB is physically
-  // unplugged so we don't take the serial write_mutex unnecessarily.
-  if (g_serial_ended || !Serial) return;
+  // Do NOT gate on !Serial here.  On HWCDC builds (CDC-on-boot), !Serial means
+  // no USB host open yet — but setTxTimeoutMs(0) is already set so writes are
+  // non-blocking.  Crucially, the log_writer_task WAITS for Serial before
+  // dequeuing, so the 4 KB stream buffer acts as a holdover for pre-connection
+  // boot output.  Gating here would silently throw away everything logged
+  // before the user opens a terminal.
+  if (g_serial_ended) return;
 #endif
-  serial_handle_t handle = get_serial_handle(-1);
-  if (handle) {
-    // Try to enqueue into the async log stream buffer if available.
+  // Use the pre-cached log port pointer — avoids any table scan in hot path.
 #if defined(ESP32_HW)
-    if (g_log_tx_sb) {
-      size_t sent = xStreamBufferSend(g_log_tx_sb, buf, len, 0);
-      if (sent == len) return; // fully enqueued
-      if (sent > 0) {
-        // Partial enqueue: count dropped bytes and return the enqueued amount
-        __atomic_fetch_add(&g_log_dropped_count, (size_t)(len - sent), __ATOMIC_RELAXED);
-        return;
-      }
-      // If nothing enqueued (buffer full), drop rather than blocking on the
-      // serial write mutex with portMAX_DELAY.  High-priority tasks (e.g. the
-      // proc task at prio=4) must never be stalled here — doing so causes
-      // priority inversion that lets the queue fill up while the task waits.
-      __atomic_fetch_add(&g_log_dropped_count, (size_t)len, __ATOMIC_RELAXED);
-      return;
-    }
-#endif
-    serial_write(handle, buf, len);
-  } else {
-    // No handle registered yet (called before add_standard_serial() completes
-    // or add_standard_serial() not used for this build).  Drop silently.
-    // NEVER call Serial.flush() here — flush() blocks until the TX buffer is
-    // empty and does NOT respect setTxTimeoutMs(0), causing indefinite stalls
-    // on HWCDC builds when no terminal is connected.
-#ifdef ESP32_HW
-    __atomic_fetch_add(&g_log_dropped_count, (size_t)len, __ATOMIC_RELAXED);
-#endif
+  if (g_log_tx_sb) {
+    size_t sent = xStreamBufferSend(g_log_tx_sb, buf, len, 0);
+    if (sent < len)
+      __atomic_fetch_add(&g_log_dropped_count, (size_t)(len - sent), __ATOMIC_RELAXED);
+    return;
   }
+  // StreamBuffer not yet initialized (very early boot) — drop silently.
+  __atomic_fetch_add(&g_log_dropped_count, (size_t)len, __ATOMIC_RELAXED);
+#else
+  serial_handle_t handle = get_serial_handle(-1);
+  if (handle) serial_write(handle, buf, len);
+#endif
 }
 
-// Process input manually (needed for non-onReceive streams like RRF Sim)
+// Drain pending bytes from the serial stream and dispatch complete lines.
+// Safe to call from any task; reading is through Stream::read() which uses
+// the IDF ring buffer internally (thread-safe across cores on ESP32 family).
 void serial_process_input(serial_handle_t handle) {
   serial_port_data_t *port_data = find_port_data(handle);
   if (!port_data) {
     LOGW(TAG, "serial_process_input: Handle %p not found.", handle);
     return;
   }
-
-  // For HardwareSerial ports that have an onReceive callback registered,
-  // onReceiveGeneric() (running in the UART event task) is already the sole
-  // producer that drains the HW FIFO into rx_buffer.  DO NOT also read from
-  // the HW serial stream here: that creates two concurrent producers calling
-  // rb_push() without synchronisation, causing non-atomic count++ races on
-  // the dual-core ESP32-S3 that silently drop bytes or corrupt the ring
-  // buffer state.  serial_process_input() is still needed to call
-  // process_received_data() so the bytes that onReceiveGeneric enqueued get
-  // assembled into lines and dispatched to callbacks.
-  if (!port_data->is_hw_serial) {
-    // Non-HW (RRF sim, plain Stream): manually drain into ring buffer.
-    if (port_data->stream) {
-      while (port_data->stream->available()) {
-        int byte_int = port_data->stream->read();
-        if (byte_int != -1) {
-          if (!rb_push(&port_data->rx_buffer, (uint8_t)byte_int)) {
-            LOGE(TAG, "serial_process_input: Ring buffer full for UART %d",
-                 port_data->uart_num);
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    }
-  }
-
-  // Process whatever is in the ring buffer now (bytes pushed by onReceiveGeneric
-  // for HW serial, or by the loop above for non-HW serial).
   process_received_data(port_data);
 }
 

@@ -377,6 +377,13 @@ typedef struct machine_interface_t {
   void (*send_gcode)(machine_interface_t *self, const char *gcode,
                      uint32_t poll_state);
   void (*_send_gcode)(machine_interface_t *self, const char *gcode);
+  // Called every send-task loop iteration to drain RX ring buffer into line
+  // callbacks, regardless of whether a TX or poll was attempted.  This
+  // decouples RX draining from the TX/poll path so a blocked write_mutex
+  // cannot starve the UART receive path.
+  // NULL is valid (no-op) for non-serial transports (DWC/HTTP, remote/ESP-NOW).
+  void (*_drain_rx)(machine_interface_t *self);
+
   void (*_update_machine_state)(
       machine_interface_t *self,
       uint32_t poll_state);  // Periodically called to poll/update the machine's
@@ -438,6 +445,12 @@ const char *machine_interface_get_wcs_str(machine_interface_t *self,
 int machine_interface_axis_idx(machine_interface_t *self, char axis);
 void machine_interface_process_gcode_q(machine_interface_t *self);
 void machine_interface_task_loop_iter(machine_interface_t *self);
+
+/**
+ * @brief Drain the RX transport path regardless of TX or poll state.
+ * Safe to call every loop iteration — no-op if _drain_rx is NULL.
+ */
+void machine_interface_drain_rx(machine_interface_t *self);
 void machine_interface_setup_loop(machine_interface_t *self);
 void machine_interface_maybe_execute_continuous_move(machine_interface_t *self);
 void machine_interface_position_updated(machine_interface_t *self);

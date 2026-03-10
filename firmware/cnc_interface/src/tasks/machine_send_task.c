@@ -97,6 +97,12 @@ void machine_send_task(void *pvParameters) {
         ticks_to_wait = 5; // Poll is overdue, don't wait long.
     }
 
+    // Always drain the RX ring buffer BEFORE blocking on the TX queue.
+    // This ensures bytes received while the task was busy with TX or sleeping
+    // are dispatched to callbacks immediately, not held until the next poll.
+    // _drain_rx is a no-op for non-serial transports (DWC/HTTP, remote).
+    machine_interface_drain_rx(machine);
+
 #ifdef ESP32_HW
     // Block waiting for a notification from the queue or timeout
     BaseType_t ret = xQueueReceive(queue, gcode, ticks_to_wait);
@@ -114,6 +120,9 @@ void machine_send_task(void *pvParameters) {
       // 1. Handle Outgoing G-Code
       LOGV(TAG, "Sending gcode: %s", gcode);
       machine->_send_gcode(machine, gcode);
+      // Drain RX immediately after TX: the controller often echoes or responds
+      // within a few ms of receiving the command.
+      machine_interface_drain_rx(machine);
     }
 
     // 2. Handle Polling / Machine Update

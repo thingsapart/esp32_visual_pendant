@@ -17,7 +17,7 @@
  *   Tasks cannot starve each other because neither blocks on bus operations.
  */
 
- #ifdef REMOTE_COMMS_C6_SDIO_BRIDGE
+#ifdef REMOTE_COMMS_C6_SDIO_BRIDGE
 
 #define UI_LOCAL_DEBUG_LEVEL D_VERBOSE
 #include "debug.h"

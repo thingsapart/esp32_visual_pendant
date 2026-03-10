@@ -566,10 +566,6 @@ void machine_interface_set_current_move_axis(machine_interface_t *self,
 }
 
 void machine_interface_task_loop_iter(machine_interface_t *self) {
-  // Moved to main machine interface loop, but ensure this is called before
-  // _update_machine_state().
-  // machine_interface_process_gcode_q(self);
-
   if (!self) {
     LOGE(TAG, "machine_interface_task_loop_iter called with NULL self");
     return;
@@ -585,6 +581,10 @@ void machine_interface_task_loop_iter(machine_interface_t *self) {
 
   self->polli += 1;
   self->poll_state = machine_interface_next_poll_state(self);
+}
+
+void machine_interface_drain_rx(machine_interface_t *self) {
+  if (self && self->_drain_rx) self->_drain_rx(self);
 }
 
 #ifdef MACHINE_INTERFACE_CALC_TICKS
