@@ -17,6 +17,23 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------------------------
+// Machine origin
+// ---------------------------------------------------------------------------
+
+/// Describes where the machine's XY origin sits relative to the operator
+/// standing at the front of the machine.  This controls how screen-space
+/// directions ("front"/"back" as seen by the operator) map to machine-axis
+/// G-code directions (+Y / −Y).
+typedef enum {
+    /// X+ = right, Y+ = away from operator (back).  Most common for
+    /// cartesian hobby CNCs with the origin at the front-left corner.
+    PROBE_ORIGIN_FRONT_LEFT = 0,
+    /// X+ = right, Y+ = toward operator (front).  Some Grbl/CoreXY machines
+    /// place the origin at the back-left corner.
+    PROBE_ORIGIN_BACK_LEFT  = 1,
+} probe_machine_origin_t;
+
+// ---------------------------------------------------------------------------
 // Settings structure
 // ---------------------------------------------------------------------------
 
@@ -61,6 +78,11 @@ typedef struct {
     /// Quick mode: 1 probe point per surface instead of 2 (Q=1).
     /// Faster but cannot detect surface rotation.  Default: false.
     bool quick_mode;
+
+    /// Machine origin — where is XY=0 relative to the operator?
+    /// Used to translate operator-facing direction labels (front/back) to
+    /// machine-axis G-code parameters.  Default: PROBE_ORIGIN_FRONT_LEFT.
+    probe_machine_origin_t machine_origin;
 } probe_settings_t;
 
 // ---------------------------------------------------------------------------
@@ -75,6 +97,7 @@ typedef struct {
 #define PROBE_SETTINGS_DEFAULT_CLEARANCE       5.0f
 #define PROBE_SETTINGS_DEFAULT_OVERTRAVEL      2.0f
 #define PROBE_SETTINGS_DEFAULT_QUICK_MODE    false
+#define PROBE_SETTINGS_DEFAULT_MACHINE_ORIGIN PROBE_ORIGIN_FRONT_LEFT
 
 // ---------------------------------------------------------------------------
 // API

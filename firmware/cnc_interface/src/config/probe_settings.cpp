@@ -15,8 +15,8 @@ static Preferences s_prefs;
 
 static const char *TAG           = "probe_settings";
 static const char *NVS_NAMESPACE = "probe_cfg";
-// Key bumped to v2 because the struct gained new fields.
-static const char *KEY_SETTINGS  = "settings_v2";
+// Key bumped to v3: struct gained machine_origin field.
+static const char *KEY_SETTINGS  = "settings_v3";
 
 // In-RAM copy, initialised to defaults by probe_settings_init().
 static probe_settings_t s_settings;
@@ -30,6 +30,7 @@ void probe_settings_init(void) {
     s_settings.clearance       = PROBE_SETTINGS_DEFAULT_CLEARANCE;
     s_settings.overtravel      = PROBE_SETTINGS_DEFAULT_OVERTRAVEL;
     s_settings.quick_mode      = PROBE_SETTINGS_DEFAULT_QUICK_MODE;
+    s_settings.machine_origin  = PROBE_SETTINGS_DEFAULT_MACHINE_ORIGIN;
 }
 
 bool probe_settings_load(void) {
@@ -44,7 +45,7 @@ bool probe_settings_load(void) {
         probe_settings_t tmp;
         s_prefs.getBytes(KEY_SETTINGS, &tmp, sizeof(tmp));
         s_settings = tmp;
-        LOGI(TAG, "Loaded: safe_z=%.2f max_z=%.2f xy_depth=%.2f w=%.2f h=%.2f cl=%.2f ov=%.2f quick=%d",
+        LOGI(TAG, "Loaded: safe_z=%.2f max_z=%.2f xy_depth=%.2f w=%.2f h=%.2f cl=%.2f ov=%.2f quick=%d origin=%d",
              (double)s_settings.safe_z,
              (double)s_settings.max_z_depth,
              (double)s_settings.xy_probe_depth,
@@ -52,7 +53,8 @@ bool probe_settings_load(void) {
              (double)s_settings.height,
              (double)s_settings.clearance,
              (double)s_settings.overtravel,
-             (int)s_settings.quick_mode);
+             (int)s_settings.quick_mode,
+             (int)s_settings.machine_origin);
     } else {
         LOGW(TAG, "NVS probe_cfg size mismatch (%u vs %u), using defaults",
              (unsigned)sz, (unsigned)sizeof(probe_settings_t));
@@ -76,7 +78,7 @@ bool probe_settings_save(const probe_settings_t *s) {
     s_prefs.end();
     if (ok) {
         s_settings = *s;
-        LOGI(TAG, "Saved: safe_z=%.2f max_z=%.2f xy_depth=%.2f w=%.2f h=%.2f cl=%.2f ov=%.2f quick=%d",
+        LOGI(TAG, "Saved: safe_z=%.2f max_z=%.2f xy_depth=%.2f w=%.2f h=%.2f cl=%.2f ov=%.2f quick=%d origin=%d",
              (double)s->safe_z,
              (double)s->max_z_depth,
              (double)s->xy_probe_depth,
@@ -84,7 +86,8 @@ bool probe_settings_save(const probe_settings_t *s) {
              (double)s->height,
              (double)s->clearance,
              (double)s->overtravel,
-             (int)s->quick_mode);
+             (int)s->quick_mode,
+             (int)s->machine_origin);
     } else {
         LOGE(TAG, "Failed to write probe settings to NVS");
     }
