@@ -155,6 +155,14 @@ typedef struct machine_rrf_t {
   // or long-running macro).  Only 5 bytes (+padding) of RAM.
   uint32_t last_poll_sent_ms;          // millis() when last poll cycle was actually sent
   uint8_t  unanswered_polls;           // consecutive poll cycles without a response
+  uint8_t  poll_skip_target;           // cycles to skip per allowed poll (0=no throttle)
+  uint8_t  poll_skip_counter;          // counts toward poll_skip_target; reset on each allowed poll
+  uint32_t throttle_start_ms;          // millis() when throttle first engaged (0=not active)
+  // When millis() < long_running_end_ms the hub suppresses the disconnect
+  // detection so that a probing or tool-change sequence is not interrupted by
+  // the hub declaring the machine gone while the CNC is executing the macro.
+  // Refreshed on every probe() call; expires automatically after PROBE_GRACE_PERIOD_MS.
+  uint32_t long_running_end_ms;        // millis() deadline; 0 = not in long-running op
 
   // --- Serial CRC-16 line numbering (serial transport only) ---
   // Incremented for every line sent; reset to 1 on (re-)connect.

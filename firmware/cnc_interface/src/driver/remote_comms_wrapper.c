@@ -15,6 +15,10 @@ struct remote_wrapper_stats_t {
 static struct remote_wrapper_stats_t s_remote_stats = {0};
 
 void remote_wrapper_print_stats(void) {
+  #ifndef ESP32P4_HW
+    return;
+  #endif
+
     LOGI("ESP-NOW", "Stats - RX: %u, TX: %u, TX Err: %u, CRC Err: %u, RX Err: %u, TO: %u",
            (unsigned)s_remote_stats.rx_total,
            (unsigned)s_remote_stats.tx_total,

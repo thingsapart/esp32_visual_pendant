@@ -1,4 +1,4 @@
-#define UI_DEBUG_LOCAL_LEVEL D_WARN
+#define UI_DEBUG_LOCAL_LEVEL D_VERBOSE
 #include "debug.h"
 
 #include "lv_probing_wizard.h"
@@ -6,6 +6,8 @@
 #include <string.h>
 #include "misc/lv_math.h"
 #include "lv_probing_wizard_stubs.h"
+// Allow querying the MOS handler for initial machine state when available
+#include "mos_machine_handler.h"
 
 #include "misc/lv_area_private.h"
 
@@ -39,7 +41,7 @@ static const lv_probing_action_t rectangle_probe_actions[] = {
     {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Jog to the back-left corner of the probing area.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
     {.instruction_text = "Jog to the front-right corner of the probing area.", .highlight_mask = HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(1)},
-    {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
+    {.instruction_text = "Jog above the top surface, then press Next to probe Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Probing workpiece...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_PROBE_POINT_3 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
@@ -48,7 +50,7 @@ static const lv_probing_action_t circle_probe_actions[] = {
     {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Jog roughly to the center of the circle.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
     {.instruction_text = "Jog to the feature's edge (inside for boss, outside for bore).", .highlight_mask = HIGHLIGHT_OUTLINE | HIGHLIGHT_CENTER, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(1)},
-    {.instruction_text = "Jog to a clear spot on the top surface and probe Z.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
+    {.instruction_text = "Jog above the top surface, then press Next to probe Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Probing workpiece...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_PROBE_POINT_2 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_CENTER | HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
@@ -57,7 +59,7 @@ static const lv_probing_action_t corner_probe_actions[] = {
     {.instruction_text = "Select probe mode and variant, then start.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_AWAIT_START},
     {.instruction_text = "Click on the corner you wish to probe.", .highlight_mask = HIGHLIGHT_CORNER_BL | HIGHLIGHT_CORNER_BR | HIGHLIGHT_CORNER_FL | HIGHLIGHT_CORNER_FR | HIGHLIGHT_OUTLINE, .type = ACTION_SELECT_CORNER},
     {.instruction_text = "Jog near the selected corner, above the workpiece.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_JOG_AND_CONFIRM, SETUP_PARAM(0)},
-    {.instruction_text = "Probe workpiece Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
+    {.instruction_text = "Jog above the top surface, then press Next to probe Z height.", .highlight_mask = HIGHLIGHT_Z_PROBE | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_Z_TOP},
     {.instruction_text = "Probing corner...", .highlight_mask = HIGHLIGHT_PROBE_POINT_0 | HIGHLIGHT_PROBE_POINT_1 | HIGHLIGHT_OUTLINE, .type = ACTION_PROBE_POINT, PROBE_PARAM(0)},
     {.instruction_text = "Probing complete. Result is calculated.", .highlight_mask = HIGHLIGHT_OUTLINE, .type = ACTION_COMPLETE},
 };
@@ -125,6 +127,7 @@ typedef enum {
     DEFERRED_ACTION_SET_FINAL_AND_ADVANCE,
     DEFERRED_ACTION_ADVANCE_STEP,
     DEFERRED_ACTION_SET_FULL_RESULT_AND_ADVANCE,
+    DEFERRED_ACTION_PROBE_INSTALLED,
 } deferred_action_t;
 
 typedef struct {
@@ -172,6 +175,7 @@ typedef struct {
     probe_point_t probe_results[MAX_PROBE_POINTS];
     float z_top;
     bool z_top_is_set;
+    bool z_probe_pending; /**< True while Z probe is in-flight (after Next pressed, before result). */
 
     lv_probing_wizard_point_float_t result;
     bool result_valid;
@@ -287,6 +291,7 @@ static void create_canvas_and_controls(lv_obj_t * parent, lv_probing_wizard_t * 
     lv_obj_set_flex_flow(wiz->btn_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(wiz->btn_bar, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(wiz->btn_bar, 5, 0);
+    lv_obj_set_style_pad_right(wiz->btn_bar, 65, 0);
     lv_obj_clear_flag(wiz->btn_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     // --- Create all buttons, their visibility will be managed ---
@@ -623,6 +628,12 @@ lv_obj_t * lv_probing_wizard_create(lv_obj_t * parent) {
     lv_probing_wizard_set_mode(main_container, wiz->mode, wiz->is_inside);
 #endif
 
+    /* Ask the MOS machine handler for the current connection state so the
+     * wizard reflects the correct enabled/disabled state immediately after
+     * creation. If no handler is registered yet this call is a no-op.
+     */
+    lv_probing_wizard_query_mos_connected(main_container);
+
     return main_container;
 }
 
@@ -644,6 +655,7 @@ static void reset_and_start_routine(lv_obj_t * obj) {
     wiz->result_dim_h_text[0] = '\0';
     wiz->result_rad_text[0] = '\0';
     wiz->z_top_is_set = false;
+    wiz->z_probe_pending = false;
     wiz->active_step = -1; // Will be advanced to 0 by set_active_step
     wiz->wizard_state = WIZARD_STATE_CONFIG;
     wiz->corner_type = LV_PROBING_CORNER_NONE;
@@ -700,12 +712,15 @@ void lv_probing_wizard_set_connected(lv_obj_t * obj, bool connected) {
     lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
     if (!wiz) return;
 
-    if (wiz->machine_connected != connected) {
-        wiz->machine_connected = connected;
-        // The start button is only visible in config mode.
-        if (wiz->wizard_state == WIZARD_STATE_CONFIG) {
-            update_ui_state(obj);
-        }
+    /* Store the connection state immediately. Avoid forcing a UI update
+     * if the visual components (e.g. start button) haven't been created
+     * yet. This can occur during deferred/early registration of machine
+     * callbacks. The UI will pick up the correct `machine_connected`
+     * value once it finishes initializing and calls `update_ui_state`.
+     */
+    wiz->machine_connected = connected;
+    if (wiz->start_btn && wiz->wizard_state == WIZARD_STATE_CONFIG) {
+        update_ui_state(obj);
     }
 }
 
@@ -872,8 +887,10 @@ static void update_ui_state(lv_obj_t * obj) {
          lv_label_set_text(wiz->result_label_y, "Y:   - - -");
          lv_label_set_text(wiz->result_label_z, "Z:   - - -");
     } else if (probing_mode && wiz->current_action) {
-        // Handle enabling/disabling the Next button during a probing sequence
-        if (wiz->current_action->type == ACTION_PROBE_Z_TOP && !wiz->z_top_is_set) {
+        // Handle enabling/disabling the Next button during a probing sequence.
+        // ACTION_PROBE_Z_TOP: Next is enabled so the user can confirm their jog
+        // position and trigger the probe; disabled once the probe is in-flight.
+        if (wiz->current_action->type == ACTION_PROBE_Z_TOP && wiz->z_probe_pending) {
             lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
         } else {
             lv_obj_clear_state(wiz->next_btn, LV_STATE_DISABLED);
@@ -961,30 +978,33 @@ static void deferred_update_ui(lv_obj_t* obj) {
             lv_obj_add_event_cb(wiz->canvas, canvas_click_event_cb, LV_EVENT_CLICKED, obj);
             break;
         
-        case ACTION_PROBE_POINT:
-        case ACTION_PROBE_Z_TOP: {
+        case ACTION_PROBE_Z_TOP:
+            // Z probe is triggered by user pressing Next (handled in next_btn_event_cb),
+            // not automatically here.  Just show the instruction and enable the button.
+            LOGV(TAG, "Waiting for user to jog and confirm Z surface probe.");
+            break;
+
+        case ACTION_PROBE_POINT: {
             bool can_execute = true;
-            if (wiz->current_action->type == ACTION_PROBE_POINT) {
-                /* Ensure required setup points and Z-top have been captured before
-                 * invoking the machine handler. This prevents sending probe macros
-                 * without J/K/L/Z parameters which cause the MOS macros to abort.
-                 */
-                lv_probing_wizard_mode_t mode = lv_probing_wizard_get_mode(obj);
-                if (mode == LV_PROBING_WIZARD_MODE_RECTANGLE || mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
-                    if (!wiz->setup_points[0].is_set || !wiz->setup_points[1].is_set) {
-                        LOGW(TAG, "Cannot execute probe: required setup points not set.");
-                        can_execute = false;
-                    }
-                } else if (mode == LV_PROBING_WIZARD_MODE_CORNER) {
-                    if (!wiz->setup_points[0].is_set || wiz->corner_type == LV_PROBING_CORNER_NONE) {
-                        LOGW(TAG, "Cannot execute corner probe: start position or corner not set.");
-                        can_execute = false;
-                    }
-                }
-                if (!wiz->z_top_is_set) {
-                    LOGW(TAG, "Cannot execute probe: Z-top not measured.");
+            /* Ensure required setup points and Z-top have been captured before
+             * invoking the machine handler. This prevents sending probe macros
+             * without J/K/L/Z parameters which cause the MOS macros to abort.
+             */
+            lv_probing_wizard_mode_t mode = lv_probing_wizard_get_mode(obj);
+            if (mode == LV_PROBING_WIZARD_MODE_RECTANGLE || mode == LV_PROBING_WIZARD_MODE_CIRCLE) {
+                if (!wiz->setup_points[0].is_set || !wiz->setup_points[1].is_set) {
+                    LOGW(TAG, "Cannot execute probe: required setup points not set.");
                     can_execute = false;
                 }
+            } else if (mode == LV_PROBING_WIZARD_MODE_CORNER) {
+                if (!wiz->setup_points[0].is_set || wiz->corner_type == LV_PROBING_CORNER_NONE) {
+                    LOGW(TAG, "Cannot execute corner probe: start position or corner not set.");
+                    can_execute = false;
+                }
+            }
+            if (!wiz->z_top_is_set) {
+                LOGW(TAG, "Cannot execute probe: Z-top not measured.");
+                can_execute = false;
             }
 
             if (!can_execute) {
@@ -995,7 +1015,7 @@ static void deferred_update_ui(lv_obj_t* obj) {
             }
 
             if (wiz->exec_probe_cb) {
-                LOGV(TAG, "Executing probe callback for action type %d", wiz->current_action->type);
+                LOGV(TAG, "Executing XY probe callback.");
                 wiz->exec_probe_cb(obj, wiz->current_action);
             } else {
                 LOGW(TAG, "Probe callback is NULL, cannot proceed.");
@@ -1035,6 +1055,7 @@ static void set_active_step(lv_obj_t * obj, int8_t step_index, bool defer_ui_upd
     // --- State Change --- (Safe to do from any context)
     wiz->active_step = step_index;
     wiz->current_action = &probe_routines[wiz->mode][step_index];
+    wiz->z_probe_pending = false; // Clear when entering any new step
     LOGV(TAG, "Setting active step to %d: '%s' (deferred: %d)", step_index, wiz->current_action->instruction_text, defer_ui_update);
 
     // --- UI Update --- (Potentially deferred)
@@ -1138,6 +1159,18 @@ static void next_btn_event_cb(lv_event_t * e) {
                 LOGV(TAG, "Jog position for setup point %d confirmed: X=%.3f, Y=%.3f", index, pos.x, pos.y);
             }
         }
+    } else if (wiz->current_action->type == ACTION_PROBE_Z_TOP) {
+        // Fire the Z probe now that the user has confirmed their jog position.
+        // The wizard will auto-advance when the machine reports the Z result.
+        wiz->z_probe_pending = true;
+        lv_obj_add_state(wiz->next_btn, LV_STATE_DISABLED);
+        if (wiz->exec_probe_cb) {
+            LOGV(TAG, "Firing Z-top probe from Next button.");
+            wiz->exec_probe_cb(obj, wiz->current_action);
+        } else {
+            LOGW(TAG, "Probe callback is NULL, cannot execute Z probe.");
+        }
+        return; // Do NOT advance step — the callback will do that via deferred mechanism.
     }
     lv_probing_wizard_advance_step(obj);
 }
@@ -1179,11 +1212,15 @@ static void calculate_result(lv_obj_t* obj) {
  */
 static void schedule_deferred_update(lv_probing_wizard_t* wiz) {
     if (wiz && wiz->deferred_update_timer) {
+        // lv_timer_* calls require the LVGL lock when invoked from non-LVGL
+        // tasks (e.g. the machine-interface callback task).
+        lv_lock();
         // To make a paused, non-repeating timer run again, we must:
         // 1. Reset its repeat count (as it will be 0 after running once).
         // 2. Resume it.
         lv_timer_set_repeat_count(wiz->deferred_update_timer, 1);
         lv_timer_resume(wiz->deferred_update_timer);
+        lv_unlock();
     }
 }
 
@@ -1192,7 +1229,17 @@ void lv_probing_wizard_set_z_top_deferred(lv_obj_t * obj, float z_top) {
     if (!wiz) return;
     wiz->deferred_z_top = z_top;
     wiz->deferred_action = DEFERRED_ACTION_SET_Z_AND_ADVANCE;
-    schedule_deferred_update(wiz);
+    // Use a 1-second delay to allow the CNC controller to fully complete the
+    // Z-probe macro (and any follow-on G10 / M5010 commands) before the XY
+    // probe gcode is dispatched.  The timer period is reset to the default
+    // 50 ms in deferred_update_timer_cb after it fires.
+    if (wiz->deferred_update_timer) {
+        lv_lock();
+        lv_timer_set_period(wiz->deferred_update_timer, 1000);
+        lv_timer_set_repeat_count(wiz->deferred_update_timer, 1);
+        lv_timer_resume(wiz->deferred_update_timer);
+        lv_unlock();
+    }
 }
 
 void lv_probing_wizard_report_final_result_deferred(lv_obj_t * obj, float x, float y) {
@@ -1270,13 +1317,31 @@ static void deferred_update_timer_cb(lv_timer_t * timer) {
             lv_probing_wizard_set_active_step(obj, wiz->deferred_next_step, false);
             break;
         }
+        case DEFERRED_ACTION_PROBE_INSTALLED:
+            lv_probing_wizard_probe_intalled(obj);
+            break;
         case DEFERRED_ACTION_NONE:
         default:
             break;
     }
 
+    // Reset the timer period back to the default short value so that any
+    // subsequent schedule_deferred_update() call gets the normal 50 ms delay
+    // (lv_probing_wizard_set_z_top_deferred temporarily raises it to 1000 ms).
+    lv_timer_set_period(timer, 50);
     // Pause the timer after it has run, so it's ready for the next schedule.
     lv_timer_pause(timer);
+}
+
+/**
+ * @brief Thread-safe version of lv_probing_wizard_probe_intalled().
+ * May be called from any context (e.g., machine-interface callbacks).
+ */
+void lv_probing_wizard_probe_intalled_deferred(lv_obj_t * obj) {
+    lv_probing_wizard_t * wiz = lv_obj_get_user_data(obj);
+    if (!wiz) return;
+    wiz->deferred_action = DEFERRED_ACTION_PROBE_INSTALLED;
+    schedule_deferred_update(wiz);
 }
 
 /***************************************************

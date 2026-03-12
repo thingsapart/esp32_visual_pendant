@@ -144,7 +144,7 @@ static const char *TAG = "JC3248W535C";
 //   With TRANS_DIV=40: 320 * 12 * 2 = 7 680 B each → 40 transactions/frame
 //   Two alternating buffers (double-buffering): CPU rotation of chunk N+1
 //   overlaps DMA of chunk N.
-#define TRANS_DIV   40
+#define TRANS_DIV   50
 #define TRANS_SIZE  (TFT_HEIGHT * (TFT_WIDTH / TRANS_DIV) * BYTES_PER_PIXEL)
 
 // Partial-mode LVGL render buffer.

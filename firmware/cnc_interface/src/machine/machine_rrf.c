@@ -34,23 +34,29 @@ static const char *TAG = "machine_rrf";
 #endif
 
 // If this many poll requests go unanswered, treat the machine as disconnected.
-// This helps when poll back-off is active: missing several responses usually
+// This helps when poll throttle is active: missing several responses usually
 // indicates the controller is no longer reachable rather than merely busy.
 #ifndef SERIAL_DISCONNECT_UNANSWERED_POLLS
 #define SERIAL_DISCONNECT_UNANSWERED_POLLS 5
 #endif
 
-// --- Poll back-off configuration ---
-// Minimum unanswered poll cycles before back-off kicks in.
-#define POLL_BACKOFF_THRESHOLD     2
-// Base interval (ms) once back-off is active (doubles per extra unanswered).
-#define POLL_BACKOFF_BASE_MS       1000
-// Hard cap on the back-off interval so we stay well under the 8 s disconnect
-// timeout and keep probing the controller regularly.
-#define POLL_BACKOFF_MAX_MS        5000
-// After this many ms without a response we "forget" all unanswered polls and
-// resume normal-rate polling (the controller may have finished its operation).
-#define POLL_BACKOFF_FORGET_MS     10000
+// --- Poll throttle configuration ---
+// Graduated skip-based throttle: at each threshold the effective polling rate
+// halves.  "Skip N" means N poll cycles are suppressed for every 1 that fires.
+#define POLL_THROTTLE_3_AT    3    // ½ speed:   skip 1 of every 2 cycles
+#define POLL_THROTTLE_6_AT    6    // ¼ speed:   skip 3 of every 4 cycles
+#define POLL_THROTTLE_8_AT    8    // ⅛ speed:   skip 7 of every 8 cycles
+#define POLL_THROTTLE_11_AT  11    // 1/16 speed: skip 15 of every 16 cycles
+// After this many ms without a poll being sent, forget accumulated unanswered
+// counts and resume full-speed polling (task may have been paused or idle).
+#define POLL_THROTTLE_FORGET_MS   10000
+// After throttling has been active for this many ms, auto-reset to full speed.
+// The throttle re-engages quickly if the controller is still unresponsive.
+#define POLL_THROTTLE_RESET_MS     5000
+// How long (ms) to suppress the disconnect-detection timeout after a probe or
+// other long-running command is issued.  Multi-step sequences refresh this on
+// every probe call so the window extends across the whole sequence.
+#define PROBE_GRACE_PERIOD_MS  180000
 
 // Control how raw, unparseable M409 JSON is forwarded to the pendant/client.
 // 0 = send short message to client (no raw JSON)
@@ -100,6 +106,7 @@ void _free_modal(machine_interface_t *self, int modal_id);
 static void _dwc_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _serial_set_connected_impl(machine_rrf_t *self, bool connect);
 static void _serial_drain_rx_impl(machine_interface_t *self);
+static void _machine_rrf_reduce_polling(machine_interface_t *iself);
 static void _machine_rrf_attempt_connect(machine_interface_t *self);
 static void _serial_send_gcode_impl(machine_rrf_t *self, const char *gcode);
 static inline bool _is_m114_body_start(const char *s);
@@ -924,27 +931,34 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
   if (self->connected && self->last_response_ms != 0) {
     uint32_t now = millis();
     uint32_t elapsed = now - self->last_response_ms;
-    // If we've sent several poll requests with no responses, assume the
-    // controller is unreachable and disconnect immediately. This handles the
-    // case where back-off accumulates many unanswered polls (e.g. controller
-    // crashed) while still allowing short-term back-off delays during long
-    // running macros.
-    if (self->unanswered_polls >= SERIAL_DISCONNECT_UNANSWERED_POLLS) {
-      LOGW(TAG, "Serial: %u unanswered polls — marking disconnected.", (unsigned)self->unanswered_polls);
-      _serial_set_connected_impl(self, false);
-      return;  // Skip sending more queries until reconnected
-    }
 
-    // While poll back-off is active (some unanswered polls but below the
-    // disconnect threshold), avoid using the raw elapsed-time check to
-    // declare the machine disconnected — back-off intentionally spaces polls
-    // and can exceed the simple time threshold. Only apply the elapsed-time
-    // timeout when we have no outstanding unanswered polls.
-    if (self->unanswered_polls == 0 && elapsed > SERIAL_NO_RESPONSE_TIMEOUT_MS) {
-      LOGW(TAG, "Serial: No response for %lu ms (timeout %d ms) — marking disconnected.",
-           (unsigned long)elapsed, SERIAL_NO_RESPONSE_TIMEOUT_MS);
-      _serial_set_connected_impl(self, false);
-      return;  // Skip sending more queries until reconnected
+    // Grace period: while a probe or other long-running command is executing,
+    // the CNC controller can't respond to M409 queries.  Suppress disconnect
+    // detection for the full grace window so the hub doesn't cut the pendant
+    // connection mid-sequence and break multi-step probe wizards.
+    bool in_long_running_op = (self->long_running_end_ms != 0 &&
+                                now < self->long_running_end_ms);
+    if (in_long_running_op) {
+      LOGD(TAG, "Long-running op active (%lu ms remaining) — disconnect detection suppressed.",
+           (unsigned long)(self->long_running_end_ms - now));
+    } else {
+      // If we've sent several poll requests with no responses, assume the
+      // controller is unreachable and disconnect immediately.
+      if (self->unanswered_polls >= SERIAL_DISCONNECT_UNANSWERED_POLLS) {
+        LOGW(TAG, "Serial: %u unanswered polls — marking disconnected.", (unsigned)self->unanswered_polls);
+        _serial_set_connected_impl(self, false);
+        return;  // Skip sending more queries until reconnected
+      }
+
+      // Only apply the elapsed-time timeout when we have no outstanding polls
+      // (throttle intentionally spaces polls and can exceed the simple time
+      // threshold).
+      if (self->unanswered_polls == 0 && elapsed > SERIAL_NO_RESPONSE_TIMEOUT_MS) {
+        LOGW(TAG, "Serial: No response for %lu ms (timeout %d ms) — marking disconnected.",
+             (unsigned long)elapsed, SERIAL_NO_RESPONSE_TIMEOUT_MS);
+        _serial_set_connected_impl(self, false);
+        return;  // Skip sending more queries until reconnected
+      }
     }
   }
 #endif
@@ -958,39 +972,10 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
     return;
   }
 
-#ifdef ESP32_HW
-  // --- Poll back-off: avoid spamming M409 while the controller is busy ---
-  // When we have sent polls but received no responses, progressively slow down.
-  {
-    uint32_t now_bo = millis();
-    uint32_t since_last_poll = now_bo - self->last_poll_sent_ms;
-
-    // Forget mechanism: if nothing heard for POLL_BACKOFF_FORGET_MS, reset and
-    // resume normal-rate polling (the controller may have finished).
-    if (self->unanswered_polls > 0 && since_last_poll > POLL_BACKOFF_FORGET_MS) {
-      LOGD(TAG, "Poll backoff: %lu ms since last poll — forgetting %u unanswered.",
-           (unsigned long)since_last_poll, (unsigned)self->unanswered_polls);
-      self->unanswered_polls = 0;
-    }
-
-    if (self->unanswered_polls >= POLL_BACKOFF_THRESHOLD) {
-      // Exponential back-off: 1 s, 2 s, 4 s, … capped at POLL_BACKOFF_MAX_MS.
-      uint8_t shift = self->unanswered_polls - POLL_BACKOFF_THRESHOLD;  // 0, 1, 2, …
-      if (shift > 3) shift = 3;  // cap the shift to avoid overflow
-      uint32_t backoff_ms = POLL_BACKOFF_BASE_MS << shift;
-      if (backoff_ms > POLL_BACKOFF_MAX_MS) backoff_ms = POLL_BACKOFF_MAX_MS;
-
-      if (since_last_poll < backoff_ms) {
-        LOGD(TAG, "Poll backoff: skipping poll (%u unanswered, need %lu ms, only %lu ms elapsed).",
-             (unsigned)self->unanswered_polls, (unsigned long)backoff_ms,
-             (unsigned long)since_last_poll);
-        return;  // Skip this poll cycle
-      }
-    }
-  }
-#endif
-
-  // Commands are sent via the queue. The response is handled asynchronously.
+  // Commands are sent via the queue.
+  // NOTE: throttle/skip logic is fully managed in _machine_rrf_should_poll
+  // (called by machine_send_task before every iteration); _serial_poll_state_impl
+  // is only reached when should_poll returns true. The response is handled asynchronously.
   char cmd[128];
   if (poll_state & MACHINE_POSITION) {
     // Frequent position poll via M114: compact ASCII response, hand-scanned
@@ -1371,7 +1356,20 @@ void _machine_rrf_probe(machine_interface_t *self, const char *probe_gcode) {
   // full tpre.g tool-change sequence (blocking M291 dialog + M8002 wait up to
   // 30 s), which hangs the machine mid-probe-wizard. The wizard already
   // ensures the probe tool is selected and activated before calling this.
+  LOGW(TAG, "Queuing probe gcode to machine: %s", probe_gcode);
+  // Front-queue the probe G-code so it bypasses any pending poll commands that
+  // may be waiting in the gcode_queue. This prevents the UART TX buffer from
+  // filling with M409 responses before the probe command reaches the controller.
+  self->gcode_queue_priority = true;
   machine_interface_send_gcode(self, probe_gcode, MACHINE_POSITION_EXT);
+  self->gcode_queue_priority = false;
+#ifdef ESP32_HW
+  // Extend (or start) the long-running-op grace window.  Multi-step probe
+  // sequences call this for every sub-probe, so the deadline is refreshed each
+  // time and the disconnect detection stays suppressed across the whole sequence.
+  ((machine_rrf_t *)self)->long_running_end_ms = millis() + PROBE_GRACE_PERIOD_MS;
+  LOGI(TAG, "Probe issued: disconnect suppressed for %d ms.", PROBE_GRACE_PERIOD_MS);
+#endif
 }
 
 // Run a Duet/RRF macro by name. Uses M98 P"<macro>".
@@ -1556,6 +1554,7 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   
   self->base.modal_str = _machine_rrf_modal_str;
   self->base.probe = _machine_rrf_probe;
+  self->base.reduce_polling = _machine_rrf_reduce_polling;
 
   // RRF-specific actions: run a macro (M98) and start a job/file (M23 + M24)
   self->base.run_macro = _machine_rrf_run_macro;
@@ -1571,32 +1570,113 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
 }
 
 // Transport-specific poll decision: respects unanswered poll back-off.
+// Throttle decision for the serial transport.  Called every poll-cadence tick
+// by machine_send_task; manages the skip counter and auto-reset in addition to
+// returning the allow/skip verdict so that _serial_poll_state_impl is only
+// invoked when a real poll should fire.
 static bool _machine_rrf_should_poll(machine_interface_t *iself) {
   machine_rrf_t *self = (machine_rrf_t *)iself;
 #ifdef ESP32_HW
-  uint32_t now = millis();
-  uint32_t since_last_poll = now - self->last_poll_sent_ms;
+  uint32_t now             = millis();
+  uint32_t since_last_sent = now - self->last_poll_sent_ms;
 
-  if (self->unanswered_polls > 0 && since_last_poll > POLL_BACKOFF_FORGET_MS) {
-    LOGD(TAG, "Poll backoff: %lu ms since last poll — forgetting %u unanswered.",
-         (unsigned long)since_last_poll, (unsigned)self->unanswered_polls);
-    self->unanswered_polls = 0;
+  // Forget: if no poll has been sent for a long time (task paused/idle) reset
+  // the accumulated unanswered count so we don't over-throttle on resume.
+  if (self->unanswered_polls > 0 && since_last_sent > POLL_THROTTLE_FORGET_MS) {
+    LOGD(TAG, "Poll throttle: %lu ms since last poll — resetting %u unanswered.",
+         (unsigned long)since_last_sent, (unsigned)self->unanswered_polls);
+    self->unanswered_polls  = 0;
+    self->poll_skip_target  = 0;
+    self->poll_skip_counter = 0;
+    self->throttle_start_ms = 0;
+    self->base.reduce_poll_count = 0;
   }
 
-  if (self->unanswered_polls >= POLL_BACKOFF_THRESHOLD) {
-    uint8_t shift = self->unanswered_polls - POLL_BACKOFF_THRESHOLD;
-    if (shift > 3) shift = 3;
-    uint32_t backoff_ms = POLL_BACKOFF_BASE_MS << shift;
-    if (backoff_ms > POLL_BACKOFF_MAX_MS) backoff_ms = POLL_BACKOFF_MAX_MS;
-    if (since_last_poll < backoff_ms) {
-      LOGD(TAG, "Poll backoff: skipping poll (%u unanswered, need %lu ms, only %lu ms elapsed).",
-           (unsigned)self->unanswered_polls, (unsigned long)backoff_ms,
-           (unsigned long)since_last_poll);
-      return false;
+  // Auto-reset: if throttling has been active for POLL_THROTTLE_RESET_MS, snap
+  // back to full speed — but NOT while a long-running operation (probe) is in
+  // progress.  Resetting too early would flood the CNC with M409 queries again
+  // while the macro is still running, quickly re-accumulating unanswered polls.
+  bool in_long_running_op = (self->long_running_end_ms != 0 &&
+                              now < self->long_running_end_ms);
+  if (!in_long_running_op && self->throttle_start_ms != 0 &&
+      (now - self->throttle_start_ms >= POLL_THROTTLE_RESET_MS)) {
+    LOGI(TAG, "Poll throttle: auto-reset after ~%lu ms (was skip=%u, unanswered=%u).",
+         (unsigned long)(now - self->throttle_start_ms),
+         (unsigned)self->poll_skip_target,
+         (unsigned)self->unanswered_polls);
+    self->unanswered_polls  = 0;
+    self->poll_skip_target  = 0;
+    self->poll_skip_counter = 0;
+    self->throttle_start_ms = 0;
+    self->base.reduce_poll_count = 0;
+  }
+
+  // Compute new skip target from unanswered-poll count.
+  // Each step halves the effective polling rate relative to the previous.
+  uint8_t new_skip;
+  if      (self->unanswered_polls >= POLL_THROTTLE_11_AT) new_skip = 15;
+  else if (self->unanswered_polls >= POLL_THROTTLE_8_AT)  new_skip = 7;
+  else if (self->unanswered_polls >= POLL_THROTTLE_6_AT)  new_skip = 3;
+  else if (self->unanswered_polls >= POLL_THROTTLE_3_AT)  new_skip = 1;
+  else                                                    new_skip = 0;
+
+  if (new_skip != self->poll_skip_target) {
+    if (new_skip > 0 && self->poll_skip_target == 0) {
+      // Entering throttle: start the 5-second auto-reset countdown.
+      self->throttle_start_ms = now;
+      self->poll_skip_counter = 0;
+    } else if (new_skip == 0) {
+      self->throttle_start_ms = 0;
+      self->poll_skip_counter = 0;
+      self->base.reduce_poll_count = 0;
     }
+    LOGI(TAG, "Poll throttle: skip %u→%u (unanswered=%u).",
+         (unsigned)self->poll_skip_target, (unsigned)new_skip,
+         (unsigned)self->unanswered_polls);
+    self->poll_skip_target = new_skip;
+  }
+
+  // Apply the skip counter: suppress poll_skip_target cycles, then allow one.
+  if (self->poll_skip_target > 0) {
+    self->poll_skip_counter++;
+    if (self->poll_skip_counter <= self->poll_skip_target) {
+      LOGD(TAG, "Poll throttle: skipping (%u/%u, unanswered=%u).",
+           (unsigned)self->poll_skip_counter,
+           (unsigned)self->poll_skip_target,
+           (unsigned)self->unanswered_polls);
+      return false;  // skip this cycle
+    }
+    self->poll_skip_counter = 0;  // allowed; reset for next cycle
   }
 #endif
   return true;
+}
+
+// Immediately throttle polling to ¼ speed when triggered externally (e.g. on
+// probe start before the probe G-code is sent).  Auto-resets after
+// POLL_THROTTLE_RESET_MS so consecutive probe steps need not call this again.
+static void _machine_rrf_reduce_polling(machine_interface_t *iself) {
+  machine_rrf_t *self = (machine_rrf_t *)iself;
+#ifdef ESP32_HW
+  /* Compute target skip from recursive reduce count set on the base.  The
+   * mapping is: count=1 -> skip 3 (1/4), count=2 -> skip 7 (1/8), count=3 ->
+   * skip 15 (1/16), etc.  Cap to 15 (1/16) to match existing limits. */
+  uint8_t cnt = self->base.reduce_poll_count;
+  if (cnt == 0) cnt = 1; /* defensive: treat as a single reduction */
+  uint32_t desired = (1u << (cnt + 1)) - 1u; /* (1<<(cnt+1)) - 1 */
+  if (desired > 15u) desired = 15u;
+  if (self->poll_skip_target < (uint8_t)desired) {
+    self->poll_skip_target  = (uint8_t)desired;
+    self->poll_skip_counter = 0;
+    if (self->throttle_start_ms == 0) self->throttle_start_ms = millis();
+    LOGI(TAG, "Poll throttle: reduced to 1/%u speed (skip=%u) at probe start "
+         "(auto-resets in %d ms).", (unsigned)(desired + 1u), (unsigned)desired,
+         POLL_THROTTLE_RESET_MS);
+  }
+  // Also pre-arm the grace window so disconnect detection is suppressed from
+  // the moment reduce_polling is called (before the probe G-code even queues).
+  self->long_running_end_ms = millis() + PROBE_GRACE_PERIOD_MS;
+#endif
 }
 
 // --- Public Constructors/Initializers ---

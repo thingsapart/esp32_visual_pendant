@@ -85,7 +85,7 @@
      * tasks can still be created after the UI is loaded. */
     #define LV_MEM_SIZE (48 * 1024U)           /**< [bytes] */
 #else
-    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] */
+    #define LV_MEM_SIZE (128 * 1024U)          /**< [bytes] */
 #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
@@ -95,7 +95,7 @@
     #define LV_MEM_ADR 0     /**< 0: unused*/
     /* Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc */
     #if LV_MEM_ADR == 0
-        #if defined(HW_ESP32) && defined(BOARD_HAS_PSRAM)
+        #if (defined(HW_ESP32) || defined(ESP32_HW)) && defined(BOARD_HAS_PSRAM)
           #define LV_MEM_POOL_INCLUDE <esp32-hal-psram.h>
           #define LV_MEM_POOL_ALLOC ps_malloc
         #else

@@ -129,7 +129,9 @@ extern "C" {
 #endif
 
 #ifndef JOG_ACCUM_TASK_STACK
-#define JOG_ACCUM_TASK_STACK      4096
+/* Must be > CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (4096) so FreeRTOS allocates
+ * the stack from PSRAM rather than the scarce internal SRAM. */
+#define JOG_ACCUM_TASK_STACK      4608
 #endif
 
 #ifndef JOG_ACCUM_TASK_PRIO

@@ -35,6 +35,32 @@ typedef struct {
     /// The toolhead moves to (z_surface - xy_probe_depth) before probing
     /// pocket / rect / bore / boss walls.  Default: 1 mm.
     float xy_probe_depth;
+
+    // -----------------------------------------------------------------------
+    // Probe-view UI settings (set via numeric_input_dialog actions)
+    // -----------------------------------------------------------------------
+
+    /// Width (X extent) of workpiece feature, or radius of bore/boss (mm).
+    /// Used as H parameter (X surface length) for corner/rect probes and
+    /// as 2*width for bore/boss diameter.  Default: 100 mm.
+    float width;
+
+    /// Height (Y extent) of workpiece feature, or depth below current Z at
+    /// which sidewall probing occurs (mm).  Used as I parameter (Y surface
+    /// length / Z descent).  Default: 100 mm.
+    float height;
+
+    /// Clearance distance away from expected surface before probing (mm).
+    /// Maps to the T parameter in G6501.1 / G6508.1.  Default: 5 mm.
+    float clearance;
+
+    /// Overtravel distance — how far past the expected surface the probe
+    /// may travel before erroring.  Maps to the O parameter.  Default: 2 mm.
+    float overtravel;
+
+    /// Quick mode: 1 probe point per surface instead of 2 (Q=1).
+    /// Faster but cannot detect surface rotation.  Default: false.
+    bool quick_mode;
 } probe_settings_t;
 
 // ---------------------------------------------------------------------------
@@ -43,6 +69,12 @@ typedef struct {
 #define PROBE_SETTINGS_DEFAULT_SAFE_Z          0.0f
 #define PROBE_SETTINGS_DEFAULT_MAX_Z_DEPTH    10.0f
 #define PROBE_SETTINGS_DEFAULT_XY_PROBE_DEPTH  1.0f
+
+#define PROBE_SETTINGS_DEFAULT_WIDTH         100.0f
+#define PROBE_SETTINGS_DEFAULT_HEIGHT        100.0f
+#define PROBE_SETTINGS_DEFAULT_CLEARANCE       5.0f
+#define PROBE_SETTINGS_DEFAULT_OVERTRAVEL      2.0f
+#define PROBE_SETTINGS_DEFAULT_QUICK_MODE    false
 
 // ---------------------------------------------------------------------------
 // API

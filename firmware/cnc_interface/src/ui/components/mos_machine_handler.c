@@ -153,6 +153,7 @@ static struct {
     uint8_t parsed_sfc_pos_count[3];                    // count of samples per axis
     uint8_t current_probe_index;
     bool m7601_fallback_pending;                        // Set when M7601 query was sent; cleared on completion
+    bool installing_tool;                               // True while waiting for T T{global.mosPTID} to complete
 } handler_state = {0};
 
 
@@ -220,6 +221,18 @@ void lv_probing_wizard_register_mos_callbacks(lv_obj_t* wizard_obj, machine_inte
 }
 
 /**
+ * @brief Allow the probing wizard to query the MOS handler for the current
+ * connection state. If the MOS handler has a machine assigned it will call
+ * `lv_probing_wizard_set_connected()` for the provided `wizard_obj`.
+ */
+void lv_probing_wizard_query_mos_connected(lv_obj_t* wizard_obj) {
+    if (!wizard_obj) return;
+    if (!handler_state.machine) return;
+    bool connected = handler_state.machine->is_connected ? handler_state.machine->is_connected(handler_state.machine) : false;
+    lv_probing_wizard_set_connected(wizard_obj, connected);
+}
+
+/**
  * @brief Callback to get the current jogged position from the machine.
  * This is called by the wizard when it needs to record a setup point.
  */
@@ -250,17 +263,34 @@ void ensure_homed() {
 }
 
 static void mos_install_probe(lv_obj_t* wizard_obj) {
-    ensure_homed();
-
     if (!handler_state.machine) {
         LOGW(TAG, "Cannot install probe: machine is NULL");
-    } else {
-        LOGI(TAG, "Installing probe tool: T T{global.mosPTID}");
-        handler_state.machine->send_gcode(handler_state.machine, "T T{global.mosPTID}", 0);
+        lv_probing_wizard_probe_intalled(wizard_obj);
+        return;
     }
 
-    // TODO: Wait and check for probe installation success!
-    lv_probing_wizard_probe_intalled(wizard_obj);
+    // Block probing if any axis is not homed.
+    bool is_homed = handler_state.machine->axes_homed[0] &&
+                    handler_state.machine->axes_homed[1] &&
+                    handler_state.machine->axes_homed[2];
+    if (!is_homed) {
+        LOGW(TAG, "Cannot start probing: machine not homed.");
+        mos_show_home_all_modal(handler_state.machine);
+        return;  // Caller must retry after homing is complete.
+    }
+
+    LOGI(TAG, "Selecting probe tool: T T{global.mosPTID}");
+    handler_state.installing_tool = true;
+    handler_state.machine->send_gcode(handler_state.machine, "T T{global.mosPTID}", 0);
+
+    // If the machine is already idle the state-change callback may not fire
+    // (probe tool was already selected).  Schedule an immediate deferred advance.
+    bool currently_running = (handler_state.machine->machine_status == MACHINE_STATUS_RUNNING);
+    if (!currently_running) {
+        LOGI(TAG, "Machine already idle — probe tool likely already selected.");
+        handler_state.installing_tool = false;
+        lv_probing_wizard_probe_intalled_deferred(wizard_obj);
+    }
 }
 
 /**
@@ -294,8 +324,6 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         }
     }
 
-    ensure_homed();
-
     // Reset probe result state for the new operation
     handler_state.parsed_result = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
     handler_state.parsed_cnr_pos = (lv_probing_wizard_point_float_t){.x = NAN, .y = NAN};
@@ -325,7 +353,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
         // O: Overtravel allowance.
         // W: Work offset to store result (scratch WCS).
         snprintf(gcode_buf, sizeof(gcode_buf),
-             "G6510.1 W{%d} J{%.3f} K{%.3f} L{%.3f} H{4} I{%.3f} O{%.3f}",
+             "M400\nG6510.1 W{%d} J{%.3f} K{%.3f} L{%.3f} H{4} I{%.3f} O{%.3f}",
                  PROBE_SCRATCH_WCS_OFFSET,
                  current_pos.x, current_pos.y, handler_state.machine->position[2] + Z_PROBING_BACKOFF_DISTANCE,
                  PROBE_DEFAULT_Z_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
@@ -367,7 +395,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 // depth below `z_top` so probing accuracy is preserved.
                 snprintf(gcode_buf, sizeof(gcode_buf),
                          "%s W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} I{%.3f} T{%.3f} O{%.3f}",
-                         is_inside ? "G6502.1" : "G6503.1",
+                         is_inside ? "M400\nG6502.1" : "M400\nG6503.1",
                          PROBE_SCRATCH_WCS_OFFSET,
                          center_x, center_y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                          dim_x, dim_y,
@@ -400,14 +428,14 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 if (is_inside) {
                     // Bore (G6500.1): No T parameter needed (probes outward from center).
                     snprintf(gcode_buf, sizeof(gcode_buf),
-                             "G6500.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} O{%.3f}",
+                             "M400\nG6500.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} O{%.3f}",
                              PROBE_SCRATCH_WCS_OFFSET,
                              setup_points[0].x, setup_points[0].y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                              diameter, PROBE_DEFAULT_OVERTRAVEL);
                 } else {
                     // Boss (G6501.1): T parameter = clearance to start outside the boss.
                     snprintf(gcode_buf, sizeof(gcode_buf),
-                             "G6501.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} T{%.3f} O{%.3f}",
+                             "M400\nG6501.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} H{%.3f} T{%.3f} O{%.3f}",
                              PROBE_SCRATCH_WCS_OFFSET,
                              setup_points[0].x, setup_points[0].y, z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
                              diameter, PROBE_XY_BACKOFF_DISTANCE, PROBE_DEFAULT_OVERTRAVEL);
@@ -429,14 +457,13 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                     return;
                 }
                 // Map the wizard's corner enum to the G-code's numeric value (0-3).
-                // LV_PROBING_CORNER_FRONT_LEFT=1 -> N0, FRONT_RIGHT=2 -> N1,
-                // BACK_LEFT=3 -> N2 (but MOS uses: 0=FL, 1=FR, 2=BR, 3=BL)
+                // G6508.1 N values: 0=front-left, 1=front-right, 2=back-left, 3=back-right
                 int corner_n;
                 switch (corner) {
                     case LV_PROBING_CORNER_FRONT_LEFT:  corner_n = 0; break;
                     case LV_PROBING_CORNER_FRONT_RIGHT: corner_n = 1; break;
-                    case LV_PROBING_CORNER_BACK_RIGHT:  corner_n = 2; break;
-                    case LV_PROBING_CORNER_BACK_LEFT:   corner_n = 3; break;
+                    case LV_PROBING_CORNER_BACK_LEFT:   corner_n = 2; break;
+                    case LV_PROBING_CORNER_BACK_RIGHT:  corner_n = 3; break;
                     default: corner_n = 0; break;
                 }
 
@@ -450,7 +477,7 @@ static void mos_execute_probe(lv_obj_t* wizard_obj, const lv_probing_action_t* a
                 // O: Overtravel distance.
                 // W: Work offset (scratch WCS).
                 snprintf(gcode_buf, sizeof(gcode_buf),
-                         "G6508.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} N{%d} Q{1} T{%.3f} O{%.3f}",
+                         "M400\nG6508.1 W{%d} J{%.3f} K{%.3f} L{%.3f} Z{%.3f} N{%d} Q{1} T{%.3f} O{%.3f}",
                          PROBE_SCRATCH_WCS_OFFSET,
                          setup_points[0].x, setup_points[0].y,
                          z_top + Z_PROBING_BACKOFF_DISTANCE, probe_z,
@@ -544,6 +571,12 @@ static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) 
     if (handler_state.wizard_obj != NULL) {
         lv_probing_wizard_set_connected(handler_state.wizard_obj, connected);
     }
+
+    // Enable expert mode so M7601 echoes global variable names that our parsers
+    // can match (e.g. "global.mosWPSfcAxis[N]=Z" instead of human-readable text).
+    if (connected && machine->send_gcode) {
+        machine->send_gcode(machine, "set global.mosEM = true", 0);
+    }
 }
 
 /**
@@ -554,10 +587,36 @@ static void _mos_conn_changed_cb(machine_interface_t* machine, void* user_data) 
 static void _mos_state_changed_cb(machine_interface_t* machine, void* user_data) {
     (void)user_data;
     bool running = (machine->machine_status == MACHINE_STATUS_RUNNING);
-    if (handler_state.probe_was_running != running) { 
-        LOGI(TAG, "Machine running state changed: was %d, now %d", handler_state.probe_was_running, running);
+    bool was_running = handler_state.probe_was_running;
+    if (was_running != running) { 
+        LOGI(TAG, "Machine running state changed: was %d, now %d", was_running, running);
     }
     handler_state.probe_was_running = running;
+
+    // Detect the machine stopping while an XY (or Z) probe was active.
+    // This can happen if the probe macro aborted before sending the
+    // "MillenniumOS:" completion echo.  The MillenniumOS: message may still
+    // arrive shortly afterwards in a log-message callback — we therefore do NOT
+    // reset probe_state here (that would cause a normal completion to be missed).
+    // Instead we emit a warning so the abort error that was already logged at
+    // LOGI/LOGE level can be correlated in the serial output.
+    // The stale-state guard in mos_execute_probe provides recovery on the
+    // next probe attempt.
+    if (was_running && !running &&
+        handler_state.probe_state != PROBE_STATE_IDLE) {
+        LOGW(TAG, "Machine stopped while probe was in flight [state=%d] — "
+             "check preceding log messages for machine error.",
+             handler_state.probe_state);
+    }
+
+    // If we were waiting for the probe tool-change to complete, advance the wizard now.
+    if (!running && handler_state.installing_tool) {
+        LOGI(TAG, "Probe tool change complete. Advancing wizard.");
+        handler_state.installing_tool = false;
+        if (handler_state.wizard_obj) {
+            lv_probing_wizard_probe_intalled_deferred(handler_state.wizard_obj);
+        }
+    }
 }
 
 /**
@@ -644,6 +703,15 @@ static bool _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
     // Only parse logs if we are in a pending probe state — but still allow
     // completion messages to be observed even if state returned to idle.
     if (handler_state.probe_state != PROBE_STATE_IDLE) {
+        // Surface machine errors at LOGE so they are visible in the monitor.
+        // All other machine messages during probe are logged at INFO level
+        // so the user can see what the machine is reporting (e.g. abort text).
+        if (strstr(resp_str, "Error:") != NULL || strstr(resp_str, "Warning:") != NULL) {
+            LOGE(TAG, "Machine error during probe [state=%d]: %s",
+                 handler_state.probe_state, message);
+        } else {
+            LOGI(TAG, "log_cb [state=%d]: %s", handler_state.probe_state, message);
+        }
         handled = true;
     }
 
@@ -717,6 +785,76 @@ static bool _mos_log_message_cb(machine_interface_t* machine, void* user_data, c
                 }
                 handled = true;
             }
+        }
+    // --- Non-expert-mode (human-readable) M7601 fallback parsers ---
+    // These fire when global.mosEM == false and M7601 echoes WCS N - ... lines.
+    } else if ((p = strstr(resp_str, "Probed Surface Axis=")) != NULL) {
+        char axis_buf[4] = {0};
+        if (sscanf(p, "Probed Surface Axis=%3s", axis_buf) == 1) {
+            axis = axis_buf[0];
+            // Store in scratch WCS slot so the position parser below can find it.
+            if (PROBE_SCRATCH_WCS_OFFSET < MAX_PROBE_RESULTS) {
+                handler_state.last_parsed_axis[PROBE_SCRATCH_WCS_OFFSET] = axis;
+                LOGI(TAG, "Parsed probed axis (human-readable): %c", axis);
+                handled = true;
+            }
+        }
+    } else if ((p = strstr(resp_str, "Probed Surface Position=")) != NULL) {
+        if (sscanf(p, "Probed Surface Position=%f", &f1) == 1) {
+            index = PROBE_SCRATCH_WCS_OFFSET;
+            char reported_axis = (index < MAX_PROBE_RESULTS) ? handler_state.last_parsed_axis[index] : 0;
+            LOGI(TAG, "Parsed probed position (human-readable) axis %c: %f", reported_axis, f1);
+            if (reported_axis == 'Z') {
+                handler_state.parsed_z_result = f1;
+            } else {
+                int ax = -1;
+                if (reported_axis == 'X') ax = 0;
+                else if (reported_axis == 'Y') ax = 1;
+                if (ax >= 0) {
+                    if (isnan(handler_state.parsed_sfc_pos_by_axis[ax]))
+                        handler_state.parsed_sfc_pos_by_axis[ax] = f1;
+                    else
+                        handler_state.parsed_sfc_pos_by_axis[ax] = (handler_state.parsed_sfc_pos_by_axis[ax] * handler_state.parsed_sfc_pos_count[ax] + f1) / (handler_state.parsed_sfc_pos_count[ax] + 1);
+                    handler_state.parsed_sfc_pos_count[ax]++;
+                    handler_state.parsed_sfc_pos = f1;
+                } else {
+                    handler_state.parsed_sfc_pos = f1;
+                }
+            }
+            handled = true;
+        }
+    } else if ((p = strstr(resp_str, "Probed Center Position ")) != NULL) {
+        if (sscanf(p, "Probed Center Position X=%f Y=%f", &f1, &f2) == 2) {
+            handler_state.parsed_result.x = f1;
+            handler_state.parsed_result.y = f2;
+            LOGI(TAG, "Parsed center pos (human-readable): X=%.4f, Y=%.4f", f1, f2);
+            handled = true;
+        }
+    } else if ((p = strstr(resp_str, "Probed Corner Position ")) != NULL) {
+        if (sscanf(p, "Probed Corner Position X=%f Y=%f", &f1, &f2) == 2) {
+            handler_state.parsed_cnr_pos.x = f1;
+            handler_state.parsed_cnr_pos.y = f2;
+            LOGI(TAG, "Parsed corner pos (human-readable): X=%.4f, Y=%.4f", f1, f2);
+            handled = true;
+        }
+    } else if ((p = strstr(resp_str, "Probed Width=")) != NULL) {
+        if (sscanf(p, "Probed Width=%f Length=%f", &f1, &f2) == 2) {
+            handler_state.parsed_dims.x = f1;
+            handler_state.parsed_dims.y = f2;
+            LOGI(TAG, "Parsed dims (human-readable): W=%.4f, H=%.4f", f1, f2);
+            handled = true;
+        }
+    } else if ((p = strstr(resp_str, "Probed Radius=")) != NULL) {
+        if (sscanf(p, "Probed Radius=%f", &f1) == 1) {
+            handler_state.parsed_radius = f1;
+            LOGI(TAG, "Parsed radius (human-readable): R=%.4f", f1);
+            handled = true;
+        }
+    } else if ((p = strstr(resp_str, "Probed Rotation Degrees=")) != NULL) {
+        if (sscanf(p, "Probed Rotation Degrees=%f", &f1) == 1) {
+            handler_state.parsed_rotation = f1;
+            LOGI(TAG, "Parsed rotation (human-readable): %.4f deg", f1);
+            handled = true;
         }
     }
 

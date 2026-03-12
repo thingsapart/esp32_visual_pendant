@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "lvgl_ui.h"
 #include "ui/mdi_handler.h"
+#include "config/probe_settings.h"
 
 static const char *TAG = "UI_ACTION_HANDLER";
 
@@ -70,6 +71,268 @@ typedef struct {
   char *name; // strdup'd filename
   bool is_macro; // true => macro, false => job
 } execute_confirm_ctx_t;
+
+// ---------------------------------------------------------------------------
+// Probe action helpers
+// ---------------------------------------------------------------------------
+
+// Probe operation types used to parameterise the shared execute function.
+typedef enum {
+  UI_PROBE_OP_BORE,           // G6500.1 — inside circle (bore)
+  UI_PROBE_OP_BOSS,           // G6501.1 — outside circle (boss)
+  UI_PROBE_OP_OUTER_CORNER,   // G6508.1 — outside corner, p1 = N (0..3)
+  UI_PROBE_OP_SINGLE_SURFACE, // G6510.1 — single axis surface, p1 = H (0..4)
+  UI_PROBE_OP_INNER_CORNER,   // G6510.1 x2, p1 = H1, p2 = H2
+} ui_probe_op_t;
+
+// Context stored in the "position and press OK" confirmation modal.
+typedef struct {
+  machine_interface_t *machine;
+  ui_probe_op_t op;
+  int p1;  // H for SINGLE_SURFACE; N for OUTER_CORNER; H1 for INNER_CORNER
+  int p2;  // H2 for INNER_CORNER (unused for others)
+} probe_confirm_ctx_t;
+
+// G6510.1 H-parameter constants (axis + direction to probe toward).
+// H=0: probe toward +X   (surface on +X side of current position)
+// H=1: probe toward -X   (surface on -X side)
+// H=2: probe toward +Y   (surface on +Y / back side)
+// H=3: probe toward -Y   (surface on -Y / front side)
+// H=4: probe toward -Z   (downward, top surface)
+#define PROBE_H_POS_X  0
+#define PROBE_H_NEG_X  1
+#define PROBE_H_POS_Y  2
+#define PROBE_H_NEG_Y  3
+#define PROBE_H_NEG_Z  4
+
+// G6508.1 N-parameter corner indices.
+// Derived from G6508.1.g dirX/dirY logic:
+//   N=0  dirX=-1 dirY=+1  → front-left corner  (probes +X left surface, +Y front surface)
+//   N=1  dirX=+1 dirY=+1  → front-right corner (probes -X right surface, +Y front surface)
+//   N=2  dirX=-1 dirY=-1  → back-left corner   (probes +X left surface, -Y back surface)
+//   N=3  dirX=+1 dirY=-1  → back-right corner  (probes -X right surface, -Y back surface)
+#define PROBE_N_FRONT_LEFT  0
+#define PROBE_N_FRONT_RIGHT 1
+#define PROBE_N_BACK_LEFT   2
+#define PROBE_N_BACK_RIGHT  3
+
+/**
+ * @brief Build and send the probe G-code for the given operation.
+ *
+ * Reads the current machine position and all probe dimension settings
+ * from NVS (via probe_settings_get()) at the moment of execution.
+ */
+static void _execute_probe(machine_interface_t *machine,
+                           ui_probe_op_t op, int p1, int p2) {
+  const probe_settings_t *s = probe_settings_get();
+  float x  = machine->position[0];
+  float y  = machine->position[1];
+  float z  = machine->position[2];
+  char gcode[512];
+
+  switch (op) {
+    case UI_PROBE_OP_BORE:
+      // G6500.1: bore/inside circle.
+      // H = approximate bore diameter (2 × width/radius setting).
+      // L = current Z (safe travel height above bore opening).
+      // Z = L − xy_probe_depth (depth at which sidewall probing occurs).
+      snprintf(gcode, sizeof(gcode),
+               "T T{global.mosPTID}\nG6500.1 J{%.4f} K{%.4f} L{%.4f} Z{%.4f} H{%.4f} O{%.4f}",
+               x, y, z, z - s->xy_probe_depth, 2.0f * s->width, s->overtravel);
+      machine->probe(machine, gcode);
+      break;
+
+    case UI_PROBE_OP_BOSS:
+      // G6501.1: boss/outside circle.
+      // T = clearance (start probe this far outside the expected boss edge).
+      snprintf(gcode, sizeof(gcode),
+               "T T{global.mosPTID}\nG6501.1 J{%.4f} K{%.4f} L{%.4f} Z{%.4f} H{%.4f} T{%.4f} O{%.4f}",
+               x, y, z, z - s->xy_probe_depth,
+               2.0f * s->width, s->clearance, s->overtravel);
+      machine->probe(machine, gcode);
+      break;
+
+    case UI_PROBE_OP_OUTER_CORNER:
+      // G6508.1: outside corner.  p1 = corner index N (PROBE_N_*).
+      // H = X surface length, I = Y surface length.
+      // Q = 0 (full, 2 points per surface) or 1 (quick, 1 point).
+      // Z = L − xy_probe_depth (Z level at which sidewall probing occurs).
+      snprintf(gcode, sizeof(gcode),
+               "T T{global.mosPTID}\nG6508.1 Q{%d} H{%.4f} I{%.4f} N{%d} T{%.4f} O{%.4f}"
+               " J{%.4f} K{%.4f} L{%.4f} Z{%.4f}",
+               s->quick_mode ? 1 : 0,
+               s->width, s->height, p1,
+               s->clearance, s->overtravel,
+               x, y, z, z - s->xy_probe_depth);
+      machine->probe(machine, gcode);
+      break;
+
+    case UI_PROBE_OP_SINGLE_SURFACE: {
+      // G6510.1: single axis probe.  p1 = H (PROBE_H_* constant).
+      // For Z probes (H=4): L = current Z, I = max_z_depth (max downward travel).
+      // For X/Y probes: L = current Z − xy_probe_depth (descend first), I = width.
+      float probe_L = (p1 == PROBE_H_NEG_Z) ? z : (z - s->xy_probe_depth);
+      float probe_I = (p1 == PROBE_H_NEG_Z) ? s->max_z_depth : s->width;
+      snprintf(gcode, sizeof(gcode),
+               "T T{global.mosPTID}\nG6510.1 H{%d} I{%.4f} O{%.4f} J{%.4f} K{%.4f} L{%.4f}",
+               p1, probe_I, s->overtravel, x, y, probe_L);
+      machine->probe(machine, gcode);
+      break;
+    }
+
+    case UI_PROBE_OP_INNER_CORNER: {
+      // Two sequential G6510.1 calls to probe the two surfaces that form
+      // the inner corner.  p1 = H for the first axis, p2 = H for the second.
+      // G6509 / G6509.1 are not yet implemented in MillenniumOS, so we use
+      // two single-surface probes instead.
+      // L = current Z − xy_probe_depth (descend before probing sidewalls).
+      float probe_L = z - s->xy_probe_depth;
+      snprintf(gcode, sizeof(gcode),
+               "T T{global.mosPTID}\n"
+               "G6510.1 H{%d} I{%.4f} O{%.4f} J{%.4f} K{%.4f} L{%.4f}\n"
+               "G6510.1 H{%d} I{%.4f} O{%.4f} J{%.4f} K{%.4f} L{%.4f}",
+               p1, s->width,  s->overtravel, x, y, probe_L,
+               p2, s->height, s->overtravel, x, y, probe_L);
+      machine->probe(machine, gcode);
+      break;
+    }
+  }
+}
+
+static void _probe_confirm_event_handler(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lv_obj_t *btn  = lv_event_get_current_target(e);
+  lv_obj_t *mbox = lv_obj_get_parent(lv_obj_get_parent(btn));
+  lv_obj_t *lbl_obj = lv_obj_get_child(btn, 0);
+  const char *lbl = lv_label_get_text(lbl_obj);
+  probe_confirm_ctx_t *ctx = (probe_confirm_ctx_t *)lv_obj_get_user_data(mbox);
+
+  if (ctx && (strcmp(lbl, "OK") == 0 || strcmp(lbl, "Ok") == 0)) {
+    _execute_probe(ctx->machine, ctx->op, ctx->p1, ctx->p2);
+  }
+
+  lv_msgbox_close(mbox);
+  free(ctx);
+}
+
+/**
+ * @brief Show a modal asking the operator to jog to position before probing.
+ * The probe G-code is sent when the operator presses OK.
+ */
+static void _show_probe_confirm_modal(machine_interface_t *machine,
+                                      ui_probe_op_t op, int p1, int p2,
+                                      const char *message) {
+  lv_obj_t *mbox = lv_msgbox_create(lv_screen_active());
+  lv_msgbox_add_title(mbox, "Position and probe");
+  lv_msgbox_add_text(mbox, message);
+  lv_obj_t *ok_btn     = lv_msgbox_add_footer_button(mbox, "OK");
+  lv_obj_t *cancel_btn = lv_msgbox_add_footer_button(mbox, "Cancel");
+
+  probe_confirm_ctx_t *ctx = (probe_confirm_ctx_t *)malloc(sizeof(probe_confirm_ctx_t));
+  if (!ctx) { lv_msgbox_close(mbox); return; }
+  ctx->machine = machine;
+  ctx->op = op;
+  ctx->p1 = p1;
+  ctx->p2 = p2;
+
+  lv_obj_set_user_data(mbox, ctx);
+  lv_obj_add_event_cb(ok_btn,     _probe_confirm_event_handler, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(cancel_btn, _probe_confirm_event_handler, LV_EVENT_CLICKED, NULL);
+  lv_obj_center(mbox);
+}
+
+/**
+ * @brief Dispatch a "probe.<inner|outer>.<shape>" action to the correct
+ *        G-code operation, showing a jog-and-confirm modal first.
+ */
+static void _handle_probe_action(machine_interface_t *machine,
+                                  const char *probe_id) {
+  ui_probe_op_t op;
+  int p1 = 0, p2 = 0;
+  const char *msg;
+
+  // Do not allow probing before the machine is homed.
+  if (!machine->axes_homed[0] || !machine->axes_homed[1] || !machine->axes_homed[2]) {
+    show_home_all_modal(machine);
+    return;
+  }
+
+  // --- outer surfaces (single edge) ---
+  if (strcmp(probe_id, "outer.right") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_NEG_X;
+    msg = "Jog outside the right (+X) surface, then press OK.";
+  } else if (strcmp(probe_id, "outer.left") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_POS_X;
+    msg = "Jog outside the left (-X) surface, then press OK.";
+  } else if (strcmp(probe_id, "outer.back") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_NEG_Y;
+    msg = "Jog outside the back (+Y) surface, then press OK.";
+  } else if (strcmp(probe_id, "outer.front") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_POS_Y;
+    msg = "Jog outside the front (-Y) surface, then press OK.";
+  } else if (strcmp(probe_id, "outer.top") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_NEG_Z;
+    msg = "Jog above the top surface, then press OK.";
+
+  // --- outer corners (G6508.1) ---
+  } else if (strcmp(probe_id, "outer.front-left") == 0) {
+    op = UI_PROBE_OP_OUTER_CORNER; p1 = PROBE_N_FRONT_LEFT;
+    msg = "Jog above the front-left corner, then press OK.";
+  } else if (strcmp(probe_id, "outer.front-right") == 0) {
+    op = UI_PROBE_OP_OUTER_CORNER; p1 = PROBE_N_FRONT_RIGHT;
+    msg = "Jog above the front-right corner, then press OK.";
+  } else if (strcmp(probe_id, "outer.back-left") == 0) {
+    op = UI_PROBE_OP_OUTER_CORNER; p1 = PROBE_N_BACK_LEFT;
+    msg = "Jog above the back-left corner, then press OK.";
+  } else if (strcmp(probe_id, "outer.back-right") == 0) {
+    op = UI_PROBE_OP_OUTER_CORNER; p1 = PROBE_N_BACK_RIGHT;
+    msg = "Jog above the back-right corner, then press OK.";
+
+  // --- outer circle (boss) ---
+  } else if (strcmp(probe_id, "outer.boss") == 0) {
+    op = UI_PROBE_OP_BOSS;
+    msg = "Jog above the center of the boss, then press OK.";
+
+  // --- inner surfaces (single edge) ---
+  } else if (strcmp(probe_id, "inner.right") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_POS_X;
+    msg = "Jog inside the pocket near the right (+X) wall, then press OK.";
+  } else if (strcmp(probe_id, "inner.left") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_NEG_X;
+    msg = "Jog inside the pocket near the left (-X) wall, then press OK.";
+  } else if (strcmp(probe_id, "inner.back") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_POS_Y;
+    msg = "Jog inside the pocket near the back (+Y) wall, then press OK.";
+  } else if (strcmp(probe_id, "inner.front") == 0) {
+    op = UI_PROBE_OP_SINGLE_SURFACE; p1 = PROBE_H_NEG_Y;
+    msg = "Jog inside the pocket near the front (-Y) wall, then press OK.";
+
+  // --- inner corners (two G6510.1 calls) ---
+  } else if (strcmp(probe_id, "inner.front-left") == 0) {
+    op = UI_PROBE_OP_INNER_CORNER; p1 = PROBE_H_NEG_X; p2 = PROBE_H_NEG_Y;
+    msg = "Jog inside the pocket near the front-left corner, then press OK.";
+  } else if (strcmp(probe_id, "inner.front-right") == 0) {
+    op = UI_PROBE_OP_INNER_CORNER; p1 = PROBE_H_POS_X; p2 = PROBE_H_NEG_Y;
+    msg = "Jog inside the pocket near the front-right corner, then press OK.";
+  } else if (strcmp(probe_id, "inner.back-left") == 0) {
+    op = UI_PROBE_OP_INNER_CORNER; p1 = PROBE_H_NEG_X; p2 = PROBE_H_POS_Y;
+    msg = "Jog inside the pocket near the back-left corner, then press OK.";
+  } else if (strcmp(probe_id, "inner.back-right") == 0) {
+    op = UI_PROBE_OP_INNER_CORNER; p1 = PROBE_H_POS_X; p2 = PROBE_H_POS_Y;
+    msg = "Jog inside the pocket near the back-right corner, then press OK.";
+
+  // --- inner circle (bore) ---
+  } else if (strcmp(probe_id, "inner.bore") == 0) {
+    op = UI_PROBE_OP_BORE;
+    msg = "Jog above the center of the bore, then press OK.";
+
+  } else {
+    LOGW(TAG, "Unknown probe action: probe.%s", probe_id);
+    return;
+  }
+
+  _show_probe_confirm_modal(machine, op, p1, p2, msg);
+}
 
 static void execute_confirm_event_handler(lv_event_t * e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
@@ -326,29 +589,40 @@ static void app_action_handler(const char *action_name, binding_value_t value,
   }
 
   // --- Probe dimension settings (from the probe-mode tab numeric dialogs) ---
-  // Each action receives the user-entered float value and:
-  //   1. Notifies the bound observable so the label refreshes.
-  //   2. (Future) Could persist the value here.
+  // Each action receives the user-entered float value, notifies the bound
+  // observable so the label refreshes, and persists the new value to NVS.
   else if (strcmp(action_name, "set_probe_width") == 0 &&
            value.type == BINDING_TYPE_FLOAT) {
+    probe_settings_t s = *probe_settings_get();
+    s.width = value.as.f_val;
+    probe_settings_save(&s);
     data_binding_notify_state_changed(
         "probe_w",
         (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
   }
   else if (strcmp(action_name, "set_probe_height") == 0 &&
            value.type == BINDING_TYPE_FLOAT) {
+    probe_settings_t s = *probe_settings_get();
+    s.height = value.as.f_val;
+    probe_settings_save(&s);
     data_binding_notify_state_changed(
         "probe_h",
         (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
   }
   else if (strcmp(action_name, "set_probe_cl") == 0 &&
            value.type == BINDING_TYPE_FLOAT) {
+    probe_settings_t s = *probe_settings_get();
+    s.clearance = value.as.f_val;
+    probe_settings_save(&s);
     data_binding_notify_state_changed(
         "probe_cl",
         (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
   }
   else if (strcmp(action_name, "set_probe_ov") == 0 &&
            value.type == BINDING_TYPE_FLOAT) {
+    probe_settings_t s = *probe_settings_get();
+    s.overtravel = value.as.f_val;
+    probe_settings_save(&s);
     data_binding_notify_state_changed(
         "probe_ov",
         (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
@@ -357,9 +631,27 @@ static void app_action_handler(const char *action_name, binding_value_t value,
     // Boolean toggle from the quick-mode switch widget.
     bool quick = (value.type == BINDING_TYPE_BOOL) ? value.as.b_val
                                                     : (value.as.f_val != 0.0f);
+    probe_settings_t s = *probe_settings_get();
+    s.quick_mode = quick;
+    probe_settings_save(&s);
     data_binding_notify_state_changed(
         "probe_quick",
         (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = quick});
+  }
+  else if (strcmp(action_name, "set_probe_z_dive") == 0 &&
+           value.type == BINDING_TYPE_FLOAT) {
+    probe_settings_t s = *probe_settings_get();
+    s.xy_probe_depth = value.as.f_val;
+    probe_settings_save(&s);
+    data_binding_notify_state_changed(
+        "probe_z_dive",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = value.as.f_val});
+  }
+
+  // --- Probe button actions (probe.inner.* / probe.outer.*) ---
+  // Shows a positioning modal; sends G-code when operator confirms.
+  else if (strncmp(action_name, "probe.", 6) == 0) {
+    _handle_probe_action(machine, action_name + 6);
   }
 
   // --- ask_home_all: programmatically triggered (e.g. from C callbacks) ---

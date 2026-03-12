@@ -16,6 +16,7 @@
 #include "ui/components/lv_gcode_viewer.h"
 #include "machine/machine_interface.h"
 #include "config/app_settings.h"
+#include "config/probe_settings.h"
 
 static const char *TAG = "UI_INTERFACE";
 
@@ -469,6 +470,35 @@ void interface_init(interface_t *interface, machine_interface_t *machine) {
   }
 
   ui_action_handler_init(interface);
+
+  // Load probe UI settings (width, height, clearance, overtravel, quick_mode)
+  // from NVS and push initial values into the data-binding system so the
+  // probe-view labels show the persisted values on first render.
+  probe_settings_init();
+  if (!probe_settings_load()) {
+    LOGW(TAG, "probe_settings: fell back to defaults");
+  }
+  {
+    const probe_settings_t *ps = probe_settings_get();
+    data_binding_notify_state_changed(
+        "probe_w",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = ps->width});
+    data_binding_notify_state_changed(
+        "probe_h",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = ps->height});
+    data_binding_notify_state_changed(
+        "probe_cl",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = ps->clearance});
+    data_binding_notify_state_changed(
+        "probe_ov",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = ps->overtravel});
+    data_binding_notify_state_changed(
+        "probe_quick",
+        (binding_value_t){.type = BINDING_TYPE_BOOL, .as.b_val = ps->quick_mode});
+    data_binding_notify_state_changed(
+        "probe_z_dive",
+        (binding_value_t){.type = BINDING_TYPE_FLOAT, .as.f_val = ps->xy_probe_depth});
+  }
 
   // Initialise the MDI backend (allocates log buffer, finds widget IDs,
   // registers the LV_EVENT_READY handler on the input textarea).

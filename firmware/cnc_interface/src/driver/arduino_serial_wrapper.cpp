@@ -36,8 +36,8 @@ static const char *TAG = "arduino_serial_wrapper";
 // Pendant only uses the standard log serial port; serial_process_input() is
 // never called on pendant so line_buffer is never written.  Use a minimal
 // size to avoid wasting ~32 KB of internal SRAM on targets like ESP32-P4.
-#define MAX_LINE_LENGTH    64
-#define MAX_PORTS          1    // Only the log serial port on pendant.
+#define MAX_LINE_LENGTH    5120
+#define MAX_PORTS          2    // Logging + RRF only.
 #else
 #define MAX_LINE_LENGTH    8192  // M409 d5 for 5-axis + 9 WCS can exceed 4096 B
 #define MAX_PORTS          4     // Flat table: 1 log serial + up to 3 machine UARTs

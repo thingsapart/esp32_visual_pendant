@@ -1,4 +1,4 @@
-#define UI_DEBUG_LOCAL_LEVEL D_ERROR
+#define UI_DEBUG_LOCAL_LEVEL D_INFO
 #include "debug.h"
 
 #include "config.h"
@@ -118,7 +118,7 @@ void machine_send_task(void *pvParameters) {
 #endif
     {
       // 1. Handle Outgoing G-Code
-      LOGV(TAG, "Sending gcode: %s", gcode);
+      LOGI(TAG, "TX→machine: %s", gcode);
       machine->_send_gcode(machine, gcode);
       // Drain RX immediately after TX: the controller often echoes or responds
       // within a few ms of receiving the command.

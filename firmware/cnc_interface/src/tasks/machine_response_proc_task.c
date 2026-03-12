@@ -50,14 +50,10 @@ extern "C" {
 //   - A static proc_line_buf[PROC_MSG_MAX_LEN] stays in task stack — avoids
 //     heap fragmentation under the burst of 30+ lines from M409 d5 responses.
 //
-// StreamBuffer sizing: 12 KB (3 × MAX_LINE_LENGTH) handles a worst-case burst
-// of ~3 full-length M409 d5 lines (≈4 KB each) without dropping.
-// Each message occupies sizeof(uint16_t) + payload bytes.
-//
 // No inline-data size cap: any payload up to PROC_MSG_MAX_LEN is accepted.
 // Sanity-check upper bound kept to catch obviously corrupt lengths.
 #define PROC_MSG_MAX_LEN       4096  // sanity cap — corrupt if larger
-#define PROC_STREAM_BUFFER_SIZE (3 * PROC_MSG_MAX_LEN + 128)  // 12 KB + overhead
+#define PROC_STREAM_BUFFER_SIZE (1.5 * PROC_MSG_MAX_LEN + 128)  // 8 KB + overhead
 
 // The QueueHandle_t API surface in the .h is kept for callers (hub.cpp,
 // machine_rrf.c) but the underlying object is now a StreamBufferHandle_t cast

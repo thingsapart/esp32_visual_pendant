@@ -373,6 +373,12 @@ typedef struct machine_interface_t {
   // lv_obj_* calls only happen on the LVGL task.  See MI_DIRTY_* constants.
   volatile uint32_t dirty_flags;
 
+  /* How many times `machine_interface_reduce_polling()` has been invoked
+   * without an auto-reset.  Each invocation halves the effective polling
+   * rate (1 -> 1/4, 2 -> 1/8, 3 -> 1/16, ...).  Transport implementations
+   * (eg. machine_rrf) may read this value to compute their skip target.
+   */
+  uint8_t reduce_poll_count;
   // --- "Virtual" Methods (Function Pointers) ---
   void (*send_gcode)(machine_interface_t *self, const char *gcode,
                      uint32_t poll_state);
@@ -420,6 +426,10 @@ typedef struct machine_interface_t {
   void (*modal_float)(machine_interface_t *self, float val, int modal_id);
   void (*modal_str)(machine_interface_t *self, const char *val, int modal_id);
   void (*probe)(machine_interface_t *self, const char *probe_gcode);
+  /// Immediately throttle polling to ~1/4 speed (e.g. at probe start). The
+  /// throttle auto-resets after ~5 s so consecutive probe steps need not call
+  /// this again. No-op if the transport does not support dynamic throttling.
+  void (*reduce_polling)(machine_interface_t *self);
   void (*set_connected)(machine_interface_t *self, bool connected);
   /// Set the value / state of an I/O output channel.
   /// @param ch_idx       Index into self->io_channels[]
@@ -493,6 +503,7 @@ void machine_interface_modal_str(machine_interface_t *self, const char *val,
                                  int modal_id);
 void machine_interface_probe(machine_interface_t *self,
                              const char *probe_gcode);
+void machine_interface_reduce_polling(machine_interface_t *self);
 void machine_interface_set_io_channel(machine_interface_t *self, uint8_t ch_idx,
                                       float setpoint, bool setpoint_bool);
 void machine_interface_process_machine_state_response(machine_interface_t *self,

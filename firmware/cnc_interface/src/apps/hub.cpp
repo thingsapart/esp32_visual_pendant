@@ -50,6 +50,10 @@ static const uint8_t display_mac_address[] = DISPLAY_MAC_ADDR;
 #define LOG_COALESCE_MS 30
 #define LOG_BATCH_CAP 1024
 
+// Minimum interval between redundant MSG_TYPE_DISMISS_MODAL sends after the
+// first dismiss has already been delivered to the pendant.
+#define DISMISS_RESEND_MS  30000u
+
 static char log_batch_buf[LOG_BATCH_CAP];
 static size_t log_batch_len = 0;
 static esp_timer_handle_t log_batch_timer = NULL;
@@ -236,9 +240,19 @@ void on_sensors_change(machine_interface_t *machine, void *user_data) {
 }
 
 void on_dialogs_change(machine_interface_t *machine, void *user_data) {
-  if (machine->message_box) {
-    LOGI(TAG, "Dialog change detected.");
+  // Tracks whether we ever sent a MSG_SUB_TYPE_MESSAGE_BOX to the pendant so
+  // we know when a matching DISMISS_MODAL is warranted.
+  static bool     s_dialog_was_shown     = false;
+  // millis() of the last DISMISS_MODAL send (0 = not yet sent for this dismiss).
+  static uint32_t s_last_dismiss_sent_ms = 0;
 
+  if (machine->message_box) {
+    // A new dialog has appeared: reset dismiss-tracking so the first dismiss
+    // fires immediately, and mark that the pendant needs to know about it.
+    s_dialog_was_shown     = true;
+    s_last_dismiss_sent_ms = 0;
+
+    LOGI(TAG, "Dialog change detected.");
     LOGI(TAG, "Message box present, attempting to serialize and send.");
     size_t payload_size;
     void *msg_box_payload =
@@ -254,6 +268,20 @@ void on_dialogs_change(machine_interface_t *machine, void *user_data) {
       led_status_error();
     }
   } else {
+    // No active dialog.
+    if (!s_dialog_was_shown) {
+      // We never showed a dialog to the pendant — nothing to dismiss.
+      return;
+    }
+    uint32_t now = (uint32_t)millis();
+    // Send immediately the first time (s_last_dismiss_sent_ms == 0), then
+    // throttle to at most once every DISMISS_RESEND_MS as a keep-alive in case
+    // the pendant missed the first message.
+    if (s_last_dismiss_sent_ms != 0 &&
+        (now - s_last_dismiss_sent_ms) < DISMISS_RESEND_MS) {
+      return;  // not due yet
+    }
+    s_last_dismiss_sent_ms = now;
     // Modal was dismissed on the hub side – tell the pendant to remove it too.
     LOGI(TAG, "Dialog dismissed, sending MSG_TYPE_DISMISS_MODAL to pendant.");
     dismiss_modal_msg_t msg;
@@ -691,6 +719,9 @@ static void process_probe_cmd(const uint8_t *data, int data_len) {
   gcode[cmd->len] = '\0';
 
   LOGI(TAG, "Received probe command: %s", gcode);
+  // Immediately throttle polling to 1/4 speed so the UART TX queue has room
+  // for the probe G-code.  The throttle auto-resets in ~5 s.
+  machine_interface_reduce_polling(g_machine_base);
   g_machine_base->probe(g_machine_base, gcode);
 }
 

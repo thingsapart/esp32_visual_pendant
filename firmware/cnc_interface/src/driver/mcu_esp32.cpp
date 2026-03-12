@@ -250,11 +250,13 @@ void mcu_startup() {
   LOGI(TAG, "POST-INIT");
   // P4 has the potential to run custon ESP32-C6 firmware which only acts as ESP-NOW
   // bridge. That firmware will make these lines crash.
+  #if 0
   #ifndef ESP32P4_HW
   WiFi.mode(WIFI_STA);
   WiFi.STA.begin();
   print_mac_address();
   WiFi.STA.end();
+  #endif
   #endif
   LOGI(TAG, "POST-INIT DONE");
 }

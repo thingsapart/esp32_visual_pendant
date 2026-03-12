@@ -298,6 +298,7 @@ machine_interface_t *machine_interface_init(machine_interface_t *self,
 
   self->polli = -1;
   self->last_continuous_tick = 0;
+  self->reduce_poll_count = 0;
 
   self->current_move_axis = AXIS_OFF;
   self->current_move_step_xy = 1.0;
@@ -836,6 +837,15 @@ void machine_interface_probe(machine_interface_t *self,
   if (self->probe) {
     self->probe(self, probe_gcode);
   }
+}
+
+void machine_interface_reduce_polling(machine_interface_t *self) {
+  if (!self) return;
+  /* Increment depth (capped) so repeated calls further reduce polling rate.
+   * The transport implementation reads `reduce_poll_count` and adjusts its
+   * skip target accordingly.  Cap at 7 to avoid undefined large shifts. */
+  if (self->reduce_poll_count < 7) self->reduce_poll_count++;
+  if (self->reduce_polling) self->reduce_polling(self);
 }
 
 void machine_interface_set_io_channel(machine_interface_t *self, uint8_t ch_idx,

@@ -460,56 +460,60 @@ function generateOuterSVG(c) {
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="${insetY}" width="${w-insetX}" height="${h-insetY}" />
             <rect class="hatch-indicator" x="${insetX}" y="${insetY}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${insetX}" y="${insetY}" width="${hw}" height="${h-insetY}" />
             <line class="probed-surface" x1="${insetX}" y1="${insetY}" x2="${insetX}" y2="${h}" /><line class="probed-surface" x1="${insetX}" y1="${insetY}" x2="${w}" y2="${insetY}" />
+            <circle class="probe-endpoint" cx="${insetX}" cy="${insetY}" r="${c.probePointRadius}" />
             <line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
             <text class="probe-label" x="${w-insetX/2}" y="${insetY*0.5}">Y-</text><text class="probe-label" x="${insetX*0.5}" y="${h-insetY/2}">X+</text>
-            <circle class="probe-endpoint" cx="${insetX}" cy="${insetY}" r="${c.probePointRadius}" />
         </g>
         <g transform="translate(${c.gap + w}, 0)">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="${insetY}" width="${w}" height="${h-insetY}" /><rect class="hatch-indicator" x="0" y="${insetY}" width="${w}" height="${hw}" />
-            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${w*0.75}" y="${insetY*0.5}">Y-</text><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.75}" y="${insetY*0.5}">Y-</text>
         </g>
         <g transform="translate(${2*(c.gap + w)}, 0)">
              <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="${insetY}" width="${w-insetX}" height="${h-insetY}" />
              <rect class="hatch-indicator" x="0" y="${insetY}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="${insetY}" width="${hw}" height="${h-insetY}" />
              <line class="probed-surface" x1="0" y1="${insetY}" x2="${w-insetX}" y2="${insetY}" /><line class="probed-surface" x1="${w-insetX}" y1="${insetY}" x2="${w-insetX}" y2="${h}" />
+             <circle class="probe-endpoint" cx="${w-insetX}" cy="${insetY}" r="${c.probePointRadius}" />
              <line class="probe-arrow" x1="${w/2}" y1="${insetY*0.4}" x2="${w/2}" y2="${insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
              <text class="probe-label" x="${insetX/2}" y="${insetY*0.5}">Y-</text><text class="probe-label" x="${w-(insetX*0.5)}" y="${h-insetY/2}">X-</text>
-             <circle class="probe-endpoint" cx="${w-insetX}" cy="${insetY}" r="${c.probePointRadius}" />
         </g>
         <!-- ROW 2 -->
         <g transform="translate(0, ${c.gap + h})">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="0" width="${w-insetX}" height="${h}" /><rect class="hatch-indicator" x="${insetX}" y="0" width="${hw}" height="${h}" />
-            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${insetX*0.5}" y="${h*0.75}">X+</text><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${insetX*0.5}" y="${h*0.75}">X+</text>
         </g>
         ${getMiddleTile(c, 'outer')}
         <g transform="translate(${2*(c.gap + w)}, ${c.gap + h})">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w-insetX}" height="${h}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="0" width="${hw}" height="${h}" />
-            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${w-(insetX*0.5)}" y="${h*0.75}">X-</text><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w-(insetX*0.5)}" y="${h*0.75}">X-</text>
         </g>
         <!-- ROW 3 -->
         <g transform="translate(0, ${2*(c.gap + h)})">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="${insetX}" y="0" width="${w-insetX}" height="${h-insetY}" />
             <rect class="hatch-indicator" x="${insetX}" y="${h-insetY-hw}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${insetX}" y="0" width="${hw}" height="${h-insetY}" />
             <line class="probed-surface" x1="${insetX}" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h-insetY}" />
+            <circle class="probe-endpoint" cx="${insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
             <line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${insetX*0.4}" y1="${h/2}" x2="${insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
             <text class="probe-label" x="${w-insetX/2}" y="${h-(insetY*0.5)}">Y+</text><text class="probe-label" x="${insetX*0.5}" y="${insetY/2}">X+</text>
-            <circle class="probe-endpoint" cx="${insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
         </g>
         <g transform="translate(${c.gap + w}, ${2*(c.gap + h)})">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w}" height="${h-insetY}" /><rect class="hatch-indicator" x="0" y="${h-insetY-hw}" width="${w}" height="${hw}" />
-            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${w*0.75}" y="${h-(insetY*0.5)}">Y+</text><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.75}" y="${h-(insetY*0.5)}">Y+</text>
         </g>
         <g transform="translate(${2*(c.gap + w)}, ${2*(c.gap + h)})">
             <rect class="tile-bg" width="${w}" height="${h}" /><rect class="workpiece" x="0" y="0" width="${w-insetX}" height="${h-insetY}" />
             <rect class="hatch-indicator" x="0" y="${h-insetY-hw}" width="${w-insetX}" height="${hw}" /><rect class="hatch-indicator" x="${w-insetX-hw}" y="0" width="${hw}" height="${h-insetY}" />
             <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w-insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h-insetY}" />
+            <circle class="probe-endpoint" cx="${w-insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
             <line class="probe-arrow" x1="${w/2}" y1="${h-(insetY*0.4)}" x2="${w/2}" y2="${h-insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w-(insetX*0.4)}" y1="${h/2}" x2="${w-insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
             <text class="probe-label" x="${insetX/2}" y="${h-(insetY*0.5)}">Y+</text><text class="probe-label" x="${w-(insetX*0.5)}" y="${insetY/2}">X-</text>
-            <circle class="probe-endpoint" cx="${w-insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
         </g>
     </svg>`;
     return svg;
@@ -533,41 +537,44 @@ function generateInnerSVG(c) {
             <path class="workpiece" d="M${w} ${insetY} H${insetX} V${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} V${rx} A${rx} ${rx} 0 0 1 ${rx} 0 H${w} Z" />
             <path class="hatch-indicator" d="M${insetX-hw} ${insetY-hw} H${w} V${insetY} H${insetX} V${h} H${insetX-hw} Z" />
             <line class="probed-surface" x1="${insetX}" y1="${h}" x2="${insetX}" y2="${insetY}" /><line class="probed-surface" x1="${w}" y1="${insetY}" x2="${insetX}" y2="${insetY}" />
-            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="${h}" x2="${(w+insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h+insetY)/2}" x2="${insetX+3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w+insetX)/2}" y="${(h+insetY)/2 + (h-insetY)/2.5}">Y+</text><text class="probe-label" x="${(w+insetX)/2 + (w-insetX)/2.5}" y="${(h+insetY)/2}">X-</text>
             <circle class="probe-endpoint" cx="${insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="${h}" x2="${(w+insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h+insetY)/2}" x2="${insetX+3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w+insetX)/2}" y="${(h+insetY)/2 + c.fontSize * 1.2}">Y+</text><text class="probe-label" x="${(w+insetX)/2 + c.fontSize * 1.2}" y="${(h+insetY)/2}">X-</text>
         </g>
         <g transform="translate(${c.gap + w}, 0)">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M0 ${insetY} H${w} V${rx} A${rx} ${rx} 0 0 0 ${w-rx} 0 H${rx} A${rx} ${rx} 0 0 0 0 ${rx} Z" />
             <rect class="hatch-indicator" x="0" y="${insetY-hw}" width="${w}" height="${hw}" />
-            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><line class="probe-arrow" x1="${w/2}" y1="${h}" x2="${w/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${w*0.5}" y="${(h+insetY)/2}">Y+</text><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="0" y1="${insetY}" x2="${w}" y2="${insetY}" /><circle class="probe-endpoint" cx="${w/2}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w/2}" y1="${h}" x2="${w/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.5}" y="${insetY + c.fontSize * 2.5}">Y+</text>
         </g>
         <g transform="translate(${2*(c.gap + w)}, 0)">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M0 ${insetY} H${w-insetX} V${h} H${w-rx} A${rx} ${rx} 0 0 0 ${w} ${h-rx} V${rx} A${rx} ${rx} 0 0 0 ${w-rx} 0 H0 Z" />
             <path class="hatch-indicator" d="M${w-insetX+hw} ${insetY-hw} H0 V${insetY} H${w-insetX} V${h} H${w-insetX+hw} Z" />
             <line class="probed-surface" x1="${w-insetX}" y1="${h}" x2="${w-insetX}" y2="${insetY}" /><line class="probed-surface" x1="0" y1="${insetY}" x2="${w-insetX}" y2="${insetY}" />
-            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="${h}" x2="${(w-insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h+insetY)/2}" x2="${w-insetX-3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w-insetX)/2}" y="${(h+insetY)/2 + (h-insetY)/2.5}">Y+</text><text class="probe-label" x="${(w-insetX)/2.5}" y="${(h+insetY)/2}">X+</text>
             <circle class="probe-endpoint" cx="${w-insetX}" cy="${insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="${h}" x2="${(w-insetX)/2}" y2="${insetY+3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h+insetY)/2}" x2="${w-insetX-3}" y2="${(h+insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w-insetX)/2}" y="${(h+insetY)/2 + c.fontSize * 1.2}">Y+</text><text class="probe-label" x="${(w-insetX)/2 - c.fontSize * 1.2}" y="${(h+insetY)/2}">X+</text>
         </g>
         <!-- ROW 2 -->
         <g transform="translate(0, ${c.gap + h})">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M${insetX} 0 H${rx} A${rx} ${rx} 0 0 0 0 ${rx} V${h-rx} A${rx} ${rx} 0 0 0 ${rx} ${h} H${insetX} Z" />
             <rect class="hatch-indicator" x="${insetX-hw}" y="0" width="${hw}" height="${h}" />
-            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><line class="probe-arrow" x1="${w}" y1="${h/2}" x2="${insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w+insetX)/2}" y="${h*0.5}">X-</text><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h}" /><circle class="probe-endpoint" cx="${insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w}" y1="${h/2}" x2="${insetX+3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${insetX + c.fontSize * 2.5}" y="${h*0.5}">X-</text>
         </g>
         ${getMiddleTile(c, 'inner')}
         <g transform="translate(${2*(c.gap + w)}, ${c.gap + h})">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M${w-insetX} 0 H${w-rx} A${rx} ${rx} 0 0 1 ${w} ${rx} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${w-insetX} Z" />
             <rect class="hatch-indicator" x="${w-insetX}" y="0" width="${hw}" height="${h}" />
-            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><line class="probe-arrow" x1="0" y1="${h/2}" x2="${w-insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w-insetX)/2}" y="${h*0.5}">X+</text><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h}" /><circle class="probe-endpoint" cx="${w-insetX}" cy="${h/2}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="0" y1="${h/2}" x2="${w-insetX-3}" y2="${h/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w-insetX - c.fontSize * 2.5}" y="${h*0.5}">X+</text>
         </g>
         <!-- ROW 3 -->
         <g transform="translate(0, ${2*(c.gap + h)})">
@@ -575,25 +582,26 @@ function generateInnerSVG(c) {
             <path class="workpiece" d="M${insetX} ${h-insetY} H${w} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} V0 H${insetX} Z" />
             <path class="hatch-indicator" d="M${insetX-hw} ${h-insetY+hw} H${w} V${h-insetY} H${insetX} V0 H${insetX-hw} Z" />
             <line class="probed-surface" x1="${insetX}" y1="0" x2="${insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="${w}" y1="${h-insetY}" x2="${insetX}" y2="${h-insetY}" />
-            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="0" x2="${(w+insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h-insetY)/2}" x2="${insetX+3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w+insetX)/2}" y="${(h-insetY)/2.5}">Y-</text><text class="probe-label" x="${(w+insetX)/2 + (w-insetX)/2.5}" y="${(h-insetY)/2}">X-</text>
             <circle class="probe-endpoint" cx="${insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${(w+insetX)/2}" y1="0" x2="${(w+insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="${w}" y1="${(h-insetY)/2}" x2="${insetX+3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w+insetX)/2}" y="${(h-insetY)/2 - c.fontSize * 1.2}">Y-</text><text class="probe-label" x="${(w+insetX)/2 + c.fontSize * 1.2}" y="${(h-insetY)/2}">X-</text>
         </g>
         <g transform="translate(${c.gap + w}, ${2*(c.gap + h)})">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M0 ${h-insetY} H${w} V${h-rx} A${rx} ${rx} 0 0 1 ${w-rx} ${h} H${rx} A${rx} ${rx} 0 0 1 0 ${h-rx} Z" />
             <rect class="hatch-indicator" x="0" y="${h-insetY}" width="${w}" height="${hw}" />
-            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><line class="probe-arrow" x1="${w/2}" y1="0" x2="${w/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${w*0.5}" y="${(h-insetY)/2.5}">Y-</text><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w}" y2="${h-insetY}" /><circle class="probe-endpoint" cx="${w/2}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${w/2}" y1="0" x2="${w/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${w*0.5}" y="${h-insetY - c.fontSize * 2.5}">Y-</text>
         </g>
         <g transform="translate(${2*(c.gap + w)}, ${2*(c.gap + h)})">
             <rect class="tile-bg" width="${w}" height="${h}" />
             <path class="workpiece" d="M${w-insetX} ${h-insetY} H0 V${h-rx} A${rx} ${rx} 0 0 0 ${rx} ${h} H${w-rx} A${rx} ${rx} 0 0 0 ${w} ${h-rx} V0 H${w-insetX} Z" />
             <path class="hatch-indicator" d="M${w-insetX+hw} ${h-insetY+hw} H0 V${h-insetY} H${w-insetX} V0 H${w-insetX+hw} Z" />
             <line class="probed-surface" x1="${w-insetX}" y1="0" x2="${w-insetX}" y2="${h-insetY}" /><line class="probed-surface" x1="0" y1="${h-insetY}" x2="${w-insetX}" y2="${h-insetY}" />
-            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="0" x2="${(w-insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h-insetY)/2}" x2="${w-insetX-3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
-            <text class="probe-label" x="${(w-insetX)/2}" y="${(h-insetY)/2.5}">Y-</text><text class="probe-label" x="${(w-insetX)/2.5}" y="${(h-insetY)/2}">X+</text>
             <circle class="probe-endpoint" cx="${w-insetX}" cy="${h-insetY}" r="${c.probePointRadius}" />
+            <line class="probe-arrow" x1="${(w-insetX)/2}" y1="0" x2="${(w-insetX)/2}" y2="${h-insetY-3}" marker-end="url(#arrowhead)" /><line class="probe-arrow" x1="0" y1="${(h-insetY)/2}" x2="${w-insetX-3}" y2="${(h-insetY)/2}" marker-end="url(#arrowhead)" />
+            <text class="probe-label" x="${(w-insetX)/2}" y="${(h-insetY)/2 - c.fontSize * 1.2}">Y-</text><text class="probe-label" x="${(w-insetX)/2 - c.fontSize * 1.2}" y="${(h-insetY)/2}">X+</text>
         </g>
     </svg>`;
     return svg;

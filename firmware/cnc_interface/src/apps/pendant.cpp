@@ -131,6 +131,7 @@ extern "C" void test_ui(lv_obj_t *screen);
 #include "driver/cam_receiver.h"
 #include "ui/components/lv_cam_stream.h"
 
+#ifdef APP_CAM_ENABLED
 static cam_transport_t *s_cam_transport = NULL;
 static cam_receiver_t  *s_cam_receiver  = NULL;
 
@@ -149,6 +150,7 @@ static void cam_init(void)
     cam_receiver_start(s_cam_receiver);
     LOGI(TAG, "Camera receiver started");
 }
+#endif  /* APP_CAM_ENABLED */
 #endif
 
 #include "ui/touch_calib/ui_touch_calib.h"
@@ -482,7 +484,7 @@ void setup() {
   touch_calib_load();
 #endif
 
-#if defined(ESP32_HW) && defined(BOARD_HAS_PSRAM)
+#if defined(ESP32_HW) && defined(APP_CAM_ENABLED)
   LOGI(TAG, "Initializing camera receiver...");
   cam_init();
 #endif

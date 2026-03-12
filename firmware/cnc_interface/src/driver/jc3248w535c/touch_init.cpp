@@ -39,13 +39,13 @@ static std::shared_ptr<esp_panel::drivers::Touch> s_touch = nullptr;
 
 #elif defined(JC3248W535C_TOUCH_DRV)
 
-#include "driver/axs15231b_touch.h"
+#include "driver/jc3248w535c/axs15231b_touch.h"
 
 #define TFT_rot   1
 #define TFT_res_W 480
 #define TFT_res_H 320
 
-static AXS15231B_Touch s_touch(Touch_SCL, Touch_SDA, Touch_INT, Touch_ADDR, TFT_rot);
+static AXS15231B_Touch s_touch(TOUCH_SCL, TOUCH_SDA, -1, I2C_TOUCH_ADDRESS, TFT_rot);
 
 #else // raw I2C
 
@@ -224,6 +224,7 @@ bool touch_hw_init() {
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
     float fx = 0.0f, fy = 0.0f;
+    int old_st = data->state;
 
 #if defined(ESP32_LVGL_ESP_DISP)
 
@@ -280,30 +281,20 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 #else
 
     // ── Raw I2C ───────────────────────────────────────────────────────────
-    // Write read-trigger command
+    // AXS15231B requires write + repeated-start + read in a SINGLE transaction.
+    // Sending a STOP between write and read causes the chip to exit its read
+    // mode; a subsequent standalone read returns stale/garbage data.
+    uint8_t td[8] = {0};
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (I2C_TOUCH_ADDRESS << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write(cmd, AXS_TOUCH_READ_CMD, sizeof(AXS_TOUCH_READ_CMD), true);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin((i2c_port_t)I2C_TOUCH_PORT, cmd,
-                                          pdMS_TO_TICKS(10));
-    i2c_cmd_link_delete(cmd);
-
-    if (ret != ESP_OK) {
-        data->state = LV_INDEV_STATE_REL;
-        goto done;
-    }
-
-    // Read 8 bytes of touch data
-    uint8_t td[8] = {0};
-    cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
+    i2c_master_start(cmd);  // repeated start – no STOP before read
     i2c_master_write_byte(cmd, (I2C_TOUCH_ADDRESS << 1) | I2C_MASTER_READ, true);
     i2c_master_read(cmd, td, sizeof(td), I2C_MASTER_LAST_NACK);
     i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin((i2c_port_t)I2C_TOUCH_PORT, cmd,
-                                pdMS_TO_TICKS(10));
+    esp_err_t ret = i2c_master_cmd_begin((i2c_port_t)I2C_TOUCH_PORT, cmd,
+                                          pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
 
     if (ret != ESP_OK || td[1] == 0) {
@@ -312,26 +303,40 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
 
     // Decode coordinates (native portrait 320×480)
+    {
     uint16_t raw_x = ((uint16_t)(td[2] & 0x0F) << 8) | td[3];
     uint16_t raw_y = ((uint16_t)(td[4] & 0x0F) << 8) | td[5];
+
+    // Reject out-of-range values – these indicate a corrupt/no-touch frame.
+    // Native portrait resolution: X ∈ [0,319], Y ∈ [0,479].
+    if (raw_x >= 320 || raw_y >= 480) {
+        data->state = LV_INDEV_STATE_REL;
+        goto done;
+    }
 
     // No LVGL rotation — map portrait hardware coords to landscape.
     // 90° CW: landscape_x = raw_y (portrait row), landscape_y = (TFT_HEIGHT-1) - raw_x
     fx = (float)raw_y;
     fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
     data->state   = LV_INDEV_STATE_PR;
+    }
 
 #endif // touch path selection
 
-    // Now apply calibration to the coordinates we just computed.
-    touch_calib_apply_inplace(&fx, &fy);
-    data->point.x = (lv_coord_t)fx;
-    data->point.y = (lv_coord_t)fy;
+    if (data->state != LV_INDEV_STATE_REL) {
+        // Now apply calibration to the coordinates we just computed.
+        touch_calib_apply_inplace(&fx, &fy);
+        data->point.x = (lv_coord_t)fx;
+        data->point.y = (lv_coord_t)fy;
+    }
 
 done:
 #if DEBUG_TOUCH != 0
+    if (data->state != old_st) {
+        LOGI(TAG, "TOUCH: CHANGED - %d => %d", old_st, data->state);
+    }
     if (data->state == LV_INDEV_STATE_REL) {
-        LOGI(TAG, "TOUCH: RELEASED");
+        //LOGI(TAG, "TOUCH: RELEASED");
     } else {
         LOGI(TAG, "TOUCH: PRESSED - (%d,%d)", data->point.x, data->point.y);
     }
