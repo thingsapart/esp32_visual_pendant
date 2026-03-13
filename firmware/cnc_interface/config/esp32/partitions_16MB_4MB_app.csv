@@ -1,5 +1,5 @@
 # Two application partitions of 2.0 MB
-# Filesystem: ~12 MB
+# Filesystem: ~12 MB  (64 KB shaved from spiffs for core dump)
 #
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     36K,   20K,
@@ -7,4 +7,5 @@ otadata,  data, ota,     56K,   8K,
 app0,     app,  ota_0,   64K,   3968K,
 device,   data, nvs,     4032K, 64K,
 config,   data, nvs,     4096K, 64K,
-spiffs,   data, spiffs,  4160K, 12224K,
+spiffs,   data, spiffs,  4160K, 12160K,
+coredump, data, coredump,,       64K,

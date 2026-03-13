@@ -159,7 +159,7 @@ void print_backtrace_info(const esp_core_dump_summary_t *coredump_summary) {
 }
 
 void read_core_dump() {
-  printf("Hello, world!\n");
+  printf("Reading core dump...\n");
 
   esp_core_dump_init();
   esp_core_dump_summary_t *summary =
@@ -245,6 +245,7 @@ void mcu_setup() {
 void mcu_startup() {
 #ifdef HAS_CORE_DUMP
   print_reset_reason();
+  read_core_dump();
 #endif
 
   LOGI(TAG, "POST-INIT");

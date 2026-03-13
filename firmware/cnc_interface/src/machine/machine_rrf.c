@@ -40,6 +40,13 @@ static const char *TAG = "machine_rrf";
 #define SERIAL_DISCONNECT_UNANSWERED_POLLS 5
 #endif
 
+// How often (ms) to send the reconnect probe query when not connected.
+// Keep this low enough to connect promptly but high enough to avoid starving
+// other tasks (e.g. lvgl_task) with serial I/O when no machine is present.
+#ifndef SERIAL_DISCONNECT_PROBE_INTERVAL_MS
+#define SERIAL_DISCONNECT_PROBE_INTERVAL_MS 800
+#endif
+
 // --- Poll throttle configuration ---
 // Graduated skip-based throttle: at each threshold the effective polling rate
 // halves.  "Skip N" means N poll cycles are suppressed for every 1 that fires.
@@ -964,9 +971,13 @@ static void _serial_poll_state_impl(machine_rrf_t *self, uint32_t poll_state) {
 #endif
 
   if (!self->connected) {
-    // Not connected: probe with a lightweight status query every poll cycle.
-    // Responses are handled asynchronously; _serial_set_connected_impl will
-    // mark us connected once valid JSON arrives.
+    // Not connected: probe with a lightweight status query, but throttle to
+    // SERIAL_DISCONNECT_PROBE_INTERVAL_MS to avoid starving other tasks.
+    uint32_t now_ms = millis();
+    if (now_ms - self->last_disconnect_probe_ms < SERIAL_DISCONNECT_PROBE_INTERVAL_MS) {
+      return;  // Too soon — skip this poll cycle
+    }
+    self->last_disconnect_probe_ms = now_ms;
     LOGD(TAG, "Serial: Not connected, sending probe query.");
     machine_interface_send_gcode(&self->base, "M409 K\"state.status\" F\"v\"", 0);
     return;
@@ -1516,6 +1527,7 @@ static machine_rrf_t *_machine_rrf_init_common(machine_rrf_t *self,
   self->last_response_ms = 0;
   self->consecutive_parse_failures = 0;
   self->last_poll_sent_ms = 0;
+  self->last_disconnect_probe_ms = 0;
   self->unanswered_polls = 0;
 
   // Zero the private I/O state arrays

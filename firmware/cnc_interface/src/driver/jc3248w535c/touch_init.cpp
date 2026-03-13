@@ -236,11 +236,17 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
-        // No LVGL rotation — map portrait hardware coords to landscape explicitly.
         // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
-        // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
+#if defined(JC3248W535C_ROT_90_CW)
         fx = (float)point.x;
         fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
+#elif defined(JC3248W535C_ROT_90_CCW)
+        fx = (float)(TFT_WIDTH - 1) - (float)point.x;
+        fy = (float)point.y;
+#elif defined(JC3248W535C_ROT_180)
+        fx = (float)(TFT_WIDTH - 1) - (float)point.x;
+        fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
+#endif
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
@@ -256,11 +262,17 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
     if (s_touch->readPoints(&point, 1, 0) > 0) {
         data->state = LV_INDEV_STATE_PR;
-        // No LVGL rotation — map portrait hardware coords to landscape explicitly.
         // swapXY(true) gives: point.x = portrait_y ∈ [0,480), point.y = portrait_x ∈ [0,320)
-        // 90° CW: landscape_x = portrait_y, landscape_y = (TFT_HEIGHT-1) - portrait_x
+#if defined(JC3248W535C_ROT_90_CW)
         fx = (float)point.x;
         fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
+#elif defined(JC3248W535C_ROT_90_CCW)
+        fx = (float)(TFT_WIDTH - 1) - (float)point.x;
+        fy = (float)point.y;
+#elif defined(JC3248W535C_ROT_180)
+        fx = (float)(TFT_WIDTH - 1) - (float)point.x;
+        fy = (float)(TFT_HEIGHT - 1) - (float)point.y;
+#endif
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
@@ -315,9 +327,20 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     }
 
     // No LVGL rotation — map portrait hardware coords to landscape.
-    // 90° CW: landscape_x = raw_y (portrait row), landscape_y = (TFT_HEIGHT-1) - raw_x
+    // Portrait native: raw_x ∈ [0,319], raw_y ∈ [0,479].
+#if defined(JC3248W535C_ROT_90_CW)
+    // landscape_x = raw_y,            landscape_y = (TFT_HEIGHT-1) - raw_x
     fx = (float)raw_y;
     fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
+#elif defined(JC3248W535C_ROT_90_CCW)
+    // landscape_x = (TFT_WIDTH-1) - raw_y, landscape_y = raw_x
+    fx = (float)(TFT_WIDTH - 1) - (float)raw_y;
+    fy = (float)raw_x;
+#elif defined(JC3248W535C_ROT_180)
+    // landscape_x = (TFT_WIDTH-1) - raw_y, landscape_y = (TFT_HEIGHT-1) - raw_x
+    fx = (float)(TFT_WIDTH - 1) - (float)raw_y;
+    fy = (float)(TFT_HEIGHT - 1) - (float)raw_x;
+#endif
     data->state   = LV_INDEV_STATE_PR;
     }
 

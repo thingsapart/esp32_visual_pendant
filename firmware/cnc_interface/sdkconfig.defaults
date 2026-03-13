@@ -1,4 +1,4 @@
-# TASMOTA__90f90f056aa80989
+# TASMOTA__a40b59f1dabd100e
 CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="2.11.7"
 #
 # Automatically generated file. DO NOT EDIT.
@@ -1784,9 +1784,9 @@ CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM=0
 #
 # Core dump
 #
-# CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH is not set
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 # CONFIG_ESP_COREDUMP_ENABLE_TO_UART is not set
-CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+# CONFIG_ESP_COREDUMP_ENABLE_TO_NONE is not set
 # end of Core dump
 
 #
@@ -2897,6 +2897,18 @@ CONFIG_SEMIHOSTFS_MAX_MOUNT_POINTS=1
 # CONFIG_ESPTOOLPY_FLASHFREQ_26M is not set
 # CONFIG_SPIRAM_SPEED_20M is not set
 # CONFIG_SPIRAM_SPEED_200M is not set
+# ─────────────────────────────────────────────────────────────────────────────
+# Coredump-to-flash settings.
+# Referenced via  custom_sdkconfig = file://./sdkconfig_coredump.ini  so that
+# the Kconfig "not-set" comment lines (#) reach HandleArduinoIDFsettings raw
+# (PlatformIOs configparser strips # lines from inline custom_sdkconfig values).
+# ─────────────────────────────────────────────────────────────────────────────
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=y
+CONFIG_ESP_COREDUMP_ENABLE=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
+CONFIG_ESP_COREDUMP_STACK_SIZE=1024
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
@@ -2907,3 +2919,4 @@ CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=n
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+file://./sdkconfig_coredump.ini

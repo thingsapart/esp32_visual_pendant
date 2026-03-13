@@ -154,6 +154,7 @@ typedef struct machine_rrf_t {
   // Throttles M409 spam when the controller is busy (e.g. executing a probe
   // or long-running macro).  Only 5 bytes (+padding) of RAM.
   uint32_t last_poll_sent_ms;          // millis() when last poll cycle was actually sent
+  uint32_t last_disconnect_probe_ms;   // millis() when the last reconnect probe was sent
   uint8_t  unanswered_polls;           // consecutive poll cycles without a response
   uint8_t  poll_skip_target;           // cycles to skip per allowed poll (0=no throttle)
   uint8_t  poll_skip_counter;          // counts toward poll_skip_target; reset on each allowed poll

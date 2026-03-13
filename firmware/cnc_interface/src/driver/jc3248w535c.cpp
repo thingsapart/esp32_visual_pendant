@@ -74,6 +74,29 @@
 // If you use a different rotation angle and find the axes are swapped, add:
 //   -D JC3248W535C_ROUND_X   to clamp logical X to [0, TFT_WIDTH-1] instead.
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Rotation angle selection
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Add exactly one of these to your build_flags (or leave all unset → 90° CW):
+//
+//   -D JC3248W535C_ROT_90_CW   (default)
+//       Landscape top-edge appears at the right side of the physical portrait.
+//       Original / default orientation.
+//
+//   -D JC3248W535C_ROT_90_CCW  (also accepted as -D JC3248W535C_ROT_270_CW)
+//       Landscape top-edge appears at the left side of the physical portrait.
+//       Use when the board is mounted 180° from the default orientation.
+//       physical(C, R) = logical(x = TFT_WIDTH-1-R, y = C)
+//
+//   -D JC3248W535C_ROT_180
+//       Landscape image is rotated 180°: both X and Y axes are reversed.
+//       physical(C, R) = logical(x = TFT_WIDTH-1-R, y = TFT_HEIGHT-1-C)
+//
+// The dirty-area rounder (ROUND_Y) is correct for all three modes because
+// in every case physical column C maps to a logical Y dimension that must
+// span [0, TFT_HEIGHT-1] to satisfy the AXS15231B full-row requirement.
+
 #ifdef JC3248W535C
 
 // ── Default render mode ────────────────────────────────────────────────────
@@ -97,6 +120,18 @@
 //   32 → 20 480 B   48 → 30 720 B (default)   64 → 40 960 B
 #ifndef JC3248W535C_PARTIAL_COLS
 #define JC3248W535C_PARTIAL_COLS 48
+#endif
+
+// ── Allow 270° CW as an alias for 90° CCW ─────────────────────────────────
+#if defined(JC3248W535C_ROT_270_CW) && !defined(JC3248W535C_ROT_90_CCW)
+#define JC3248W535C_ROT_90_CCW
+#endif
+
+// ── Default rotation ───────────────────────────────────────────────────────
+#if !defined(JC3248W535C_ROT_90_CW)  && \
+    !defined(JC3248W535C_ROT_90_CCW) && \
+    !defined(JC3248W535C_ROT_180)
+#define JC3248W535C_ROT_90_CW
 #endif
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -185,6 +220,12 @@ static uint8_t *s_trans_buf2 = NULL;
 
 static SemaphoreHandle_t s_trans_done_sem = nullptr;
 
+// Maximum time to wait for a single DMA chunk to complete.
+// A full-width 320-pixel row chunk over QSPI at 80 MHz takes < 5 ms;
+// 500 ms is a generous ceiling.  If we never get the ISR within this window
+// the SPI/GDMA subsystem is wedged and we bail out to avoid a TWDT panic.
+#define DMA_SEM_TIMEOUT_MS 500
+
 // Called from the SPI DMA ISR when esp_lcd_panel_draw_bitmap() finishes.
 // Signals s_trans_done_sem so the flush loop can send the next chunk.
 static bool IRAM_ATTR on_color_trans_done(esp_lcd_panel_io_handle_t /*io*/,
@@ -200,38 +241,49 @@ static bool IRAM_ATTR on_color_trans_done(esp_lcd_panel_io_handle_t /*io*/,
 #endif  // !ESP32_LVGL_ESP_DISP
 
 // ══════════════════════════════════════════════════════════════════════════
-// rotate_and_dma_range — 90° CW rotation + DMA transfer helper
+// rotate_and_dma_range — rotation + DMA transfer helper
 // ══════════════════════════════════════════════════════════════════════════
 //
 // Reads a strip of the logical pixel buffer (PSRAM or SRAM), applies the
-// 90° CW rotation and RGB565 byte-swap, then streams it to the panel in
+// selected rotation and RGB565 byte-swap, then streams it to the panel in
 // TRANS_SIZE-byte chunks via the DMA bounce buffers.
 //
-// Physical panel pixel mapping (portrait 320×480, from logical 480×320):
-//   physical(column C, row R) = logical(x=R, y=TFT_WIDTH-1-C)
-//   with C ∈ [0, TFT_WIDTH=320),  R ∈ [start_row, end_row)
+// Rotation pixel mappings (portrait 320×480 physical, logical 480×320):
+//   90° CW  (default): physical(C, R) = logical(x=R,           y=TFT_HEIGHT-1-C)
+//   90° CCW           : physical(C, R) = logical(x=TFT_WIDTH-1-R, y=C)
+//   180°              : physical(C, R) = logical(x=TFT_WIDTH-1-R, y=TFT_HEIGHT-1-C)
+//   with C ∈ [0, TFT_HEIGHT=320),  R ∈ [start_row, end_row)
 //
 // Parameters
 //   px_map          pointer to the LVGL logical buffer (row-major)
 //   logical_stride  pixels per logical row in px_map
-//                     FULL / DIRECT : TFT_HEIGHT (= 480, landscape buffer width)
-//                     PARTIAL       : area_width (= area->x2 - area->x1 + 1)
+//                     FULL / DIRECT : TFT_WIDTH (= 480, landscape buffer width)
+//                     PARTIAL       : TFT_WIDTH  (full-frame PSRAM buffer)
 //   col_offset      logical X offset of the first pixel in px_map
 //                     FULL / DIRECT : 0
 //                     PARTIAL       : area->x1
 //   start_row       first physical portrait row to send (inclusive)
-//   end_row         one past the last physical portrait row (= TFT_HEIGHT for full frame)
+//     90° CW  full  : 0          partial: area->x1
+//     90° CCW full  : 0          partial: TFT_WIDTH-1-area->x2
+//     180°    full  : 0          partial: TFT_WIDTH-1-area->x2
+//   end_row         one past the last physical portrait row
+//     90° CW  full  : TFT_WIDTH  partial: area->x2+1
+//     90° CCW full  : TFT_WIDTH  partial: TFT_WIDTH-area->x1
+//     180°    full  : TFT_WIDTH  partial: TFT_WIDTH-area->x1
 //
 // PSRAM cache-friendly access pattern:
-//   Outer loop: physical column C (0..TFT_WIDTH-1) → selects logical row (TFT_WIDTH-1-C)
-//   Inner loop: physical row    R → reads pm[(TFT_WIDTH-1-C)*stride + R] sequentially ✓
+//   90° CW / 180°: outer loop C selects a logical row — inner loop reads
+//                  it sequentially (forward for CW, backward for 180°). ✓
+//   90° CCW      : outer loop C selects a logical row (row=C) — inner loop
+//                  reads it in reverse (still within one cache line). ✓
 //
 // The caller must prime s_trans_done_sem with one Give before calling this
 // function in the IDF-native path (so the very first Take in the loop succeeds
 // immediately, enabling overlap between rotation and DMA for all chunks).
 // This function waits for the last chunk's DMA to complete before returning.
 
-static void rotate_and_dma_range(const uint8_t *px_map,
+// Returns true on success, false if a DMA timeout occurred (frame dropped).
+static bool rotate_and_dma_range(const uint8_t *px_map,
                                   int logical_stride,
                                   int col_offset,
                                   int start_row,
@@ -255,11 +307,11 @@ static void rotate_and_dma_range(const uint8_t *px_map,
         uint16_t *out      = (uint16_t *)tbuf;
         const uint16_t *pm = (const uint16_t *)px_map;
 
-        // 90° CW rotation + RGB565 byte-swap.
-        // Inner loop reads pm[(L_height-1-C)*logical_stride + col_offset + R - col_offset + r]
-        // = pm[(L_height-1-C)*logical_stride + R + r - col_offset]
-        // As R is fixed per outer iteration and r increments, this is sequential. ✓
+        // Rotation + RGB565 byte-swap.
         for (int C = 0; C < P_width; C++) {
+#if defined(JC3248W535C_ROT_90_CW)
+            // 90° CW: physical(C, R+r) = logical(x=R+r, y=TFT_HEIGHT-1-C)
+            // Sequential forward read along logical row (TFT_HEIGHT-1-C). ✓
             const uint16_t *src = pm
                                   + (L_height - 1 - C) * logical_stride
                                   + (R - col_offset);
@@ -267,6 +319,23 @@ static void rotate_and_dma_range(const uint8_t *px_map,
                 const uint16_t p = src[r];
                 out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
             }
+#elif defined(JC3248W535C_ROT_90_CCW)
+            // 90° CCW: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=C)
+            // Reverse read along logical row C. ✓
+            for (int r = 0; r < chunk; r++) {
+                const uint16_t p = pm[C * logical_stride
+                                      + (TFT_WIDTH - 1 - (R + r) - col_offset)];
+                out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
+            }
+#elif defined(JC3248W535C_ROT_180)
+            // 180°: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=TFT_HEIGHT-1-C)
+            // Reverse read along logical row (TFT_HEIGHT-1-C). ✓
+            for (int r = 0; r < chunk; r++) {
+                const uint16_t p = pm[(L_height - 1 - C) * logical_stride
+                                      + (TFT_WIDTH - 1 - (R + r) - col_offset)];
+                out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
+            }
+#endif
         }
 
 #if defined(ESP32_LVGL_ESP_DISP)
@@ -275,7 +344,10 @@ static void rotate_and_dma_range(const uint8_t *px_map,
 #else
         // Async: wait for the previous chunk's DMA to finish before we hand
         // the bounce buffer to the GDMA for this chunk.
-        xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
+        if (xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DMA_SEM_TIMEOUT_MS)) != pdTRUE) {
+            esp_rom_printf("[jc3248w535c] DMA timeout waiting for chunk R=%d — frame dropped\n", R);
+            return false;
+        }
         lcd_draw_bitmap(0, R, P_width, R + chunk, tbuf);
 #endif
     }
@@ -283,8 +355,12 @@ static void rotate_and_dma_range(const uint8_t *px_map,
 #if !defined(ESP32_LVGL_ESP_DISP)
     // Wait for the final chunk's DMA before returning (so s_draw_buf is safe
     // for the next LVGL render cycle).
-    xSemaphoreTake(s_trans_done_sem, portMAX_DELAY);
+    if (xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DMA_SEM_TIMEOUT_MS)) != pdTRUE) {
+        esp_rom_printf("[jc3248w535c] DMA timeout waiting for final chunk — frame dropped\n");
+        return false;
+    }
 #endif
+    return true;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -309,9 +385,9 @@ static void display_flush_full(lv_display_t *disp,
     // Full frame:
     //   logical_stride = TFT_WIDTH = 480  (landscape buffer row width)
     //   end_row        = TFT_WIDTH = 480  (physical portrait row count)
-    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);
+    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);  // errors logged internally
 
-    lv_display_flush_ready(disp);
+    lv_display_flush_ready(disp);  // always unblock LVGL, even if DMA timed out
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -343,9 +419,9 @@ static void display_flush_direct(lv_display_t *disp,
     xSemaphoreGive(s_trans_done_sem);
 #endif
 
-    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);
+    rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);  // errors logged internally
 
-    lv_display_flush_ready(disp);
+    lv_display_flush_ready(disp);  // always unblock LVGL, even if DMA timed out
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -394,13 +470,21 @@ static void display_rounder_cb(lv_event_t *e)
 // coordinate origin is (x1, 0).  LVGL stores display pixel (x, y) at:
 //   buf[(y - 0) * stride + (x - x1)]  =  buf[y * TFT_WIDTH + (x - x1)]
 //
-// Physical destination: portrait columns 0..TFT_HEIGHT-1, rows x1..x2.
-//   physical(C, R) = logical(R, TFT_HEIGHT-1-C)
-//                  = buf[(TFT_HEIGHT-1-C) * TFT_WIDTH + (R - x1)]
+// Physical buffer destination and pixel read index per rotation:
 //
-// → logical_stride = TFT_WIDTH, col_offset = area->x1.
-//   (LVGL stores pixel (x,y) at buf[y*TFT_WIDTH + (x-x1)] because
-//    layer->buf_area.x1 = area->x1 in partial mode, shifting the origin).
+//   90° CW : physical(C, R) = logical(R,           TFT_HEIGHT-1-C)
+//                            = buf[(TFT_HEIGHT-1-C)*TFT_WIDTH + (R - x1)]
+//            DMA rows: [x1, x2]  (same order as logical X)
+//
+//   90° CCW: physical(C, R) = logical(TFT_WIDTH-1-R, C)
+//                            = buf[C*TFT_WIDTH + (TFT_WIDTH-1-R - x1)]
+//            DMA rows: [TFT_WIDTH-1-x2, TFT_WIDTH-1-x1]  (reversed)
+//
+//   180°   : physical(C, R) = logical(TFT_WIDTH-1-R, TFT_HEIGHT-1-C)
+//                            = buf[(TFT_HEIGHT-1-C)*TFT_WIDTH + (TFT_WIDTH-1-R - x1)]
+//            DMA rows: [TFT_WIDTH-1-x2, TFT_WIDTH-1-x1]  (reversed)
+//
+// → logical_stride = TFT_WIDTH, col_offset = area->x1 for all modes.
 static void display_flush_partial(lv_display_t *disp,
                                    const lv_area_t *area,
                                    uint8_t *px_map)
@@ -410,9 +494,17 @@ static void display_flush_partial(lv_display_t *disp,
 #endif
 
     // stride = TFT_WIDTH (full row), col_offset = area->x1 (layer x-origin).
+    // For 90° CW, logical X and physical rows share the same order.
+    // For 90° CCW and 180°, the X→row mapping is reversed.
+#if defined(JC3248W535C_ROT_90_CW)
     rotate_and_dma_range(px_map, TFT_WIDTH, area->x1,
                           area->x1, area->x2 + 1);
-
+#else   // JC3248W535C_ROT_90_CCW or JC3248W535C_ROT_180
+    rotate_and_dma_range(px_map, TFT_WIDTH, area->x1,
+                          TFT_WIDTH - 1 - area->x2,
+                          TFT_WIDTH     - area->x1);
+#endif
+    // errors logged inside rotate_and_dma_range; always unblock LVGL
     lv_display_flush_ready(disp);
 }
 
@@ -587,8 +679,16 @@ void display_setup(lv_display_t *disp, lv_indev_t *indev)
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touch_indev_read);
 
-    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (flush-side CW rotation)",
+#if defined(JC3248W535C_ROT_90_CW)
+    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (90° CW rotation)",
          TFT_WIDTH, TFT_HEIGHT);
+#elif defined(JC3248W535C_ROT_90_CCW)
+    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (90° CCW / 270° CW rotation)",
+         TFT_WIDTH, TFT_HEIGHT);
+#elif defined(JC3248W535C_ROT_180)
+    LOGI(TAG, "DONE — JC3248W535C ready at %d×%d landscape (180° rotation)",
+         TFT_WIDTH, TFT_HEIGHT);
+#endif
 }
 
 // ── Optional LVGL custom allocator — routes to PSRAM ──────────────────────

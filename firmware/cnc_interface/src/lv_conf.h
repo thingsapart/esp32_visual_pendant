@@ -85,7 +85,7 @@
      * tasks can still be created after the UI is loaded. */
     #define LV_MEM_SIZE (48 * 1024U)           /**< [bytes] */
 #else
-    #define LV_MEM_SIZE (128 * 1024U)          /**< [bytes] */
+    #define LV_MEM_SIZE (164 * 1024U)          /**< [bytes] */
 #endif
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
@@ -1037,7 +1037,7 @@
 #define LV_USE_SNAPSHOT 0
 
 /** 1: Enable system monitor component */
-#define LV_USE_SYSMON   0
+#define LV_USE_SYSMON   1
 #if LV_USE_SYSMON
     /** Get the idle percentage. E.g. uint32_t my_get_idle(void); */
     #define LV_SYSMON_GET_IDLE lv_timer_get_idle

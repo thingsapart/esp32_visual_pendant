@@ -322,12 +322,14 @@ void lvgl_task(void *pv_params) {
 #endif
     auto time_start = millis();
     uint32_t sleep_time = lv_task_handler();
+    auto t_after_lvgl = millis();
     TickType_t delay_ticks = pdMS_TO_TICKS(sleep_time ? sleep_time : 1);
     if (delay_ticks == 0) delay_ticks = 1;
     vTaskDelay(delay_ticks);
 
     // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
     lvgl_ui_task_handler();
+    auto t_after_deferred = millis();
 
     if ((ctr++ % 50) == 0) {
       ram_usage();
@@ -340,6 +342,29 @@ void lvgl_task(void *pv_params) {
     // Run from main UI thread due to data races/crashes if directly called from
     // machine_interface_t callbacks.
     interface_tick(&interface);
+    
+    default_serial_write((const uint8_t*) ".", 1);
+
+#ifdef DEBUG_SLOW_LVGL_LOOP
+    auto t_after_itick = millis();
+
+    // Warn if any single phase of the loop took suspiciously long.
+    // These messages go via esp_rom_printf (UART0) so they survive USB-CDC
+    // teardown and remain visible even if a TWDT fires immediately after.
+#ifdef ESP32_HW
+    {
+      uint32_t lvgl_ms    = (uint32_t)(t_after_lvgl     - time_start);
+      uint32_t defer_ms   = (uint32_t)(t_after_deferred - t_after_lvgl);
+      uint32_t itick_ms   = (uint32_t)(t_after_itick    - t_after_deferred);
+      uint32_t total_ms   = (uint32_t)(t_after_itick    - time_start);
+      if (total_ms > 20) {
+        // Log to USB-CDC (in task context — safe, non-blocking xStreamBufferSend).
+        LOGE(TAG, "SLOW LOOP %u ms: lv_task=%u deferred=%u itick=%u",
+             total_ms, lvgl_ms, defer_ms, itick_ms);
+      }
+    }
+#endif
+#endif
 
 #if defined(ENCODER_PIN_X) && defined(ENCODER_PIN_Y)
     if (!encoder.isUiMode()) {

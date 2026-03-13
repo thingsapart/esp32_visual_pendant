@@ -24,23 +24,25 @@
 #include "esp_rom_sys.h"  // esp_rom_printf — writes directly to ROM UART, survives USB-CDC teardown
 
 // ---------------------------------------------------------------------------
-// Shared helper — safe to call from any task context including OOM/overflow.
-// Uses esp_log (static internal buffer, no heap allocation) and ets_printf
-// for absolute worst-case where even the log mutex is unavailable.
+// Shared helpers — safe to call from any panic/OOM/overflow context.
+// Use esp_rom_printf (synchronous ROM UART write) rather than ESP_LOGE or our
+// LOGE macro.  Both of those route through USB-CDC or the xStreamBuffer /
+// log_writer_task chain, which are torn down or stalled before the panic
+// handler fires.  esp_rom_printf is exactly what the IDF panic handler itself
+// uses, so it is always visible on the hardware UART regardless of USB state.
 // ---------------------------------------------------------------------------
 static void _print_heap_state_safe(void) {
-    // ESP_LOGE doesn't allocate heap; it flushes through the UART driver.
     size_t int_free    = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t int_lfb     = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     size_t int_min     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     size_t def_free    = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
     size_t def_lfb     = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
 
-    ESP_LOGE(HOOKS_TAG, "--- RAM state ---");
-    ESP_LOGE(HOOKS_TAG, "  Internal:  free=%u  largest_free_block=%u  min_ever=%u",
-             (unsigned)int_free, (unsigned)int_lfb, (unsigned)int_min);
-    ESP_LOGE(HOOKS_TAG, "  Default:   free=%u  largest_free_block=%u",
-             (unsigned)def_free, (unsigned)def_lfb);
+    esp_rom_printf("[%s] --- RAM state ---\n", HOOKS_TAG);
+    esp_rom_printf("[%s]   Internal:  free=%u  largest_free_block=%u  min_ever=%u\n",
+                   HOOKS_TAG, (unsigned)int_free, (unsigned)int_lfb, (unsigned)int_min);
+    esp_rom_printf("[%s]   Default:   free=%u  largest_free_block=%u\n",
+                   HOOKS_TAG, (unsigned)def_free, (unsigned)def_lfb);
 #if CONFIG_SPIRAM
     /* Only query PSRAM diagnostics if SPIRAM support is enabled and the
      * PSRAM subsystem has been initialized at runtime. On targets without
@@ -49,15 +51,14 @@ static void _print_heap_state_safe(void) {
     #ifdef ESP32P4_HW
     if (esp_psram_is_initialized()) {
     #else
-    // if (esp_spiram_is_initialized()) {
     if (esp_psram_is_initialized()) {
     #endif
         size_t psram_free  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         size_t psram_lfb   = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-        ESP_LOGE(HOOKS_TAG, "  PSRAM:     free=%u  largest_free_block=%u",
-                 (unsigned)psram_free, (unsigned)psram_lfb);
+        esp_rom_printf("[%s]   PSRAM:     free=%u  largest_free_block=%u\n",
+                       HOOKS_TAG, (unsigned)psram_free, (unsigned)psram_lfb);
     } else {
-        ESP_LOGE(HOOKS_TAG, "  PSRAM:     (not initialized)");
+        esp_rom_printf("[%s]   PSRAM:     (not initialized)\n", HOOKS_TAG);
     }
 #endif
 }
@@ -72,21 +73,22 @@ static void _print_task_watermarks_safe(void) {
     static TaskStatus_t snap[MAX_TASK_SNAPSHOT];
     UBaseType_t n = task_registry_get_system_state(snap, MAX_TASK_SNAPSHOT, NULL);
     if (n == 0) {
-        ESP_LOGE(HOOKS_TAG, "  (task list unavailable)");
+        esp_rom_printf("[%s]   (task list unavailable)\n", HOOKS_TAG);
         return;
     }
-    ESP_LOGE(HOOKS_TAG, "--- Task stack high-water marks (words remaining) ---");
+    esp_rom_printf("[%s] --- Task stack high-water marks (words remaining) ---\n", HOOKS_TAG);
     for (UBaseType_t i = 0; i < n; i++) {
         // eCurrentState: eRunning=0 eReady=1 eBlocked=2 eSuspended=3 eDeleted=4
         const char *state_str[] = {"RUN", "RDY", "BLK", "SUS", "DEL"};
         const char *st = (snap[i].eCurrentState <= eDeleted)
                              ? state_str[snap[i].eCurrentState]
                              : "???";
-        ESP_LOGE(HOOKS_TAG, "  %-16s  prio=%2u  hwm=%5u words  [%s]",
-                 snap[i].pcTaskName ? snap[i].pcTaskName : "?",
-                 (unsigned)snap[i].uxCurrentPriority,
-                 (unsigned)snap[i].usStackHighWaterMark,
-                 st);
+        esp_rom_printf("[%s]   %-16s  prio=%2u  hwm=%5u words  [%s]\n",
+                       HOOKS_TAG,
+                       snap[i].pcTaskName ? snap[i].pcTaskName : "?",
+                       (unsigned)snap[i].uxCurrentPriority,
+                       (unsigned)snap[i].usStackHighWaterMark,
+                       st);
     }
 }
 
@@ -124,8 +126,10 @@ static void _heap_alloc_failed_hook(size_t size, uint32_t caps,
     TaskHandle_t cur = xTaskGetCurrentTaskHandle();
     const char *task_name = cur ? pcTaskGetName(cur) : "<none>";
 
-    ESP_LOGE(HOOKS_TAG, "HEAP ALLOC FAILED: %s requested %u bytes  caps=0x%08X [%s]  task=%s",
-             fn, (unsigned)size, (unsigned)caps, caps_buf, task_name);
+    // Use esp_rom_printf: synchronous ROM UART, bypasses USB-CDC and the
+    // xStreamBuffer/log_writer_task chain that would be stalled under OOM.
+    esp_rom_printf("[%s] HEAP ALLOC FAILED: %s requested %u bytes  caps=0x%08X [%s]  task=%s\n",
+                   HOOKS_TAG, fn, (unsigned)size, (unsigned)caps, caps_buf, task_name);
     _print_heap_state_safe();
 }
 
@@ -137,7 +141,7 @@ void freertos_install_oom_hook(void) {
     if (err != ESP_OK) {
         ESP_LOGW(HOOKS_TAG, "heap_caps_register_failed_alloc_callback failed: %d", err);
     } else {
-        ESP_LOGI(HOOKS_TAG, "Heap OOM callback installed");
+        ESP_LOGI(HOOKS_TAG, "Heap OOM hook installed (output via esp_rom_printf)");
     }
 }
 
