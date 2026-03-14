@@ -1,5 +1,6 @@
 #define UI_DEBUG_LOCAL_LEVEL D_WARN
 #include "debug.h"
+#include "perf_trace.h"
 
 #include "machine_response_proc_task.h"
 
@@ -584,11 +585,13 @@ void machine_response_proc_task(void *vpargs) {
   if (!proc_line_buf) { LOGE(TAG, "OOM: proc_line_buf PSRAM alloc failed"); return; }
 
   while (!abort) {
+    TRACE_TASK_WAKE(TAG);
 #ifdef ESP32_HW
     StreamBufferHandle_t sb = (StreamBufferHandle_t)queue;
 
     // Step 1: read the 2-byte length header.  Block up to 1 s waiting for data.
     uint8_t hdr[2];
+    TRACE_TASK_SLEEP(TAG, 1000);  // about to block on StreamBuffer
     size_t hdr_received = xStreamBufferReceive(sb, hdr, sizeof(hdr), pdMS_TO_TICKS(1000));
     if (hdr_received == 0) {
       // Timeout — loop back and wait again.
@@ -621,8 +624,10 @@ void machine_response_proc_task(void *vpargs) {
 
     LOGD(TAG, "[PROC] type=%d len=%d", (int)proc_line_buf[0], (int)msg_len);
     TickType_t t0 = xTaskGetTickCount();
+    PERF_BEGIN(proc_response);
     machine_interface_process_machine_state_response(machine, proc_line_buf, msg_len);
     LOGD(TAG, "[PROC] done in %u ticks", (unsigned)(xTaskGetTickCount() - t0));
+    PERF_SLOWLOG(TAG, proc_response, 50000);  // >50 ms processing a machine response is slow
 
 #else  // non-ESP32_HW: gcode_queue (desktop / unit-test builds)
     // The non-ESP32 path keeps the old ring-buffer approach via gcode_queue.

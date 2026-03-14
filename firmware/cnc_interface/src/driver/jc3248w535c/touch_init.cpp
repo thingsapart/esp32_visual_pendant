@@ -19,6 +19,7 @@
 
 #include "touch_init.h"
 #include "debug.h"
+#include "perf_trace.h"
 
 #include "esp_heap_caps.h"
 
@@ -223,6 +224,11 @@ bool touch_hw_init() {
 
 void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 
+    // This callback is invoked by lv_task_handler() each LVGL tick on the
+    // UI task.  Any I2C blocking here adds directly to the lv_task_handler()
+    // budget and can delay the WDT reset.
+    PERF_BEGIN(touch_read_total);
+
     float fx = 0.0f, fy = 0.0f;
     int old_st = data->state;
 
@@ -296,7 +302,11 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     // AXS15231B requires write + repeated-start + read in a SINGLE transaction.
     // Sending a STOP between write and read causes the chip to exit its read
     // mode; a subsequent standalone read returns stale/garbage data.
+    // At 400 kHz: 11-byte write ≈ 250 µs, 8-byte read ≈ 200 µs → total ~500 µs.
+    // Anything significantly above ~1 ms indicates I2C bus contention or
+    // clock-stretching issues.
     uint8_t td[8] = {0};
+    PERF_BEGIN(i2c_touch_xact);
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (I2C_TOUCH_ADDRESS << 1) | I2C_MASTER_WRITE, true);
@@ -308,6 +318,7 @@ void touch_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
     esp_err_t ret = i2c_master_cmd_begin((i2c_port_t)I2C_TOUCH_PORT, cmd,
                                           pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
+    PERF_SLOWLOG(TAG, i2c_touch_xact, 3000);  // >3 ms on a 400 kHz bus is very slow
 
     if (ret != ESP_OK || td[1] == 0) {
         data->state = LV_INDEV_STATE_REL;
@@ -364,6 +375,10 @@ done:
         LOGI(TAG, "TOUCH: PRESSED - (%d,%d)", data->point.x, data->point.y);
     }
 #endif
+    // Overall read callback cost (includes I2C + coordinate decoding + calibration).
+    // This runs on the UI task inside lv_task_handler() — excessive time here
+    // directly reduces how often lvgl_task resets the watchdog.
+    PERF_SLOWLOG(TAG, touch_read_total, 5000);  // >5 ms total is unexpected
 }
 
 #endif // JC3248W535C

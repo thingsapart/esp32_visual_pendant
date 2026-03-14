@@ -1,5 +1,6 @@
 #define UI_DEBUG_LOCAL_LEVEL D_INFO
 #include "debug.h"
+#include "perf_trace.h"
 
 #include "config.h"
 #include "machine_response_proc_task.h"
@@ -86,6 +87,7 @@ void machine_send_task(void *pvParameters) {
   #endif
 
   while (!abort) {
+    TRACE_TASK_WAKE(TAG);
     TickType_t now = xTaskGetTickCount();
     TickType_t time_since_poll = now - last_poll_time;
     TickType_t ticks_to_wait = 5;
@@ -104,6 +106,7 @@ void machine_send_task(void *pvParameters) {
     machine_interface_drain_rx(machine);
 
 #ifdef ESP32_HW
+    TRACE_TASK_SLEEP(TAG, (unsigned)(ticks_to_wait * portTICK_PERIOD_MS));
     // Block waiting for a notification from the queue or timeout
     BaseType_t ret = xQueueReceive(queue, gcode, ticks_to_wait);
     if (ret == pdTRUE)
@@ -119,7 +122,9 @@ void machine_send_task(void *pvParameters) {
     {
       // 1. Handle Outgoing G-Code
       LOGI(TAG, "TX→machine: %s", gcode);
+      PERF_BEGIN(send_gcode);
       machine->_send_gcode(machine, gcode);
+      PERF_SLOWLOG(TAG, send_gcode, 50000);  // >50 ms TX suggests UART buffer full
       // Drain RX immediately after TX: the controller often echoes or responds
       // within a few ms of receiving the command.
       machine_interface_drain_rx(machine);
@@ -134,7 +139,9 @@ void machine_send_task(void *pvParameters) {
           // polling when no responses have been received).
           if (machine_interface_should_poll(machine)) {
             // This triggers _update_machine_state -> _serial_poll_state_impl -> queues M409
+            PERF_BEGIN(poll_iter);
             machine_interface_task_loop_iter(machine);
+            PERF_SLOWLOG(TAG, poll_iter, 20000);  // >20 ms per poll iteration is slow
           } else {
             LOGD(TAG, "Skipping poll due to backoff policy");
           }

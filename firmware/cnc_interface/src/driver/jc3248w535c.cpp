@@ -97,6 +97,24 @@
 // in every case physical column C maps to a logical Y dimension that must
 // span [0, TFT_HEIGHT-1] to satisfy the AXS15231B full-row requirement.
 
+// ═══════════════════════════════════════════════════════════════════════════
+// V-sync / tearing-effect selection
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// By default, each flush waits for the panel's TE (tearing-effect) V-blank
+// pulse before starting DMA so display updates are tear-free.  The wait
+// has a freshness check: if a TE pulse arrived < 8 ms ago the flush starts
+// immediately (0 overhead); if it arrived mid-previous-DMA the code waits
+// up to ~16 ms for the next one.
+//
+//   -D JC3248W535C_NO_VSYNC
+//       Skip the TE wait entirely.  The flush starts immediately after
+//       rotation, at the cost of possible horizontal tearing.  Eliminates
+//       the 0-16 ms TE latency — useful for CNC pendants where scan-line
+//       tearing is imperceptible and latency matters more.
+//       Note: TE GPIO ISR and the 0x35 init command remain active; only
+//       the wait call is bypassed so re-enabling is a single flag change.
+
 #ifdef JC3248W535C
 
 // ── Default render mode ────────────────────────────────────────────────────
@@ -157,6 +175,7 @@
 #include "jc3248w535c/lcd_init.h"
 #include "jc3248w535c/touch_init.h"
 #include "debug.h"
+#include "perf_trace.h"
 
 static const char *TAG = "JC3248W535C";
 
@@ -179,7 +198,7 @@ static const char *TAG = "JC3248W535C";
 //   With TRANS_DIV=40: 320 * 12 * 2 = 7 680 B each → 40 transactions/frame
 //   Two alternating buffers (double-buffering): CPU rotation of chunk N+1
 //   overlaps DMA of chunk N.
-#define TRANS_DIV   50
+#define TRANS_DIV   10
 #define TRANS_SIZE  (TFT_HEIGHT * (TFT_WIDTH / TRANS_DIV) * BYTES_PER_PIXEL)
 
 // Partial-mode LVGL render buffer.
@@ -283,7 +302,7 @@ static bool IRAM_ATTR on_color_trans_done(esp_lcd_panel_io_handle_t /*io*/,
 // This function waits for the last chunk's DMA to complete before returning.
 
 // Returns true on success, false if a DMA timeout occurred (frame dropped).
-static bool rotate_and_dma_range(const uint8_t *px_map,
+static bool IRAM_ATTR rotate_and_dma_range(const uint8_t *px_map,
                                   int logical_stride,
                                   int col_offset,
                                   int start_row,
@@ -298,67 +317,116 @@ static bool rotate_and_dma_range(const uint8_t *px_map,
 
     const int rows_per_chunk = TRANS_SIZE / (P_width * BYTES_PER_PIXEL);
 
+    PERF_BEGIN(rotate_dma_total);
+    int chunk_index = 0;
     for (int R = start_row; R < end_row; R += rows_per_chunk) {
         const int chunk = (R + rows_per_chunk <= end_row)
                           ? rows_per_chunk : (end_row - R);
 
         // Alternate between the two bounce buffers for double-buffering.
         uint8_t  *tbuf     = ((R / rows_per_chunk) & 1) ? s_trans_buf2 : s_trans_buf1;
+        (void)chunk_index;
         uint16_t *out      = (uint16_t *)tbuf;
         const uint16_t *pm = (const uint16_t *)px_map;
 
-        // Rotation + RGB565 byte-swap.
-        for (int C = 0; C < P_width; C++) {
+        // Rotation + RGB565 byte-swap — C-loop unrolled ×4.
+        //
+        // Unrolling processes 4 adjacent physical columns per outer step, so
+        // the inner r-loop writes 4 consecutive uint16_t (two uint32_t stores)
+        // instead of a single uint16_t every 640 bytes.  This converts the
+        // original scattered 640-byte-stride SRAM writes into near-sequential
+        // burst writes and greatly improves DMA-SRAM write-cache utilisation.
+        //
+        // P_width = TFT_HEIGHT = 320, always divisible by 4.  The alignment
+        // of (out + r*P_width + C) is guaranteed 4-byte: out is heap_caps
+        // 32-bit aligned, r*320 is always even, C is a multiple of 4.
+        //
+        // __builtin_bswap16 → single REV16/BYTEREV on GCC/Xtensa LX7.
+        // uint32_t pack: (bswap(p0) | bswap(p1)<<16) stores bytes
+        // [p0_MSB, p0_LSB, p1_MSB, p1_LSB] in little-endian memory —
+        // exactly the big-endian order the AXS15231B expects over SPI. ✓
 #if defined(JC3248W535C_ROT_90_CW)
-            // 90° CW: physical(C, R+r) = logical(x=R+r, y=TFT_HEIGHT-1-C)
-            // Sequential forward read along logical row (TFT_HEIGHT-1-C). ✓
-            const uint16_t *src = pm
-                                  + (L_height - 1 - C) * logical_stride
-                                  + (R - col_offset);
+        // 90° CW: physical(C, R+r) = logical(x=R+r, y=TFT_HEIGHT-1-C)
+        // Sequential forward read along logical row (TFT_HEIGHT-1-C). ✓
+        for (int C = 0; C < P_width; C += 4) {
+            const uint16_t *s0 = pm + (L_height - 1 -  C   ) * logical_stride + (R - col_offset);
+            const uint16_t *s1 = pm + (L_height - 1 - (C+1)) * logical_stride + (R - col_offset);
+            const uint16_t *s2 = pm + (L_height - 1 - (C+2)) * logical_stride + (R - col_offset);
+            const uint16_t *s3 = pm + (L_height - 1 - (C+3)) * logical_stride + (R - col_offset);
             for (int r = 0; r < chunk; r++) {
-                const uint16_t p = src[r];
-                out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
+                uint32_t *d = (uint32_t *)(out + r * P_width + C);
+                d[0] = (uint32_t)__builtin_bswap16(s0[r]) | ((uint32_t)__builtin_bswap16(s1[r]) << 16);
+                d[1] = (uint32_t)__builtin_bswap16(s2[r]) | ((uint32_t)__builtin_bswap16(s3[r]) << 16);
             }
-#elif defined(JC3248W535C_ROT_90_CCW)
-            // 90° CCW: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=C)
-            // Reverse read along logical row C. ✓
-            for (int r = 0; r < chunk; r++) {
-                const uint16_t p = pm[C * logical_stride
-                                      + (TFT_WIDTH - 1 - (R + r) - col_offset)];
-                out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
-            }
-#elif defined(JC3248W535C_ROT_180)
-            // 180°: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=TFT_HEIGHT-1-C)
-            // Reverse read along logical row (TFT_HEIGHT-1-C). ✓
-            for (int r = 0; r < chunk; r++) {
-                const uint16_t p = pm[(L_height - 1 - C) * logical_stride
-                                      + (TFT_WIDTH - 1 - (R + r) - col_offset)];
-                out[r * P_width + C] = (uint16_t)((p >> 8) | (p << 8));
-            }
-#endif
         }
+#elif defined(JC3248W535C_ROT_90_CCW)
+        // 90° CCW: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=C)
+        // Reverse read along logical row C (still sequential within the row). ✓
+        {
+            const int base_col = TFT_WIDTH - 1 - R - col_offset;
+            for (int C = 0; C < P_width; C += 4) {
+                const uint16_t *s0 = pm +  C    * logical_stride + base_col;
+                const uint16_t *s1 = pm + (C+1) * logical_stride + base_col;
+                const uint16_t *s2 = pm + (C+2) * logical_stride + base_col;
+                const uint16_t *s3 = pm + (C+3) * logical_stride + base_col;
+                for (int r = 0; r < chunk; r++) {
+                    uint32_t *d = (uint32_t *)(out + r * P_width + C);
+                    d[0] = (uint32_t)__builtin_bswap16(s0[-r]) | ((uint32_t)__builtin_bswap16(s1[-r]) << 16);
+                    d[1] = (uint32_t)__builtin_bswap16(s2[-r]) | ((uint32_t)__builtin_bswap16(s3[-r]) << 16);
+                }
+            }
+        }
+#elif defined(JC3248W535C_ROT_180)
+        // 180°: physical(C, R+r) = logical(x=TFT_WIDTH-1-(R+r), y=TFT_HEIGHT-1-C)
+        // Reverse read along logical row (TFT_HEIGHT-1-C). ✓
+        {
+            const int base_col = TFT_WIDTH - 1 - R - col_offset;
+            for (int C = 0; C < P_width; C += 4) {
+                const uint16_t *s0 = pm + (L_height - 1 -  C   ) * logical_stride + base_col;
+                const uint16_t *s1 = pm + (L_height - 1 - (C+1)) * logical_stride + base_col;
+                const uint16_t *s2 = pm + (L_height - 1 - (C+2)) * logical_stride + base_col;
+                const uint16_t *s3 = pm + (L_height - 1 - (C+3)) * logical_stride + base_col;
+                for (int r = 0; r < chunk; r++) {
+                    uint32_t *d = (uint32_t *)(out + r * P_width + C);
+                    d[0] = (uint32_t)__builtin_bswap16(s0[-r]) | ((uint32_t)__builtin_bswap16(s1[-r]) << 16);
+                    d[1] = (uint32_t)__builtin_bswap16(s2[-r]) | ((uint32_t)__builtin_bswap16(s3[-r]) << 16);
+                }
+            }
+        }
+#endif
 
 #if defined(ESP32_LVGL_ESP_DISP)
         // Synchronous: _lcd->drawBitmap() blocks until the transfer completes.
+        PERF_BEGIN(draw_sync);
         lcd_draw_bitmap(0, R, P_width, R + chunk, tbuf);
+        PERF_SLOWLOG(TAG, draw_sync, 15000);  // synchronous draw >15 ms is slow
 #else
         // Async: wait for the previous chunk's DMA to finish before we hand
         // the bounce buffer to the GDMA for this chunk.
+        PERF_BEGIN(dma_chunk_wait);
         if (xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DMA_SEM_TIMEOUT_MS)) != pdTRUE) {
-            esp_rom_printf("[jc3248w535c] DMA timeout waiting for chunk R=%d — frame dropped\n", R);
+            esp_rom_printf("[jc3248w535c] DMA timeout waiting for chunk R=%d (chunk_index=%d) — frame dropped\n",
+                           R, chunk_index);
+            PERF_SLOWLOG(TAG, rotate_dma_total, 0);  // always log how far we got
             return false;
         }
+        PERF_SLOWLOG(TAG, dma_chunk_wait, 5000);  // DMA sem wait >5 ms is abnormal
         lcd_draw_bitmap(0, R, P_width, R + chunk, tbuf);
 #endif
+        chunk_index++;
     }
+    PERF_SLOWLOG(TAG, rotate_dma_total, 60000);  // full frame rotate+DMA >60 ms
 
 #if !defined(ESP32_LVGL_ESP_DISP)
     // Wait for the final chunk's DMA before returning (so s_draw_buf is safe
     // for the next LVGL render cycle).
+    PERF_BEGIN(final_dma_wait);
     if (xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DMA_SEM_TIMEOUT_MS)) != pdTRUE) {
-        esp_rom_printf("[jc3248w535c] DMA timeout waiting for final chunk — frame dropped\n");
+        esp_rom_printf("[jc3248w535c] DMA timeout waiting for final chunk (chunk_index=%d) — frame dropped\n",
+                       chunk_index);
         return false;
     }
+    PERF_SLOWLOG(TAG, final_dma_wait, 5000);
 #endif
     return true;
 }
@@ -376,7 +444,16 @@ static void display_flush_full(lv_display_t *disp,
                                 const lv_area_t * /*area*/,
                                 uint8_t *px_map)
 {
-    lcd_vsync_wait();   // sync to TE V-blank before the first chunk
+    PERF_BEGIN(flush_full_total);
+
+    // Wait for TE (tearing-effect) V-blank signal.  Times out after 20 ms if
+    // the TE GPIO interrupt is not firing.  Skip with -D JC3248W535C_NO_VSYNC
+    // to eliminate the 0–16 ms TE latency at the cost of possible tearing.
+#if !defined(JC3248W535C_NO_VSYNC)
+    PERF_BEGIN(vsync);
+    lcd_vsync_wait();
+    PERF_SLOWLOG(TAG, vsync, 21000);  // >21 ms means a TE pulse was missed
+#endif
 
 #if !defined(ESP32_LVGL_ESP_DISP)
     xSemaphoreGive(s_trans_done_sem);   // prime: first Take in loop succeeds immediately
@@ -385,7 +462,11 @@ static void display_flush_full(lv_display_t *disp,
     // Full frame:
     //   logical_stride = TFT_WIDTH = 480  (landscape buffer row width)
     //   end_row        = TFT_WIDTH = 480  (physical portrait row count)
+    PERF_BEGIN(rotate_dma);
     rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);  // errors logged internally
+    PERF_SLOWLOG(TAG, rotate_dma, 60000);
+
+    PERF_SLOWLOG(TAG, flush_full_total, 85000);  // total flush >85 ms is alarming
 
     lv_display_flush_ready(disp);  // always unblock LVGL, even if DMA timed out
 }
@@ -413,20 +494,30 @@ static void display_flush_direct(lv_display_t *disp,
         return;
     }
 
+    PERF_BEGIN(flush_direct_total);
+
+    // Wait for TE V-blank.  Missing a pulse here adds up to 20 ms of latency.
+    // Skip with -D JC3248W535C_NO_VSYNC to trade tear-free for lower latency.
+#if !defined(JC3248W535C_NO_VSYNC)
+    PERF_BEGIN(vsync);
     lcd_vsync_wait();
+    PERF_SLOWLOG(TAG, vsync, 21000);  // >21 ms means a TE pulse was missed
+#endif
 
 #if !defined(ESP32_LVGL_ESP_DISP)
     xSemaphoreGive(s_trans_done_sem);
 #endif
 
+    PERF_BEGIN(rotate_dma);
     rotate_and_dma_range(px_map, TFT_WIDTH, 0, 0, TFT_WIDTH);  // errors logged internally
+    PERF_SLOWLOG(TAG, rotate_dma, 60000);
+
+    PERF_SLOWLOG(TAG, flush_direct_total, 85000);  // total flush >85 ms is alarming
 
     lv_display_flush_ready(disp);  // always unblock LVGL, even if DMA timed out
 }
-
 // ══════════════════════════════════════════════════════════════════════════
 // RENDER MODE: PARTIAL
-// ══════════════════════════════════════════════════════════════════════════
 //
 // Small internal-SRAM buffer, LV_DISPLAY_RENDER_MODE_PARTIAL.
 //
@@ -489,6 +580,8 @@ static void display_flush_partial(lv_display_t *disp,
                                    const lv_area_t *area,
                                    uint8_t *px_map)
 {
+    PERF_BEGIN(flush_partial_total);
+
 #if !defined(ESP32_LVGL_ESP_DISP)
     xSemaphoreGive(s_trans_done_sem);
 #endif
@@ -496,6 +589,7 @@ static void display_flush_partial(lv_display_t *disp,
     // stride = TFT_WIDTH (full row), col_offset = area->x1 (layer x-origin).
     // For 90° CW, logical X and physical rows share the same order.
     // For 90° CCW and 180°, the X→row mapping is reversed.
+    PERF_BEGIN(rotate_dma_partial);
 #if defined(JC3248W535C_ROT_90_CW)
     rotate_and_dma_range(px_map, TFT_WIDTH, area->x1,
                           area->x1, area->x2 + 1);
@@ -504,6 +598,9 @@ static void display_flush_partial(lv_display_t *disp,
                           TFT_WIDTH - 1 - area->x2,
                           TFT_WIDTH     - area->x1);
 #endif
+    PERF_SLOWLOG(TAG, rotate_dma_partial, 30000);
+    PERF_SLOWLOG(TAG, flush_partial_total, 35000);
+
     // errors logged inside rotate_and_dma_range; always unblock LVGL
     lv_display_flush_ready(disp);
 }

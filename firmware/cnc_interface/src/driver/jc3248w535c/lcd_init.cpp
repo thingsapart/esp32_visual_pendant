@@ -12,11 +12,14 @@
 
 #include "lcd_init.h"
 #include "debug.h"
+#include "perf_trace.h"
 
 #include "esp_idf_version.h"
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
 #error "This driver requires ESP-IDF v5.x (PlatformIO esp32 platform >= 6.x)."
 #endif
+
+#include "esp_timer.h"   // esp_timer_get_time() — µs wall-clock, IRAM-safe
 
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
@@ -175,10 +178,13 @@ bool lcd_hw_init(
 void lcd_draw_bitmap(int x_start, int y_start, int x_end, int y_end,
                      const void *data)
 {
+    PERF_BEGIN(draw_bitmap_sync);
     if (s_lcd) {
         s_lcd->drawBitmap(x_start, y_start, x_end - x_start, y_end - y_start,
                           data, 0);
     }
+    // Synchronous path: measures the entire SPI transfer time.
+    PERF_SLOWLOG(TAG, draw_bitmap_sync, 20000);  // >20 ms per chunk is unexpectedly long
 }
 
 /* ── lcd_vsync_wait (ESP32_Display_Panel — TE managed by library) ──────────*/
@@ -203,16 +209,30 @@ void lcd_vsync_wait() {
 static esp_lcd_panel_handle_t    s_panel_handle = NULL;
 static esp_lcd_panel_io_handle_t s_io_handle    = NULL;
 
-// TE semaphore – owned here, waited via lcd_vsync_wait()
+// TE semaphore + pulse timestamp – owned here, waited via lcd_vsync_wait()
 static SemaphoreHandle_t s_te_sem          = nullptr;
 static bool              s_te_isr_installed = false;
 static bool              s_te_isr_by_us     = false;
+// Timestamp (µs, from esp_timer_get_time) of the most recent TE pulse.
+// Written from the ISR, read from the flush task.  Worst-case torn read
+// just returns the previous value — treated as stale, which is safe.
+static volatile int64_t  s_te_timestamp_us  = 0;
 
 /* ── TE GPIO ISR (IRAM) ──────────────────────────────────────────────────── */
+typedef struct {
+    SemaphoreHandle_t sem;
+} te_isr_arg_t;
+
+// One statically-allocated arg block avoids a heap allocation on the ISR path.
+static te_isr_arg_t s_te_isr_arg;
+
 static void IRAM_ATTR te_isr_handler(void *arg) {
-    SemaphoreHandle_t sem = (SemaphoreHandle_t)arg;
+    // Record the time of this V-blank pulse so lcd_vsync_wait can decide
+    // whether it is fresh enough to use without re-waiting.
+    s_te_timestamp_us = esp_timer_get_time();
+    te_isr_arg_t *a = (te_isr_arg_t *)arg;
     BaseType_t hp = pdFALSE;
-    xSemaphoreGiveFromISR(sem, &hp);
+    xSemaphoreGiveFromISR(a->sem, &hp);
     if (hp) portYIELD_FROM_ISR();
 }
 
@@ -303,7 +323,22 @@ bool lcd_hw_init(
         TFT_PCLK, TFT_D0, TFT_D1, TFT_D2, TFT_D3, max_sz);
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
-    // ── 2. Panel IO (QSPI mode-3, 40 MHz, cmd_bits=32, quad) ──────────────
+    // Maximise GPIO drive strength on all QSPI lines (clock + 4 data + CS).
+    // The SPI bus driver configures GPIO function but leaves drive strength at
+    // the default (~20 mA, GPIO_DRIVE_CAP_2).  Raising to 40 mA
+    // (GPIO_DRIVE_CAP_3) sharpens edge rise/fall times, which is necessary at
+    // 80 MHz QSPI where a few cm of PCB trace mismatch can cause setup/hold
+    // violations on the AXS15231B input latches.  Harmless at 40 MHz.
+    {
+        const int qspi_pins[] = {TFT_PCLK, TFT_D0, TFT_D1, TFT_D2, TFT_D3, TFT_CS};
+        for (size_t i = 0; i < sizeof(qspi_pins) / sizeof(qspi_pins[0]); i++) {
+            if (qspi_pins[i] >= 0) {
+                gpio_set_drive_capability((gpio_num_t)qspi_pins[i], GPIO_DRIVE_CAP_3);
+            }
+        }
+    }
+
+    // ── 2. Panel IO (QSPI mode-3, cmd_bits=32, quad) ─────────────────────
     esp_lcd_panel_io_spi_config_t io_cfg =
         AXS15231B_PANEL_IO_QSPI_CONFIG(TFT_CS, on_trans_done, cb_user_ctx);
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
@@ -334,6 +369,7 @@ bool lcd_hw_init(
 #if defined(TFT_TE) && TFT_TE >= 0
     s_te_sem = xSemaphoreCreateBinary();
     if (s_te_sem != nullptr) {
+        s_te_isr_arg.sem = s_te_sem;
         gpio_config_t te_io = {};
         te_io.intr_type     = GPIO_INTR_NEGEDGE;
         te_io.mode          = GPIO_MODE_INPUT;
@@ -350,7 +386,7 @@ bool lcd_hw_init(
                 goto skip_te;
             }
             if (gpio_isr_handler_add((gpio_num_t)TFT_TE, te_isr_handler,
-                                     (void *)s_te_sem) == ESP_OK) {
+                                     (void *)&s_te_isr_arg) == ESP_OK) {
                 s_te_isr_installed = true;
                 LOGI(TAG, "TE sync enabled on GPIO %d", TFT_TE);
             } else {
@@ -396,17 +432,62 @@ skip_te:;
 void lcd_draw_bitmap(int x_start, int y_start, int x_end, int y_end,
                      const void *data)
 {
+    // esp_lcd_panel_draw_bitmap enqueues a DMA descriptor and returns immediately.
+    // Actual completion is signalled via on_color_trans_done ISR.
+    // Therefore this call should only take O(µs).  Long times here mean SPI
+    // bus contention or the DMA descriptor queue is full.
+    PERF_BEGIN(draw_submit);
     if (s_panel_handle) {
         esp_lcd_panel_draw_bitmap(s_panel_handle,
                                   x_start, y_start, x_end, y_end, data);
     }
+    PERF_SLOWLOG(TAG, draw_submit, 2000);  // DMA submit > 2 ms suggests driver stall
 }
 
 /* ── lcd_vsync_wait (IDF-native — TE semaphore) ────────────────────────── */
+//
+// Synchronises to the panel's V-blank (tearing-effect) pulse before the
+// caller starts DMA.  Uses a timestamp-based freshness check to avoid two
+// failure modes:
+//
+//   A) "No discard": consuming a stale pulse that arrived mid-DMA during the
+//      previous frame causes DMA to start at a random scan position →
+//      "egg-running" tearing artefact.
+//
+//   B) "Always discard" (original code): unconditionally throwing away the
+//      pending pulse phase-locks the wait to ~one full frame period (13–16
+//      ms) even when the render just finished near V-blank → wasted latency.
+//
+// Solution: if a pulse is already in the semaphore AND its timestamp is
+// recent (< TE_FRESH_THRESHOLD_US old), it arrived near the current V-blank
+// and is safe to use immediately.  If it is older (arrived mid-previous-DMA),
+// discard it and wait for the next genuine V-blank.
+//
+// Threshold is half the frame period (~8 ms at 60 Hz): conservative enough
+// that any pulse younger than 8 ms is still at the top of the panel scan.
+#define TE_FRESH_THRESHOLD_US  8000   // half of 16.67 ms @ 60 Hz
+
 void lcd_vsync_wait() {
     if (s_te_sem != nullptr) {
-        xSemaphoreTake(s_te_sem, 0);                    // discard any pending pulse
-        xSemaphoreTake(s_te_sem, pdMS_TO_TICKS(20));    // wait for next V-blank
+        // Non-blocking peek: is there a pending pulse?
+        if (xSemaphoreTake(s_te_sem, 0) == pdTRUE) {
+            int64_t age_us = esp_timer_get_time() - s_te_timestamp_us;
+            if (age_us >= 0 && age_us < TE_FRESH_THRESHOLD_US) {
+                // Fresh — arrived ≤ 8 ms ago, still near the top of the frame.
+                // Use it immediately; no blocking needed.
+                return;
+            }
+            // Stale — arrived during the previous DMA transfer.
+            // The pulse was consumed by the Take above; fall through to wait
+            // for the next genuine V-blank.
+        }
+        // Block until the next V-blank (or up to 20 ms on timeout).
+        PERF_BEGIN(te_sem_wait);
+        BaseType_t got = xSemaphoreTake(s_te_sem, pdMS_TO_TICKS(20));
+        PERF_SLOWLOG(TAG, te_sem_wait, 17000);  // >17 ms means TE took > frame period
+        if (!got) {
+            LOGD(TAG, "lcd_vsync_wait: TE timeout (no pulse in 20 ms)");
+        }
     }
 }
 

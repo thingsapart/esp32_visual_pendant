@@ -10,6 +10,7 @@
 #include "Arduino.h"
 #include "config.h"
 #include "debug.h"
+#include "perf_trace.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -317,18 +318,40 @@ void lvgl_task(void *pv_params) {
   vTaskDelay(1);
 
   while (true) {
+    // ── [A] WDT reset ────────────────────────────────────────────────────
 #ifdef ESP32_HW
     esp_task_wdt_reset();
 #endif
+    TRACE_TASK_WAKE(TAG);
+    PERF_BEGIN(loop_total);
+
+    // ── [B] LVGL handler (render + flush to display) ─────────────────────
+    // This is where the bulk of work happens: LVGL renders dirty regions,
+    // calls display_flush_cb (which rotates pixels and DMA-s to the panel),
+    // and dispatches input events from the touch indev callback.
     auto time_start = millis();
+    PERF_BEGIN(lv_handler);
     uint32_t sleep_time = lv_task_handler();
+    PERF_SLOWLOG(TAG, lv_handler, 100000);  // >100 ms → likely flush or DMA stall
     auto t_after_lvgl = millis();
+
+    // ── [C] vTaskDelay (LVGL-requested sleep) ────────────────────────────
+    // LVGL sets sleep_time to the ms until the next animation/timer fires.
+    // During this interval the task is blocked and cannot reset the WDT.
+    // If sleep_time is unexpectedly large (> WDT period), that is a bug.
     TickType_t delay_ticks = pdMS_TO_TICKS(sleep_time ? sleep_time : 1);
     if (delay_ticks == 0) delay_ticks = 1;
+    PERF_BEGIN(lvgl_sleep);
+    TRACE_TASK_SLEEP(TAG, sleep_time ? sleep_time : 1);
     vTaskDelay(delay_ticks);
+    PERF_END_D(TAG, lvgl_sleep);
 
-    // Handle deferred loading other lvgl_ui related functions that need to happen outside LVGL.
+    // ── [D] Deferred UI loader ────────────────────────────────────────────
+    // Heavy screen-load / resource-decode operations that must run outside
+    // the LVGL render lock are deferred here.
+    PERF_BEGIN(deferred_loader);
     lvgl_ui_task_handler();
+    PERF_SLOWLOG(TAG, deferred_loader, 20000);  // >20 ms is suspicious
     auto t_after_deferred = millis();
 
     if ((ctr++ % 50) == 0) {
@@ -338,12 +361,21 @@ void lvgl_task(void *pv_params) {
            uxTaskGetStackHighWaterMark(lvgl_task_handle));
     }
 
-    // Update all components that rely on data from machine_interface.
-    // Run from main UI thread due to data races/crashes if directly called from
-    // machine_interface_t callbacks.
+    // ── [E] Interface tick (data-binding update) ─────────────────────────
+    // Reads machine_interface state and pushes it into the LVGL widget tree.
+    // Must run on the UI thread; avoid calling from machine callbacks.
+    PERF_BEGIN(interface_tick);
     interface_tick(&interface);
-    
-    default_serial_write((const uint8_t*) ".", 1);
+    PERF_SLOWLOG(TAG, interface_tick, 10000);  // >10 ms suggests a spinlock
+    auto t_after_itick = millis();  // used by DEBUG_SLOW_LVGL_LOOP below
+
+    // Heartbeat dot on the serial port — visible in any terminal.
+    // default_serial_write((const uint8_t*) ".", 1);
+
+    // ── [F] Overall loop timing ───────────────────────────────────────────
+    // If the total loop (excluding the vTaskDelay sleep) exceeds this, the
+    // WDT may eventually fire because we rarely reset it.
+    PERF_SLOWLOG(TAG, loop_total, 150000);  // >150 ms total (excl. sleep) is alarming
 
 #ifdef DEBUG_SLOW_LVGL_LOOP
     auto t_after_itick = millis();
