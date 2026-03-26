@@ -5,3 +5,6 @@
 	path = firmware/cnc_interface/lvgl_ui
 	url = git@github.com:thingsapart/lvgl_ui.git
     branch = jules-rewrites
+[submodule "firmware/cnc_interface/lib/esp32_lcd_controllers"]
+	path = firmware/cnc_interface/lib/esp32_lcd_controllers
+	url = https://github.com/thingsapart/esp32_lcd_controllers
