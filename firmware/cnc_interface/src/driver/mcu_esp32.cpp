@@ -17,6 +17,10 @@
 #warning "CORE DUMP DISABLED"
 #endif
 
+#ifdef ESP32P4_HW
+#undef HAS_CORE_DUMP
+#endif
+
 static const char *TAG = "mcu_esp32";
 
 // Declared in freertos_hooks.cpp

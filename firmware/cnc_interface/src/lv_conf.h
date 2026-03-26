@@ -112,6 +112,12 @@
 /** Default display refresh, input device read and animation step period. */
 #define LV_DEF_REFR_PERIOD  50      /**< [ms] */
 
+#ifdef ESP32P4_HW
+// 30 FPS on P4.
+#undef LV_DEF_REFR_PERIOD
+#define LV_DEF_REFR_PERIOD  33      /**< [ms] */
+#endif
+
 /** Default Dots Per Inch. Used to initialize default sizes such as widgets sized, style paddings.
  * (Not so important, you can adjust it to modify default sizes and spaces.) */
 #define LV_DPI_DEF 130              /**< [px/inch] */
@@ -211,7 +217,9 @@
         #define LV_DRAW_SW_DRAW_UNIT_CNT    1
     #else
         #define LV_DRAW_SW_DRAW_UNIT_CNT    2
+        #define LV_DRAW_THREAD_PRIO         5 // Higher prio to distribute across both cores.
     #endif
+
 
     // Jut one thread on the JC3248W535C
     #if defined(JC3248W535C)

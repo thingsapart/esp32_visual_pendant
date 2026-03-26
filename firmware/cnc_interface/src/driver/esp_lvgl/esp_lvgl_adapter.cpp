@@ -303,6 +303,14 @@ static void lvgl_port_flush_callback(lv_display_t *drv, const lv_area_t *area,
       esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, 0, 0,
                                 lv_disp_get_hor_res(drv),
                                 lv_disp_get_ver_res(drv), color_map);
+      // lv_disp_flush_ready() will be called from the vsync ISR after the
+      // DPI panel has finished scanning the new frame.
+    } else {
+      // Non-last area in direct mode: LVGL already rendered this region
+      // in-place into the framebuffer — no DMA is needed yet.  Signal
+      // LVGL immediately so it can render the next dirty area without
+      // waiting up to one full vsync period (~19 ms at 52 Hz) per region.
+      lv_disp_flush_ready(drv);
     }
   } else {
     // This path is for non-direct-mode, partial refresh

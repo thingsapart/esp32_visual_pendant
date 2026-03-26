@@ -1,5 +1,7 @@
 #include "wifi_manager.h"
 
+#ifndef REMOTE_COMMS_C6_SDIO_BRIDGE
+
 #ifdef ESP32_HW
 #include <Arduino.h>
 #include <WiFi.h>
@@ -148,3 +150,5 @@ bool wifi_manager_is_connected() {
   return true;  // Always connected in simulation
 #endif
 }
+
+#endif
